@@ -3,16 +3,25 @@
 # .secrets/test.env holds a live API key. It must never be committed, and it is
 # listed first so it is the first thing anyone reads here. If a key is ever
 # staged by accident, rotate it: rewriting history does not un-leak a value.
+#
+# The CLI keeps its own credentials outside the repository, in ~/.Sael, so a
+# working copy never holds one at all.
 .secrets/
 .env
 
-# The Go toolchain, installed inside the repo because this machine had none.
-# It is ~270 MB of binary that no clone wants.
+# The Go toolchain, installed inside the repository on the machine this was
+# built on. It is ~270 MB of binary that no clone wants; install Go normally
+# instead.
 .tools/
 
 # Build and test output.
+/bin/
+/dist/
+coverage.out
+coverage.html
 *.out
 *.test
+*.prof
 
 # Editor and OS noise.
 .DS_Store

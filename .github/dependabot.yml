@@ -1,0 +1,22 @@
+version: 2
+
+updates:
+  # The module has two direct dependencies and one indirect; keeping them
+  # current is cheap, and the CI matrix will say so if an update breaks a
+  # supported Go version.
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: deps
+
+  # Actions are pinned by major tag; this is what moves them when a new major
+  # arrives.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci

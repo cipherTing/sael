@@ -1,0 +1,40 @@
+name: Feature request
+description: Suggest a capability the client should have.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This package aims to stay small: it speaks the API shape and nothing
+        more, with two dependencies. That is a feature, so a request that adds a
+        dependency or bakes in a host needs a reason that survives being written
+        down.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that the client makes hard today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like
+      description: The API you have in mind, if you have one. Sketch the call.
+      render: go
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried instead
+      description: Workarounds you are using now, and why they are not enough.
+
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Constraints
+      options:
+        - label: This can be done without a new dependency
+        - label: This does not require assuming a particular host

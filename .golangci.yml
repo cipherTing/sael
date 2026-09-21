@@ -1,0 +1,90 @@
+# golangci-lint configuration.
+#
+# The linter set is deliberate rather than "everything on": each entry here
+# catches a class of mistake this package can actually make. Adding a linter
+# means accepting its false positives forever, so the interesting part of this
+# file is the exclusions, which each carry a reason.
+
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: standard
+
+  enable:
+    # Correctness that go vet does not reach.
+    - bodyclose      # a leaked response body is a leaked connection
+    - errorlint      # errors.Is/As and %w, which this package's taxonomy depends on
+    - nilerr         # returning nil when err != nil
+    - noctx          # an HTTP request built without a context cannot be cancelled
+    - rowserrcheck
+    - sqlclosecheck
+    - wastedassign   # the class of bug that shipped in WithCallRetryPolicy
+
+    # Security. This package carries an API key, so its own hygiene matters.
+    - gosec
+
+    # Style and clarity.
+    - copyloopvar
+    - dupword
+    - gocritic
+    - misspell
+    - revive
+    - unconvert
+    - unparam
+    - whitespace
+
+  settings:
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+
+    revive:
+      rules:
+        - name: exported
+        - name: package-comments
+        - name: error-strings
+        - name: indent-error-flow
+        - name: var-naming
+        - name: context-as-argument
+
+    gosec:
+      excludes:
+        # G404: math/rand is used for retry jitter, not for anything that needs
+        # to be unpredictable.
+        - G404
+        # G101: EnvAPIKey holds the NAME of an environment variable
+        # ("TYPESAFE_API_KEY"), not a credential. The value it names is never in
+        # the source, which is the whole point of the constant.
+        - G101
+        # G304: reading a file from a caller-supplied directory is the feature,
+        # not an oversight. LoadConfig takes a config directory; the filename
+        # appended to it is a constant.
+        - G304
+
+  exclusions:
+    generated: lax
+    rules:
+      # Tests may repeat literals and reach into unexported code; that is the
+      # point of an internal test file.
+      - path: _test\.go
+        linters:
+          - dupl
+          - errcheck
+          - gosec
+          - noctx
+          - unparam
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/cipherTing/sael

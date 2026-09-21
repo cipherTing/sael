@@ -1,0 +1,68 @@
+name: Bug report
+description: Something does not work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before pasting anything, redact your API key. `state` often contains the
+        content being classified, so redact that too if it is not yours to share.
+
+        For a security problem, do not use this form — see SECURITY.md.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what happened, and what you expected instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproducer
+    attributes:
+      label: Reproducer
+      description: The smallest program that shows the problem.
+      render: go
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Client version
+      description: The value of systemone.Version().
+      placeholder: v0.1.0 or devel
+    validations:
+      required: true
+
+  - type: input
+    id: go-version
+    attributes:
+      label: Go version
+      description: The output of `go version`.
+      placeholder: go1.23.4 darwin/arm64
+    validations:
+      required: true
+
+  - type: input
+    id: base-url
+    attributes:
+      label: Base URL
+      description: The host you pointed the client at, without any credential.
+      placeholder: https://api.example.com/v1
+
+  - type: dropdown
+    id: host
+    attributes:
+      label: Which host
+      description: |
+        The client has only ever been exercised against one gateway. Knowing
+        which host you used is often the whole answer.
+      options:
+        - The official host
+        - A gateway or proxy
+        - A local test server
+        - Not sure
+    validations:
+      required: true
