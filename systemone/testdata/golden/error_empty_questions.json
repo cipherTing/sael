@@ -1,0 +1,17 @@
+{
+  "note": "error case: empty questions object",
+  "request": {
+    "state": "anything",
+    "questions": {},
+    "model": "typesafe/jev-1.13"
+  },
+  "request_authorized": true,
+  "status": 400,
+  "response": {
+    "error": {
+      "message": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"questions\"\n    ],\n    \"message\": \"At least one question is required\"\n  }\n]",
+      "code": 400
+    },
+    "user_id": "user_3AST0Id800jjZukTi6rm1H6eLp6"
+  }
+}

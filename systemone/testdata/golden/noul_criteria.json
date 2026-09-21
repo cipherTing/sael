@@ -1,0 +1,35 @@
+{
+  "note": "noul primitive with explicit true/false criteria entries",
+  "request": {
+    "state": "Our SLA promises a 4 hour first response. The ticket was answered in 19 hours.",
+    "questions": {
+      "sla_breached": {
+        "type": "noul",
+        "instructions": "Did we breach the stated SLA?",
+        "criteria": {
+          "true": "The actual first response time exceeds the promised 4 hours.",
+          "false": "The first response arrived within the promised 4 hours."
+        }
+      }
+    },
+    "model": "typesafe/jev-1.13"
+  },
+  "request_authorized": true,
+  "status": 200,
+  "response": {
+    "model": "typesafe/jev-1.13-20260917",
+    "answers": {
+      "sla_breached": {
+        "type": "noul",
+        "noul": 0.99
+      }
+    },
+    "usage": {
+      "input_tokens": 332,
+      "output_tokens": 23,
+      "cost": 1.3944e-05
+    },
+    "id": "gen-dec-1789964238-23V9Abb5lVvfdhMsOGAR",
+    "provider": "TypeSafe"
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "note": "error case: non-existent model id must be rejected",
+  "request": {
+    "state": "anything",
+    "questions": {
+      "q": {
+        "type": "noul",
+        "instructions": "Is this a test?",
+        "criteria": {
+          "true": "yes",
+          "false": "no"
+        }
+      }
+    },
+    "model": "typesafe/does-not-exist-9999"
+  },
+  "request_authorized": true,
+  "status": 400,
+  "response": {
+    "error": {
+      "message": "Model typesafe/does-not-exist-9999 does not exist",
+      "code": 400
+    }
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "note": "state is a bare JSON string",
+  "request": {
+    "state": "The build passed all 412 tests and the deploy took 90 seconds.",
+    "questions": {
+      "all_tests_passed": {
+        "type": "noul",
+        "instructions": "Did every test pass?",
+        "criteria": {
+          "true": "The text says all tests passed.",
+          "false": "Some test failed or the result is unclear."
+        }
+      }
+    },
+    "model": "typesafe/jev-1.13"
+  },
+  "request_authorized": true,
+  "status": 200,
+  "response": {
+    "model": "typesafe/jev-1.13-20260917",
+    "answers": {
+      "all_tests_passed": {
+        "type": "noul",
+        "noul": 0.98
+      }
+    },
+    "usage": {
+      "input_tokens": 321,
+      "output_tokens": 23,
+      "cost": 1.3482e-05
+    },
+    "id": "gen-dec-1789964244-wF8sEcI42ptInKWDcfAY",
+    "provider": "TypeSafe"
+  }
+}

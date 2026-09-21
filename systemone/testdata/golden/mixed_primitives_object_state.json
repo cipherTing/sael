@@ -1,0 +1,90 @@
+{
+  "note": "noul + choice + score in one call, state is a JSON object",
+  "request": {
+    "state": {
+      "ticket_id": "T-1042",
+      "channel": "email",
+      "subject": "Charged twice and the app will not open",
+      "body": "You billed me twice for September, and since the update the app crashes before the login screen. I want the extra charge refunded.",
+      "customer_tenure_months": 14,
+      "plan": "pro"
+    },
+    "questions": {
+      "is_urgent": {
+        "type": "noul",
+        "instructions": "Does this ticket need a same day human response?",
+        "criteria": {
+          "true": "Money is at stake or the product is unusable.",
+          "false": "It is a question or a cosmetic issue."
+        }
+      },
+      "primary_intent": {
+        "type": "choice",
+        "instructions": "What is the customer mainly asking for?",
+        "criteria": {
+          "refund": "They want money returned.",
+          "bug_fix": "They want the crash fixed.",
+          "info": "They only want information.",
+          "cancel": null
+        }
+      },
+      "sentiment": {
+        "type": "score",
+        "instructions": "How negative is the customer's tone?",
+        "criteria": [
+          "0: Neutral or positive.",
+          "1: Mildly annoyed.",
+          "2: Clearly frustrated.",
+          "3: Angry or threatening to leave."
+        ]
+      }
+    },
+    "model": "typesafe/jev-1.13"
+  },
+  "request_authorized": true,
+  "status": 200,
+  "response": {
+    "model": "typesafe/jev-1.13-20260917",
+    "answers": {
+      "is_urgent": {
+        "type": "noul",
+        "noul": 0.91
+      },
+      "primary_intent": {
+        "type": "choice",
+        "choice": "refund",
+        "probabilities": {
+          "cancel": 0,
+          "refund": 1,
+          "info": 0,
+          "bug_fix": 0
+        },
+        "confidence": 1
+      },
+      "sentiment": {
+        "type": "score",
+        "score": 1.89,
+        "legend": {
+          "0": "0: Neutral or positive.",
+          "1": "1: Mildly annoyed.",
+          "2": "2: Clearly frustrated.",
+          "3": "3: Angry or threatening to leave."
+        },
+        "probabilities": {
+          "0": 0,
+          "1": 0.11,
+          "2": 0.89,
+          "3": 0
+        },
+        "confidence": 0.88
+      }
+    },
+    "usage": {
+      "input_tokens": 551,
+      "output_tokens": 82,
+      "cost": 2.3142e-05
+    },
+    "id": "gen-dec-1789964242-nb3POwXra5BbTEViapFG",
+    "provider": "TypeSafe"
+  }
+}

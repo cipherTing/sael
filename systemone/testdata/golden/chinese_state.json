@@ -1,0 +1,83 @@
+{
+  "note": "long Chinese state with English questions (Chinese language behaviour)",
+  "request": {
+    "state": "上周我在贵站购买了一台便携显示器，订单号 20260915003。商品页面写明支持 65W 反向供电，但我收到后实测只能给手机充电，接上笔记本时显示器会反复黑屏重启。我先后联系了在线客服三次：第一次客服让我换一根线，换了原装线之后问题依旧；第二次客服说需要升级固件，发来的固件包解压后是损坏的，无法安装；第三次客服直接建议我退货，但退货页面要求我承担往返运费，而我认为这是商品描述与实物不符，运费不应该由我承担。现在距离我下单已经过去十一天，七天无理由退货的窗口已经关闭，客服又说要等仓库检测结果，需要七到十五个工作日。我希望能尽快得到一个明确的处理方案：要么换一台真正支持 65W 供电的机器，要么全额退款并由你们承担退回运费。",
+    "questions": {
+      "is_product_misdescribed": {
+        "type": "noul",
+        "instructions": "Does the customer claim the product does not match its listing?",
+        "criteria": {
+          "true": "The customer says the delivered item cannot do what the listing promised.",
+          "false": "The customer complains about something else."
+        }
+      },
+      "primary_request": {
+        "type": "choice",
+        "instructions": "What outcome is the customer asking for?",
+        "criteria": {
+          "replacement": "A working replacement unit.",
+          "full_refund": "A full refund, with the seller paying return shipping.",
+          "repair": "A repair or firmware fix.",
+          "explanation": null
+        }
+      },
+      "churn_risk": {
+        "type": "score",
+        "instructions": "How likely is this customer to stop buying from us?",
+        "criteria": [
+          "0: No sign of leaving.",
+          "1: Mild frustration only.",
+          "2: Explicitly considering alternatives.",
+          "3: Has decided to leave or is demanding escalation."
+        ]
+      }
+    },
+    "model": "typesafe/jev-1.13"
+  },
+  "request_authorized": true,
+  "status": 200,
+  "response": {
+    "model": "typesafe/jev-1.13-20260917",
+    "answers": {
+      "is_product_misdescribed": {
+        "type": "noul",
+        "noul": 0.98
+      },
+      "primary_request": {
+        "type": "choice",
+        "choice": "full_refund",
+        "probabilities": {
+          "explanation": 0,
+          "replacement": 0.41,
+          "repair": 0,
+          "full_refund": 0.59
+        },
+        "confidence": 0.46
+      },
+      "churn_risk": {
+        "type": "score",
+        "score": 2.81,
+        "legend": {
+          "0": "0: No sign of leaving.",
+          "1": "1: Mild frustration only.",
+          "2": "2: Explicitly considering alternatives.",
+          "3": "3: Has decided to leave or is demanding escalation."
+        },
+        "probabilities": {
+          "0": 0.01,
+          "1": 0.04,
+          "2": 0.08,
+          "3": 0.87
+        },
+        "confidence": 0.81
+      }
+    },
+    "usage": {
+      "input_tokens": 795,
+      "output_tokens": 91,
+      "cost": 3.339e-05
+    },
+    "id": "gen-dec-1789964261-VC1LI5Lp6ORwjpQuShVH",
+    "provider": "TypeSafe"
+  }
+}

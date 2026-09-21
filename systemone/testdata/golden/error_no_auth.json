@@ -1,0 +1,25 @@
+{
+  "note": "error case: request sent WITHOUT an Authorization header",
+  "request": {
+    "state": "anything",
+    "questions": {
+      "q": {
+        "type": "noul",
+        "instructions": "Is this a test?",
+        "criteria": {
+          "true": "yes",
+          "false": "no"
+        }
+      }
+    },
+    "model": "typesafe/jev-1.13"
+  },
+  "request_authorized": false,
+  "status": 401,
+  "response": {
+    "error": {
+      "message": "No cookie auth credentials found",
+      "code": 401
+    }
+  }
+}

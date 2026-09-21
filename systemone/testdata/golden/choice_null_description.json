@@ -1,0 +1,42 @@
+{
+  "note": "choice primitive; the 'other' option carries a null description",
+  "request": {
+    "state": "The mobile app crashes on launch after the latest update. Restarting does not help.",
+    "questions": {
+      "category": {
+        "type": "choice",
+        "instructions": "Which support queue should this ticket go to?",
+        "criteria": {
+          "billing": "Payment, invoices, refunds, subscriptions.",
+          "tech": "Crashes, bugs, performance, device problems.",
+          "other": null
+        }
+      }
+    },
+    "model": "typesafe/jev-1.13"
+  },
+  "request_authorized": true,
+  "status": 200,
+  "response": {
+    "model": "typesafe/jev-1.13-20260917",
+    "answers": {
+      "category": {
+        "type": "choice",
+        "choice": "tech",
+        "probabilities": {
+          "other": 0,
+          "tech": 1,
+          "billing": 0
+        },
+        "confidence": 1
+      }
+    },
+    "usage": {
+      "input_tokens": 350,
+      "output_tokens": 38,
+      "cost": 1.47e-05
+    },
+    "id": "gen-dec-1789964239-pRJTDCLYsbicawrLXn8z",
+    "provider": "TypeSafe"
+  }
+}

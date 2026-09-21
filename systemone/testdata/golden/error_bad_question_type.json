@@ -1,0 +1,22 @@
+{
+  "note": "error case: unknown question type 'bogus'",
+  "request": {
+    "state": "anything",
+    "questions": {
+      "q": {
+        "type": "bogus",
+        "instructions": "Is this a test?"
+      }
+    },
+    "model": "typesafe/jev-1.13"
+  },
+  "request_authorized": true,
+  "status": 400,
+  "response": {
+    "error": {
+      "message": "[\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [],\n    \"note\": \"No matching discriminator\",\n    \"discriminator\": \"type\",\n    \"options\": [\n      \"noul\",\n      \"choice\",\n      \"score\"\n    ],\n    \"path\": [\n      \"questions\",\n      \"q\",\n      \"type\"\n    ],\n    \"message\": \"Invalid discriminator value. Expected 'noul' | 'choice' | 'score'\"\n  }\n]",
+      "code": 400
+    },
+    "user_id": "user_3AST0Id800jjZukTi6rm1H6eLp6"
+  }
+}
