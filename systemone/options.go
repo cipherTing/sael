@@ -38,10 +38,6 @@ const (
 	EnvModel   = "TYPESAFE_DEFAULT_MODEL"
 )
 
-// UserAgent identifies this client. The service does not require it; it exists so
-// that traffic is attributable in logs on either side.
-const UserAgent = "sael-systemone/0.1.0"
-
 type config struct {
 	apiKey           string
 	baseURL          string

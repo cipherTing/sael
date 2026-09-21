@@ -115,7 +115,7 @@ func newClient(fileOpts, opts []Option) (*Client, error) {
 	header.Set("Authorization", "Bearer "+apiKey)
 	header.Set("Accept", "application/json")
 	header.Set("Content-Type", "application/json")
-	header.Set("User-Agent", UserAgent)
+	header.Set("User-Agent", UserAgent())
 
 	tr := newTransport(baseURL, hc, cfg.timeout, cfg.retry, logger)
 	tr.maxResponseBytes = cfg.maxResponseBytes

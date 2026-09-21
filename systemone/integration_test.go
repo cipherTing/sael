@@ -105,7 +105,7 @@ func assertNoCredentialInError(t *testing.T, env integrationEnv, err error) {
 // evaluateLive calls Evaluate, retrying only on a connection failure. Live
 // networks drop TLS handshakes occasionally; the retry is logged so it cannot
 // hide a systematic problem, and it never retries an application-level error.
-func evaluateLive(t *testing.T, env integrationEnv, client *Client, ctx context.Context, state any, questions Questions, opts ...CallOption) *Result {
+func evaluateLive(ctx context.Context, t *testing.T, env integrationEnv, client *Client, state any, questions Questions, opts ...CallOption) *Result {
 	t.Helper()
 
 	const attempts = 3
@@ -182,7 +182,7 @@ func TestIntegrationMixedPrimitives(t *testing.T) {
 		"plan":      "pro",
 	}
 
-	result := evaluateLive(t, env, client, context.Background(), state, questions)
+	result := evaluateLive(context.Background(), t, env, client, state, questions)
 	require.NotNil(t, result)
 
 	// Model is the resolved, versioned id. Its exact form is the host's
@@ -345,7 +345,7 @@ func TestIntegrationChineseStateRoundTrip(t *testing.T) {
 		},
 	}
 
-	result := evaluateLive(t, env, client, context.Background(), state, questions)
+	result := evaluateLive(context.Background(), t, env, client, state, questions)
 	require.NotNil(t, result)
 
 	broken, ok := result.Noul("promise_broken")
@@ -375,7 +375,7 @@ func TestIntegrationNoulWithoutCriteriaIsAccepted(t *testing.T) {
 	env := loadIntegrationEnv(t)
 	client := newIntegrationClient(t, env)
 
-	result := evaluateLive(t, env, client, context.Background(),
+	result := evaluateLive(context.Background(), t, env, client,
 		"The tests all passed and the deploy finished in 90 seconds.",
 		Questions{"green": NoulQuestion{Instructions: "Did the tests pass?"}},
 	)
@@ -435,7 +435,7 @@ func TestIntegrationMarkupAndUnicodeSurviveTheWire(t *testing.T) {
 		"chinese": "订单号 20260915003，显示器反复黑屏重启。",
 	}
 
-	result := evaluateLive(t, env, client, context.Background(), state,
+	result := evaluateLive(context.Background(), t, env, client, state,
 		Questions{"contains_markup": NoulQuestion{
 			Instructions: "Does the html field contain an opening script tag?",
 			Criteria: &NoulCriteria{

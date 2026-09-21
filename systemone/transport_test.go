@@ -24,11 +24,11 @@ import (
 
 // retryTestPolicy builds a policy with deterministic (jitter-free) timing and a
 // small retryable status list, so tests finish in milliseconds.
-func retryTestPolicy(maxRetries int, initial, max time.Duration) RetryPolicy {
+func retryTestPolicy(maxRetries int, initial, maxInterval time.Duration) RetryPolicy {
 	return RetryPolicy{
 		MaxRetries:            maxRetries,
 		InitialBackoff:        initial,
-		MaxBackoff:            max,
+		MaxBackoff:            maxInterval,
 		BackoffJitter:         0,
 		RetryStatuses:         []int{408, 429, 500, 502, 503, 504, 599},
 		RespectRetryAfter:     false,

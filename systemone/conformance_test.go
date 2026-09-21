@@ -124,11 +124,11 @@ func conformanceJSONValue(t *testing.T, raw []byte) any {
 }
 
 func truncateForMessage(b []byte) string {
-	const max = 120
-	if len(b) <= max {
+	const maxLen = 120
+	if len(b) <= maxLen {
 		return string(b)
 	}
-	return string(b[:max]) + "..."
+	return string(b[:maxLen]) + "..."
 }
 
 // conformanceEntry turns one raw JSON entry into the Entry value a caller would
@@ -388,7 +388,7 @@ func conformanceIndex(key string) (int, bool) {
 func conformanceDensifyLegend(m map[string]string) []string {
 	length := 0
 	for key := range m {
-		if i, ok := conformanceIndex(key); ok && i+1 > length {
+		if i, ok := conformanceIndex(key); ok && i >= length {
 			length = i + 1
 		}
 	}
@@ -407,7 +407,7 @@ func conformanceDensifyLegend(m map[string]string) []string {
 func conformanceDensifyProbabilities(m map[string]float64) []float64 {
 	length := 0
 	for key := range m {
-		if i, ok := conformanceIndex(key); ok && i+1 > length {
+		if i, ok := conformanceIndex(key); ok && i >= length {
 			length = i + 1
 		}
 	}

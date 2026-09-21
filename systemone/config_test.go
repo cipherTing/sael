@@ -110,11 +110,11 @@ func TestSaveConfigCreatesPrivateDirectoryAndFile(t *testing.T) {
 
 	dirInfo, err := os.Stat(dir)
 	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(configDirPerm), dirInfo.Mode().Perm(), "the directory sits beside a credential, so it stays private")
+	assert.Equal(t, configDirPerm, dirInfo.Mode().Perm(), "the directory sits beside a credential, so it stays private")
 
 	fileInfo, err := os.Stat(filepath.Join(dir, ConfigFileName))
 	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(configFilePerm), fileInfo.Mode().Perm())
+	assert.Equal(t, configFilePerm, fileInfo.Mode().Perm())
 }
 
 func TestSaveConfigRejectsEmptyDir(t *testing.T) {
@@ -168,7 +168,7 @@ func TestSaveAuthUsesPrivateModeAndRoundTrips(t *testing.T) {
 
 	info, err := os.Stat(filepath.Join(dir, AuthFileName))
 	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(configFilePerm), info.Mode().Perm(), "the credential file must not be group or world readable")
+	assert.Equal(t, configFilePerm, info.Mode().Perm(), "the credential file must not be group or world readable")
 
 	auth, found, err := LoadAuth(dir)
 	require.NoError(t, err)

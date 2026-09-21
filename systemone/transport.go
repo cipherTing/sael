@@ -257,7 +257,11 @@ func (t *transport) attempt(ctx context.Context, req *httpRequest, url string, a
 		t.logAttemptFailure(ctx, req, attempt, time.Since(started), err)
 		return nil, err
 	}
-	defer resp.Body.Close()
+	// The body is always drained and closed so the connection can be reused.
+	// Close's error is deliberately dropped: the bytes have already been read, so
+	// a close failure cannot change the outcome, and surfacing it would mask
+	// whatever the response actually said.
+	defer func() { _ = resp.Body.Close() }()
 
 	// Read one byte past the limit so that a body of exactly the limit still
 	// succeeds while anything larger is detected without buffering it all.
@@ -385,10 +389,10 @@ func (t *transport) retryDelay(policy RetryPolicy, sequence *backoff.Exponential
 	}
 
 	delay := sequence.NextBackOff()
-	if max := policy.MaxBackoff; max > 0 && delay > max {
+	if ceiling := policy.MaxBackoff; ceiling > 0 && delay > ceiling {
 		// Defensive: keep the first interval inside the cap even if the policy
 		// was built with InitialBackoff > MaxBackoff.
-		delay = max
+		delay = ceiling
 	}
 	delay = clampDuration(delay)
 

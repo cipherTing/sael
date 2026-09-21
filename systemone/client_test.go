@@ -143,7 +143,7 @@ func TestEvaluateSendsExpectedRequest(t *testing.T) {
 	assert.Equal(t, "/systemone", gotPath)
 	assert.Equal(t, "application/json", gotCT)
 	assert.Equal(t, "application/json", gotAccept)
-	assert.Equal(t, UserAgent, gotUA)
+	assert.Equal(t, UserAgent(), gotUA)
 
 	assert.Equal(t, DefaultModel, gotBody["model"])
 	assert.Equal(t, map[string]any{"message": "hello"}, gotBody["state"])

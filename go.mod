@@ -1,4 +1,4 @@
-module github.com/yangmaoting/sael
+module github.com/cipherTing/sael
 
 go 1.23
 

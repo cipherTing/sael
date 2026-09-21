@@ -235,12 +235,12 @@ func TestTransportRetryDelayJitterIsSubtractedWithinBounds(t *testing.T) {
 	policy.RespectRetryAfter = false
 	tr := newDelayTransport(policy)
 
-	min := time.Duration(float64(base) * 0.75)
+	floor := time.Duration(float64(base) * 0.75)
 	seen := make(map[time.Duration]struct{}, 8)
 
 	for i := 0; i < 200; i++ {
 		got := tr.retryDelay(tr.policy, tr.newBackoffSequence(tr.policy), nil)
-		assert.GreaterOrEqual(t, got, min, "jitter must never subtract more than BackoffJitter")
+		assert.GreaterOrEqual(t, got, floor, "jitter must never subtract more than BackoffJitter")
 		assert.LessOrEqual(t, got, base, "jitter must never add to the interval")
 		seen[got] = struct{}{}
 	}

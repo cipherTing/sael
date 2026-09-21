@@ -11,18 +11,36 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"time"
 
-	"github.com/yangmaoting/sael/systemone"
+	"github.com/cipherTing/sael/systemone"
 )
 
 // These examples need no isolation from a developer's own ~/.Sael: New performs
 // no file I/O, and the only examples that read a directory create their own.
+
+// must panics on a non-nil error.
+//
+// Examples must not return early: a missing line of output is reported as a
+// confusing mismatch rather than a clear failure. log.Fatal is the obvious
+// choice and the wrong one, because it calls os.Exit and therefore skips
+// deferred cleanup such as the test server's Close. Panicking runs the defers
+// and fails the example with the error that caused it.
+func must(err error) {
+	if err != nil {
+		panic(err)
+	}
+}
+
+// fail panics on a broken assumption, for the cases where the failure is a
+// missing answer rather than a returned error.
+func fail(format string, args ...any) {
+	panic(fmt.Errorf(format, args...))
+}
 
 // cannedServer stands in for the API so the examples run offline and
 // deterministically. A real caller talks to the real endpoint.
@@ -58,7 +76,7 @@ func ExampleNew() {
 		systemone.WithLogger(slog.New(slog.NewTextHandler(os.Stderr, nil))),
 	)
 	if err != nil {
-		log.Fatal(err)
+		must(err)
 	}
 	fmt.Println(client.BaseURL(), client.DefaultModel())
 	// Output: https://api.typesafe.ai/v1 jev-latest
@@ -74,7 +92,7 @@ func ExampleNew() {
 func ExampleSaveConfig() {
 	dir, err := os.MkdirTemp("", "sael-example-*")
 	if err != nil {
-		log.Fatal(err)
+		must(err)
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 
@@ -87,19 +105,19 @@ func ExampleSaveConfig() {
 		Headers:      map[string]string{"X-Tenant": "acme"},
 	})
 	if err != nil {
-		log.Fatal(err)
+		must(err)
 	}
 	if err := systemone.SaveAuth(dir, &systemone.Auth{APIKey: "sk-secret"}); err != nil {
-		log.Fatal(err)
+		must(err)
 	}
 
 	cfg, found, err := systemone.LoadConfig(dir)
 	if err != nil {
-		log.Fatal(err)
+		must(err)
 	}
 	auth, _, err := systemone.LoadAuth(dir)
 	if err != nil {
-		log.Fatal(err)
+		must(err)
 	}
 
 	fmt.Println("found:        ", found)
@@ -134,7 +152,7 @@ func ExampleClient_Evaluate() {
 		systemone.WithBaseURL(srv.URL),
 	)
 	if err != nil {
-		log.Fatal(err)
+		must(err)
 	}
 
 	result, err := client.Evaluate(context.Background(),
@@ -156,7 +174,7 @@ func ExampleClient_Evaluate() {
 		},
 	)
 	if err != nil {
-		log.Fatal(err)
+		must(err)
 	}
 
 	// The model id in the response is the version that actually answered, which
@@ -165,13 +183,13 @@ func ExampleClient_Evaluate() {
 
 	urgent, ok := result.Noul("urgent")
 	if !ok {
-		log.Fatal("no noul answer named urgent")
+		fail("no noul answer named urgent")
 	}
 	fmt.Printf("urgent: %.2f\n", urgent.Noul)
 
 	team, ok := result.Choice("team")
 	if !ok {
-		log.Fatal("no choice answer named team")
+		fail("no choice answer named team")
 	}
 	fmt.Printf("team: %s (confidence %.1f)\n", team.Choice, team.Confidence)
 
@@ -206,7 +224,7 @@ func ExampleResult_Score() {
 
 	client, err := systemone.New(systemone.WithAPIKey("example-key"), systemone.WithBaseURL(srv.URL))
 	if err != nil {
-		log.Fatal(err)
+		must(err)
 	}
 
 	result, err := client.Evaluate(context.Background(), "some text", systemone.Questions{
@@ -216,12 +234,12 @@ func ExampleResult_Score() {
 		},
 	})
 	if err != nil {
-		log.Fatal(err)
+		must(err)
 	}
 
 	severity, ok := result.Score("severity")
 	if !ok {
-		log.Fatal("no score answer named severity")
+		fail("no score answer named severity")
 	}
 	for level, label := range severity.Legend {
 		fmt.Printf("%d %-8s %.1f\n", level, label, severity.Probabilities[level])
@@ -249,7 +267,7 @@ func ExampleClient_Evaluate_errors() {
 
 	client, err := systemone.New(systemone.WithAPIKey("bad-key"), systemone.WithBaseURL(srv.URL))
 	if err != nil {
-		log.Fatal(err)
+		must(err)
 	}
 
 	_, err = client.Evaluate(context.Background(), "text", systemone.Questions{
