@@ -69,7 +69,7 @@ tidy: ## Sync go.mod and go.sum with the imports.
 
 .PHONY: tidy-check
 tidy-check: ## Fail if go.mod or go.sum is not tidy.
-	$(GO) mod tidy
+	@$(GO) mod tidy
 	if ! git diff --quiet -- go.mod go.sum; then
 		echo "go.mod or go.sum is not tidy; run 'make tidy' and commit the result" >&2
 		git --no-pager diff -- go.mod go.sum >&2
@@ -113,7 +113,7 @@ lint: $(GOLANGCI) ## Run golangci-lint.
 
 .PHONY: fmt-check
 fmt-check: ## Fail if any tracked Go file is not gofmt-ed.
-	files=$$(gofmt -l $$(git ls-files '*.go'))
+	@files=$$(gofmt -l $$(git ls-files '*.go'))
 	if [ -n "$$files" ]; then
 		echo "these files are not gofmt-ed (run 'make fmt'):" >&2
 		echo "$$files" >&2
