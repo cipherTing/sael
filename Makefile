@@ -129,8 +129,12 @@ check: fmt-check tidy-check vet staticcheck lint test-race ## Everything CI runs
 ci: check ## Alias for check, for CI scripts to call.
 
 .PHONY: clean
-clean: ## Remove build and coverage output.
-	rm -rf $(BIN_DIR) $(COVERAGE) $(COVER_HTML)
+clean: ## Remove build and coverage output, keeping the pinned tools.
+	rm -rf $(COVERAGE) $(COVER_HTML)
+
+.PHONY: clean-tools
+clean-tools: ## Remove the pinned tools in ./bin, so the next check reinstalls them.
+	rm -rf $(BIN_DIR)
 
 ##@ Tools
 
