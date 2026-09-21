@@ -36,6 +36,25 @@ func withConfig(t *testing.T, cfg *Config, apiKey string) string {
 	return dir
 }
 
+// clearClientEnv blanks the environment the client consults, so a test asserts on
+// the inputs it wrote rather than on whatever the developer has exported.
+//
+// An empty value counts as unset, because applyEnv skips it, so blanking is
+// equivalent to removing and needs no restore logic beyond t.Setenv's own.
+//
+// The New precedence is defaults, then environment, then explicit Options, and
+// the environment sits above the config directory. So a developer with any of
+// these three exported — which is the documented way to configure a library
+// caller, not an odd thing to do — used to see these tests fail for a reason that
+// had nothing to do with their change. Each test below that asserts a default
+// calls this first.
+func clearClientEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv(EnvAPIKey, "")
+	t.Setenv(EnvBaseURL, "")
+	t.Setenv(EnvModel, "")
+}
+
 // ---------- directory resolution ----------
 
 func TestDefaultConfigDirPrefersEnv(t *testing.T) {
@@ -301,7 +320,9 @@ func TestOptionBeatsEnvironmentAndConfigFile(t *testing.T) {
 func TestNewFromConfigDirEmptyMeansDefaultLocation(t *testing.T) {
 	dir := withConfig(t, &Config{Model: "model-from-home"}, "sk-from-home")
 	t.Setenv(EnvConfigDir, dir)
-	t.Setenv(EnvAPIKey, "")
+	// The model comes from the file here, so the environment must not be allowed
+	// to answer over it.
+	clearClientEnv(t)
 
 	client, err := NewFromConfigDir("")
 	require.NoError(t, err)
@@ -310,6 +331,9 @@ func TestNewFromConfigDirEmptyMeansDefaultLocation(t *testing.T) {
 }
 
 func TestNewFromConfigDirMissingDirectoryIsFine(t *testing.T) {
+	// Only the key is meant to come from the environment; the assertions below are
+	// about the other two falling back to their defaults.
+	clearClientEnv(t)
 	t.Setenv(EnvAPIKey, "sk-env")
 
 	client, err := NewFromConfigDir(filepath.Join(t.TempDir(), "does-not-exist"))
@@ -319,6 +343,10 @@ func TestNewFromConfigDirMissingDirectoryIsFine(t *testing.T) {
 }
 
 func TestConfigFileHeadersCannotOverrideAuthoritativeOnes(t *testing.T) {
+	// The key under test comes from the file, so an exported one must not be able
+	// to take its place.
+	clearClientEnv(t)
+
 	dir := withConfig(t, &Config{
 		Headers: map[string]string{
 			"Authorization": "Bearer attacker",

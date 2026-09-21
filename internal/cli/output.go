@@ -21,6 +21,22 @@ import (
 
 const barWidth = 20
 
+// writeResult picks which of the two renderings a caller gets.
+//
+// A pipe means something else is reading, so it receives JSON whether or not
+// anyone asked for it: guessing wrong here is what makes a tool unusable in a
+// script. --json forces that same shape at a terminal, for a person who is about
+// to paste it somewhere.
+//
+// Whether the destination is a terminal is passed in rather than detected here,
+// so that both branches are reachable from a test.
+func writeResult(w io.Writer, result *systemone.Result, asJSON, terminal, color bool) error {
+	if asJSON || !terminal {
+		return writeJSON(w, result)
+	}
+	return writeReport(w, result, color)
+}
+
 // hazard is one yes/no answer, ready to be ranked.
 type hazard struct {
 	name  string

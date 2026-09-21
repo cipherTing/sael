@@ -126,6 +126,10 @@ func TestNewTrimsTrailingSlashFromBaseURL(t *testing.T) {
 // ---------- request shape ----------
 
 func TestEvaluateSendsExpectedRequest(t *testing.T) {
+	// This test asserts that an unset model falls back to DefaultModel, so an
+	// exported TYPESAFE_DEFAULT_MODEL would otherwise be the thing under test.
+	clearClientEnv(t)
+
 	var gotMethod, gotPath, gotCT, gotAccept, gotUA string
 	var gotBody map[string]any
 

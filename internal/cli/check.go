@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +12,17 @@ import (
 
 	"github.com/cipherTing/sael/internal/questions"
 	"github.com/cipherTing/sael/systemone"
+)
+
+var (
+	// errNoText is returned when the request text resolved to nothing, whichever
+	// of the three sources it came from.
+	errNoText = errors.New("no text to check")
+
+	// errNoTextInteractive is the same situation with no input to read at all.
+	// It is a separate error because the useful advice differs: with nothing
+	// piped in, the fix is to supply a source.
+	errNoTextInteractive = errors.New("no text to check: pass it as an argument, use --file, or pipe it in")
 )
 
 func newCheckCmd() *cobra.Command {
@@ -60,11 +72,7 @@ that turns one into an action belongs to the caller.`,
 			// A pipe means something else is reading, so it gets JSON whether or not
 			// anyone asked for it. Guessing wrong here is what makes a tool unusable
 			// in a script.
-			if asJSON || !isTerminal(out) {
-				return writeJSON(out, result)
-			}
-
-			return writeReport(out, result, colorEnabled())
+			return writeResult(out, result, asJSON, isTerminal(out), colorEnabled())
 		},
 	}
 
@@ -89,25 +97,37 @@ func readText(cmd *cobra.Command, args []string, file string) (string, error) {
 		return requireText(strings.TrimSpace(args[0]))
 
 	default:
-		// With no argument and nothing on standard input, reading would block until
-		// the caller closed the terminal. Say so instead of hanging.
-		if term.IsTerminal(int(os.Stdin.Fd())) {
-			return "", fmt.Errorf("no text to check: pass it as an argument, use --file, or pipe it in")
-		}
-		raw, err := io.ReadAll(cmd.InOrStdin())
-		if err != nil {
-			return "", fmt.Errorf("reading standard input: %w", err)
-		}
-		return requireText(strings.TrimSpace(string(raw)))
+		return readTextFrom(cmd.InOrStdin(), stdinIsTerminal())
 	}
+}
+
+// readTextFrom reads the request from r.
+//
+// With no argument and nothing to read, reading a terminal would block until the
+// caller closed it, so that case is refused with something actionable instead of
+// hanging. Whether r is a terminal is passed in rather than detected here, which
+// is what makes the refusing branch reachable from a test: a test process has no
+// terminal on offer.
+func readTextFrom(r io.Reader, terminal bool) (string, error) {
+	if terminal {
+		return "", errNoTextInteractive
+	}
+	raw, err := io.ReadAll(r)
+	if err != nil {
+		return "", fmt.Errorf("reading standard input: %w", err)
+	}
+	return requireText(strings.TrimSpace(string(raw)))
 }
 
 func requireText(text string) (string, error) {
 	if text == "" {
-		return "", fmt.Errorf("no text to check")
+		return "", errNoText
 	}
 	return text, nil
 }
+
+// stdinIsTerminal reports whether standard input is a terminal.
+func stdinIsTerminal() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
 
 // isTerminal reports whether w is a terminal. A writer that is not an *os.File
 // cannot be one, which is the right answer for a buffer or a pipe.
@@ -120,11 +140,20 @@ func isTerminal(w io.Writer) bool {
 // person is looking at. A dumb terminal gets no escapes either: it cannot render
 // them, and the vendor that set TERM=dumb usually meant it.
 func colorEnabled() bool {
+	return colorEnabledFor(isTerminal(os.Stdout))
+}
+
+// colorEnabledFor applies the environment rules to an answer already known about
+// whether the destination is a terminal. Taking that answer as an argument is
+// what makes the precedence testable, and the precedence is the whole content of
+// this function: the environment overrides the terminal, and NO_COLOR overrides
+// TERM.
+func colorEnabledFor(stdoutIsTerminal bool) bool {
 	if _, set := os.LookupEnv("NO_COLOR"); set {
 		return false
 	}
 	if os.Getenv("TERM") == "dumb" {
 		return false
 	}
-	return isTerminal(os.Stdout)
+	return stdoutIsTerminal
 }

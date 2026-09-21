@@ -22,6 +22,30 @@ import (
 
 // These examples need no isolation from a developer's own ~/.Sael: New performs
 // no file I/O, and the only examples that read a directory create their own.
+//
+// The environment is a different matter. New consults it for anything an Option
+// does not set, and an example's output is asserted, so a variable the developer
+// happens to have exported would change the text the example expects. The
+// examples that print an environment-derived value clear it first. This is not
+// hypothetical: with TYPESAFE_DEFAULT_MODEL exported, ExampleNew failed.
+
+// clearEnv removes an environment variable and returns a function that puts it
+// back, so an example can write `defer clearEnv("NAME")()`.
+//
+// Examples have no *testing.T and therefore no t.Setenv, which is the whole
+// reason this exists.
+func clearEnv(name string) func() {
+	value, existed := os.LookupEnv(name)
+	_ = os.Unsetenv(name)
+
+	return func() {
+		if existed {
+			_ = os.Setenv(name, value)
+			return
+		}
+		_ = os.Unsetenv(name)
+	}
+}
 
 // must panics on a non-nil error.
 //
@@ -69,6 +93,11 @@ func cannedServer() *httptest.Server {
 // the per-attempt timeout defaults to ten seconds, so without an overall budget a
 // call can occupy a request path for far longer than the caller intended.
 func ExampleNew() {
+	// The default model is only jev-latest when nothing overrides it, so the
+	// variable that would is cleared: an example's output has to be the same on
+	// every machine.
+	defer clearEnv("TYPESAFE_DEFAULT_MODEL")()
+
 	client, err := systemone.New(
 		systemone.WithAPIKey("sk-example"),
 		systemone.WithBaseURL("https://api.typesafe.ai/v1"),
