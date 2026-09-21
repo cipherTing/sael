@@ -67,17 +67,20 @@ jobs:
             exit 1
           fi
 
-      # Pinned to the same version as the Makefile, so a local `make lint` and CI
-      # cannot disagree about what "clean" means. The action has to be v7 or
-      # newer to drive golangci-lint v2 at all; v6 refuses the version string.
+      # Both linters are pinned in the Makefile, which is the single source of
+      # truth for the versions. staticcheck is invoked through make so the pin
+      # cannot drift out of sync with a local run. golangci-lint is the one
+      # exception: the action needs the version string itself, so v2.13.2 is
+      # repeated below and the two must be bumped together in one commit.
+      #
+      # The action has to be v7 or newer to drive golangci-lint v2 at all; v6
+      # refuses the version string.
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.13.2
 
       - name: staticcheck
-        run: |
-          go install honnef.co/go/tools/cmd/staticcheck@v0.8.1
-          staticcheck ./...
+        run: make staticcheck
 
   # The live tests only run where a key is available. Forks do not receive
   # secrets, so this job is skipped rather than failed on a pull request from a

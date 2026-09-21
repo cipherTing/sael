@@ -9,11 +9,6 @@
 .secrets/
 .env
 
-# The Go toolchain, installed inside the repository on the machine this was
-# built on. It is ~270 MB of binary that no clone wants; install Go normally
-# instead.
-.tools/
-
 # Build and test output.
 /bin/
 /dist/

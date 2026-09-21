@@ -4,10 +4,12 @@
 # carrying a `##` comment shows up there, and nothing else does. A stale help
 # listing is worse than none, so update the comment with the target.
 #
-# Tools are pinned and installed into ./bin rather than $GOPATH/bin, so a clone
-# gets reproducible checks without touching the rest of the machine. A linter
+# Linters are pinned to an exact version and run with `go run pkg@version`
+# rather than installed as binaries. The pin is the part that matters: a linter
 # that changes its mind overnight should be a commit, not a surprise on someone
-# else's branch.
+# else's branch. Running from source keeps the download in the shared module
+# cache, instead of dropping ~75 MB of binary into every clone of every project,
+# and it costs nothing after the first build.
 
 # Recipes here are multi-line blocks, which rely on .ONESHELL. That needs GNU
 # Make 3.82 or newer, and macOS still ships 3.81 at /usr/bin/make, where a block
@@ -28,18 +30,14 @@ GOFLAGS ?=
 PKG     := ./...
 COVERAGE   := coverage.out
 COVER_HTML := coverage.html
-BIN_DIR    := bin
-
-TOOLS_DIR   := $(CURDIR)/bin
-STATICCHECK := $(TOOLS_DIR)/staticcheck
-GOLANGCI    := $(TOOLS_DIR)/golangci-lint
 
 # Pinned deliberately. Bump these in a commit that also fixes whatever the new
 # version reports, so the change is reviewable rather than arriving by surprise.
 STATICCHECK_VERSION := v0.8.1
 GOLANGCI_VERSION    := v2.13.2
 
-export PATH := $(TOOLS_DIR):$(PATH)
+STATICCHECK := $(GO) run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION)
+GOLANGCI    := $(GO) run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)
 
 ##@ General
 
@@ -104,12 +102,12 @@ cover: ## Write coverage.out and coverage.html.
 ##@ Linting
 
 .PHONY: staticcheck
-staticcheck: $(STATICCHECK) ## Run staticcheck.
+staticcheck: ## Run staticcheck.
 	$(STATICCHECK) $(PKG)
 
 .PHONY: lint
-lint: $(GOLANGCI) ## Run golangci-lint.
-	$(GOLANGCI) run
+lint: ## Run golangci-lint.
+	$(GOLANGCI) run $(PKG)
 
 .PHONY: fmt-check
 fmt-check: ## Fail if any tracked Go file is not gofmt-ed.
@@ -129,19 +127,5 @@ check: fmt-check tidy-check vet staticcheck lint test-race ## Everything CI runs
 ci: check ## Alias for check, for CI scripts to call.
 
 .PHONY: clean
-clean: ## Remove build and coverage output, keeping the pinned tools.
+clean: ## Remove coverage output.
 	rm -rf $(COVERAGE) $(COVER_HTML)
-
-.PHONY: clean-tools
-clean-tools: ## Remove the pinned tools in ./bin, so the next check reinstalls them.
-	rm -rf $(BIN_DIR)
-
-##@ Tools
-
-$(STATICCHECK):
-	@mkdir -p $(TOOLS_DIR)
-	GOBIN=$(TOOLS_DIR) $(GO) install honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION)
-
-$(GOLANGCI):
-	@mkdir -p $(TOOLS_DIR)
-	GOBIN=$(TOOLS_DIR) $(GO) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)
