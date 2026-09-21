@@ -23,7 +23,9 @@ Because this is a Go module, a version is a git tag: `git tag v0.2.0 && git push
 - Retry with exponential backoff and jitter, honouring `Retry-After` in both its
   seconds and HTTP-date forms, matching the reference SDK's defaults.
 - Configuration in `~/.Sael` (`config.json` and `auth.json`), read explicitly by
-  `NewFromConfigDir` and written through a temporary file with mode `0600`.
+  `NewFromConfigDir` and written through a temporary file with mode `0600` on
+  Unix. Windows has no such bits, so there the credential relies on the ACL of
+  the profile directory; that is documented rather than papered over.
 - `Version`, derived from the build information the go command embeds, so a
   release tag changes what the client reports without anyone editing a constant.
 - Tests: unit coverage, replay of responses captured from a live endpoint,

@@ -17,11 +17,13 @@ import (
 // agent CLIs:
 //
 //	~/.Sael/config.json   settings that are safe to read, commit or paste
-//	~/.Sael/auth.json     the credential, in its own file, mode 0600
+//	~/.Sael/auth.json     the credential, in its own file
 //
 // Two files rather than one, so that the half people share is never the half
-// that authenticates them. Both are JSON. The directory is created with mode
-// 0700 and both files with 0600.
+// that authenticates them. Both are JSON. On Unix the directory is created with
+// mode 0700 and both files with 0600; on Windows there are no such bits, so the
+// credential relies on the ACL of the user's profile directory. See the
+// configDirPerm comment for what that means in practice.
 //
 // # Reading is explicit
 //
@@ -49,6 +51,16 @@ const (
 // multi-profile setups stay out of each other's way.
 const EnvConfigDir = "SAEL_HOME"
 
+// Permission bits for the configuration files, on the platforms that have them.
+//
+// Unix enforces these: 0700 for the directory and 0600 for both files, so a
+// credential is readable only by its owner. Windows does not. There, Chmod only
+// toggles the read-only attribute and FileMode.Perm reports a synthesised
+// 0666/0777 whatever was requested, so the file ends up protected by the ACL on
+// the user's profile directory and by nothing this package does. The tests do not
+// assert the mode on Windows for that reason — asserting it there would be
+// testing the Go runtime. Closing the gap properly would mean an ACL dependency,
+// which this package does not take; it is documented instead.
 const (
 	configDirPerm  fs.FileMode = 0o700
 	configFilePerm fs.FileMode = 0o600
@@ -233,10 +245,11 @@ func SaveConfig(dir string, cfg *Config) error {
 }
 
 // SaveAuth writes dir/auth.json with mode 0600, creating the directory if needed.
+// The mode is enforced on Unix only; see the configDirPerm comment.
 //
 // The credential is written unencrypted, which is the same bargain ssh and the
-// other agent CLIs make: the protection is the file mode and the home directory,
-// not a password.
+// other agent CLIs make: the protection is the file's mode where the platform has
+// one, and the user's profile directory everywhere, not a password.
 func SaveAuth(dir string, auth *Auth) error {
 	if auth == nil || strings.TrimSpace(auth.APIKey) == "" {
 		return fmt.Errorf("%w: refusing to write an empty API key", ErrConfig)

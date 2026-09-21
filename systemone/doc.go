@@ -159,7 +159,7 @@
 // agent CLIs:
 //
 //	~/.Sael/config.json   settings that are safe to read, commit or paste
-//	~/.Sael/auth.json     the credential, in its own file, mode 0600
+//	~/.Sael/auth.json     the credential, in its own file
 //
 // Two files rather than one, so the half people share is never the half that
 // authenticates them. SaveConfig and SaveAuth create the directory with mode
@@ -168,6 +168,17 @@
 // as "not configured" rather than an error, but a file that exists and does not
 // parse IS an error, because silently ignoring a typo in a hand-edited file is
 // how people lose an afternoon.
+//
+// # File modes are a Unix guarantee only
+//
+// On Unix both files are created with mode 0600 and the directory with 0700, so
+// the credential is readable only by its owner. Windows has no such bits: Chmod
+// there only toggles the read-only attribute, and FileMode.Perm reports a
+// synthesised 0666 or 0777 no matter what was asked for. On Windows the
+// credential is therefore protected by the ACL on the user's profile directory
+// and by nothing this package does. That is a real gap, stated rather than
+// papered over; closing it would mean taking an ACL dependency, which this
+// package does not.
 //
 //	// config.json
 //	{

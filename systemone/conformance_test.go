@@ -2062,6 +2062,13 @@ func TestConformanceNoulCriteriaOmittedEntirelyIsStillFine(t *testing.T) {
 // inherent to encoding/json rather than a bug in this package, but it is worth
 // pinning: a caller slicing bytes out of a binary payload can silently lose
 // them.
+//
+// The assertion is on the decoded value rather than on the bytes, because how
+// encoding/json *spells* U+FFFD is not stable across Go releases: 1.23 writes the
+// \ufffd escape, and later versions write the rune itself. Both decode to the
+// same string, and the claim worth pinning is the substitution, not its
+// spelling. Asserting bytes here made this test fail on Go 1.23 and pass on
+// stable, which said nothing about the package.
 func TestConformanceInvalidUTF8InStateIsReplaced(t *testing.T) {
 	srv := newConformanceReplayServer(t, 200, []byte(`{"answers":{}}`))
 	client := newConformanceClient(t, srv.URL, "m")
@@ -2070,8 +2077,13 @@ func TestConformanceInvalidUTF8InStateIsReplaced(t *testing.T) {
 	_, err := client.Evaluate(context.Background(), invalid, Questions{"q": NoulQuestion{Instructions: "i"}})
 	require.NoError(t, err)
 
-	body := string(srv.capturedBody())
-	assert.NotContains(t, body, "\xff", "invalid UTF-8 must not reach the wire as-is")
-	assert.Contains(t, body, "before\uFFFD\uFFFD after",
+	body := srv.capturedBody()
+	assert.NotContains(t, string(body), "\xff", "invalid UTF-8 must not reach the wire as-is")
+
+	var sent struct {
+		State string `json:"state"`
+	}
+	require.NoError(t, json.Unmarshal(body, &sent))
+	assert.Equal(t, "before\uFFFD\uFFFD after", sent.State,
 		"encoding/json replaces each invalid byte with U+FFFD; the caller cannot tell from the response")
 }

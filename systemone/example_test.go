@@ -83,7 +83,8 @@ func ExampleNew() {
 }
 
 // ExampleSaveConfig shows the layout on disk: settings that are safe to read and
-// share in config.json, the credential in its own auth.json with mode 0600.
+// share in config.json, and the credential in its own auth.json so that the half
+// people share is never the half that authenticates them.
 //
 // The temporary directory here stands in for DefaultConfigDir, which reports
 // $SAEL_HOME when set and ~/.Sael otherwise. NewFromConfigDir reads that

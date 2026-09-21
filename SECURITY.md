@@ -42,10 +42,13 @@ Things that are in scope, roughly in the order they would matter:
   operator.
 - **The fact that the API key is stored unencrypted in `~/.Sael/auth.json`.**
   That is the same bargain `ssh` and the other agent CLIs make: the protection is
-  the file mode (`0600`) and the home directory, not a password. If you believe
-  the file is created or replaced in a way that briefly exposes it, that *is* a
-  finding — `SaveAuth` writes through a temporary file created with the
-  restrictive mode for exactly that reason.
+  the file's mode and the directory it sits in, not a password. On Unix the mode
+  is `0600` and the directory `0700`. On Windows there are no such bits — `Chmod`
+  only toggles the read-only attribute there — so the file relies on the ACL of
+  the user's profile directory and on nothing this package does. That is a known
+  gap, not a secret one. What *is* a finding either way is the file being created
+  or replaced in a way that briefly exposes it: `SaveAuth` writes through a
+  temporary file created with the restrictive mode for exactly that reason.
 - **Dependency vulnerabilities with no reachable path** in this package. The
   runtime dependency graph is one module, `github.com/cenkalti/backoff/v5`, which
   itself has none.

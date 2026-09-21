@@ -2,8 +2,10 @@ package systemone
 
 import (
 	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -104,17 +106,30 @@ func TestSaveConfigRoundTrips(t *testing.T) {
 	assert.Equal(t, want, *got)
 }
 
+// assertPrivateMode checks a file's POSIX mode on the platforms where that means
+// something.
+//
+// Windows has no POSIX permission bits: Chmod only toggles the read-only
+// attribute, and FileMode.Perm reports a synthesised 0666 or 0777 for every file
+// regardless of what was requested. Asserting the mode there would be testing the
+// Go runtime rather than this package, so the check simply does not run. The file
+// is still created and still round-trips; only the mode claim is platform-bound.
+func assertPrivateMode(t *testing.T, path string, want fs.FileMode) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		return
+	}
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, want, info.Mode().Perm(), "a file beside the credential must not be group or world readable")
+}
+
 func TestSaveConfigCreatesPrivateDirectoryAndFile(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "nested", ConfigDirName)
 	require.NoError(t, SaveConfig(dir, &Config{Model: "m"}))
 
-	dirInfo, err := os.Stat(dir)
-	require.NoError(t, err)
-	assert.Equal(t, configDirPerm, dirInfo.Mode().Perm(), "the directory sits beside a credential, so it stays private")
-
-	fileInfo, err := os.Stat(filepath.Join(dir, ConfigFileName))
-	require.NoError(t, err)
-	assert.Equal(t, configFilePerm, fileInfo.Mode().Perm())
+	assertPrivateMode(t, dir, configDirPerm)
+	assertPrivateMode(t, filepath.Join(dir, ConfigFileName), configFilePerm)
 }
 
 func TestSaveConfigRejectsEmptyDir(t *testing.T) {
@@ -166,9 +181,7 @@ func TestSaveAuthUsesPrivateModeAndRoundTrips(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, SaveAuth(dir, &Auth{APIKey: "sk-secret"}))
 
-	info, err := os.Stat(filepath.Join(dir, AuthFileName))
-	require.NoError(t, err)
-	assert.Equal(t, configFilePerm, info.Mode().Perm(), "the credential file must not be group or world readable")
+	assertPrivateMode(t, filepath.Join(dir, AuthFileName), configFilePerm)
 
 	auth, found, err := LoadAuth(dir)
 	require.NoError(t, err)

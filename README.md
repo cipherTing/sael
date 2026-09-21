@@ -68,12 +68,17 @@ Settings live in `~/.Sael`, laid out like the other agent CLIs:
 
 ```
 ~/.Sael/config.json    settings that are safe to read, commit or paste
-~/.Sael/auth.json      the credential, in its own file, mode 0600
+~/.Sael/auth.json      the credential, in its own file
 ```
 
 Two files rather than one, so that the half people share is never the half that
 authenticates them. `SaveConfig` and `SaveAuth` create the directory with mode
 0700 and write through a temporary file.
+
+On Unix both files are created with mode `0600`. Windows has no such bits:
+`Chmod` there only toggles the read-only attribute, so the credential relies on
+the ACL of your profile directory. That gap is documented rather than papered
+over — see the package docs.
 
 ```json
 // config.json
@@ -191,6 +196,10 @@ found:
 - **The package makes no judgement about whether an answer is correct.** Tests
   assert structural invariants — probabilities in range, distributions summing to
   one, a `Legend` matching the criteria you sent — and nothing about accuracy.
+- **The configuration file mode is a Unix guarantee only.** On Windows `Chmod`
+  cannot express `0600`, so `auth.json` relies on the ACL of your profile
+  directory. Closing this would mean an ACL dependency, which the package does
+  not take.
 - **`ScoreAnswer` exposes two parallel slices.** They are always the same length,
   but a level missing from a response is filled in rather than reported.
 
