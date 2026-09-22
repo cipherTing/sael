@@ -7,7 +7,7 @@ Please **do not** open a public issue for a security problem. Use GitHub's
 instead, so there is a chance to fix it before it is public.
 
 Please include what you did, what happened, and what you expected, plus the
-version from `systemone.Version()` and the Go version. A minimal reproducer is
+version from `sdk.Version()` and the Go version. A minimal reproducer is
 worth more than a long description.
 
 You should get a reply within a few days. This is a small project maintained in

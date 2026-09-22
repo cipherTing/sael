@@ -1,0 +1,86 @@
+name: Release
+
+# A pushed tag is the release. This repository has no root module, so the two
+# modules are tagged in their own namespaces (`cli/v0.0.1-rc1`, `sdk/v0.0.1-rc1`)
+# -- Go requires a subdirectory module's tag to carry the directory name as a
+# prefix. A bare `v*` pattern would therefore match a tag that means nothing here
+# and build nothing from it.
+#
+# `cli/v*`, not `sdk/v*`: the CLI is what ships as an archive. An SDK release is
+# the tag itself, since the module proxy serves the version from it, and cutting
+# CLI archives from an SDK tag would publish the same binaries a second time
+# under a version the SDK never had.
+on:
+  push:
+    tags:
+      - 'cli/v*'
+
+# Creating the release and uploading its assets writes to the repository. The
+# token Actions provides by default is read-only, and the failure is a 403 at the
+# last step, after the build has already run.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # All of the history and every tag: the release notes are the commits
+          # since the previous `cli/v*` tag, and a shallow clone has no such tag
+          # to find -- the notes would silently become the whole history.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          # No root go.mod here, so setup-go's default dependency file is
+          # missing and it throws. Name both modules instead.
+          cache-dependency-path: |
+            sdk/go.sum
+            cli/go.sum
+          # GoReleaser shells out to `go build`, so a toolchain has to be here.
+          # `stable`, as the lint job in ci.yml uses; the version in cli/go.mod is
+          # a minimum, not a pin.
+          go-version: stable
+
+      - name: Read the pinned GoReleaser version
+        id: goreleaser
+        # The release tool's version lives in the Makefile, and the action below
+        # takes a version as an input. Reading it there is the difference between
+        # one pin and two: a second copy stays silent until a release is built by
+        # a GoReleaser that CI never checked the configuration against.
+        run: |
+          pin="$(sed -n 's/^GORELEASER_VERSION[[:space:]]*:=[[:space:]]*//p' Makefile)"
+          if [ -z "${pin}" ]; then
+            echo "GORELEASER_VERSION is not set in the Makefile" >&2
+            exit 1
+          fi
+          echo "version=${pin}" >> "$GITHUB_OUTPUT"
+
+      # The released binary, not `go run`. Compiling GoReleaser costs a second Go
+      # toolchain and the Azure, AWS, Google Cloud and Docker SDKs before it
+      # builds the first line of this repository, and the action keeps the binary
+      # it downloads between runs.
+      #
+      # `--skip=validate` is required here, not a shortcut: GoReleaser parses the
+      # current tag as a semantic version before it builds anything, and
+      # `cli/v0.0.1-rc1` is not one -- the prefix is a Go module requirement, and
+      # the open-source build has no setting to strip it (that is the Pro
+      # `monorepo.tag_prefix` feature). The only switch that skips that parse also
+      # skips GoReleaser's git checks, which is why the tag is passed in below:
+      # the run is pinned to the tag this workflow was triggered by, not to
+      # whatever HEAD happens to be. A bad configuration is still caught before
+      # anything is published -- GoReleaser reads it strictly, before it builds.
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          version: ${{ steps.goreleaser.outputs.version }}
+          args: release --clean --skip=validate
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The tag, passed explicitly rather than detected. `sdk/v0.0.1-rc1` and
+          # `cli/v0.0.1-rc1` are pushed at the same commit, and GoReleaser picks
+          # one of the tags pointing at HEAD by version sort; picking the SDK's
+          # would build the CLI's archives from the SDK's tag.
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}

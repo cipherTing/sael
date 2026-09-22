@@ -1,0 +1,170 @@
+name: Install
+
+# Why this is a sibling of ci.yml rather than another job in it: ci.yml answers
+# "is the code correct", this answers "does the thing a user downloads actually
+# install". They fail for different reasons and belong to different owners, and a
+# red install run that is really a lint failure is a signal nobody can act on.
+#
+# No tag trigger. The archives here are built from the commit under test and
+# served over loopback, so a release tag would add nothing that a pull request
+# does not already cover -- and install.sh's download path is the same shape
+# either way. What the release workflow does differently is publish, and that
+# cannot be rehearsed without publishing.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # One build of the archives, for every platform's test.
+  #
+  # The archives are platform-independent build outputs: goreleaser cross-compiles
+  # all three targets from one runner with CGO_ENABLED=0, so building them again on
+  # macOS and Windows would produce the same bytes at three times the cost. It
+  # would also create a way for the three jobs to disagree -- two building from
+  # this commit and one from a cache -- which is a failure that looks like an
+  # installer bug.
+  #
+  # Built through `make release-snapshot` rather than by spelling out the
+  # goreleaser command: the Makefile owns the pinned version and fetches that
+  # exact prebuilt binary, so the tool that reads .goreleaser.yaml here is the
+  # tool a release uses. Nothing is tagged at the commit under test, so the
+  # version is a snapshot one -- `sael_0.0.0-SNAPSHOT-<sha>_<os>_<arch>` -- and
+  # that is the point: the installers are tested against a real build without a
+  # release having to exist first. Both test scripts read the version out of the
+  # archive name instead of assuming the shape, because that name is the contract
+  # between this job and the installers, and a mismatch is the failure they exist
+  # to catch.
+  #
+  # No actions/cache around the 25 MB GoReleaser download the Makefile does: it
+  # takes a couple of seconds on a runner, and a cache key is one more thing that
+  # can hand a build a stale tool.
+  archives:
+    name: build archives
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Full history and tags, as release.yml uses. GoReleaser decides the
+          # version for a snapshot from the git state; a shallow clone has no tags
+          # to look at, and the difference would surface as an oddly named archive
+          # rather than as an error.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          # No root go.mod here, so setup-go's default dependency file is
+          # missing and it throws. Name both modules instead.
+          cache-dependency-path: |
+            sdk/go.sum
+            cli/go.sum
+          # GoReleaser shells out to `go build` for each of the three targets, so
+          # the toolchain is the one thing this job needs besides GoReleaser
+          # itself. `stable`, matching release.yml: the version in cli/go.mod is a
+          # minimum, not a pin.
+          go-version: stable
+
+      - name: Build the release archives
+        run: make release-snapshot
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          # Only the contract files: the archives the installers compose the name
+          # of, and the checksums file they verify against. dist/ also holds
+          # goreleaser's metadata.json, which records paths on the build machine
+          # and is not something a test on another runner has any use for.
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/checksums.txt
+          # A missing artifact would silently turn every install test into a
+          # "file not found" that reads like a workflow bug; fail here instead,
+          # where the cause is obvious.
+          if-no-files-found: error
+          retention-days: 7
+
+  # install.sh is the one file in this repository that is piped straight into a
+  # shell by strangers, and it is the only one nothing else compiles. Its own CI
+  # is this check.
+  #
+  # The shellcheck that runs is the one on the runner image, and its version is
+  # printed rather than assumed: a fixed version string in an action would be a
+  # second copy of a pin that the image already owns, and the interesting failure
+  # here is a new shellcheck finding a real bug, which should be a commit that
+  # fixes it rather than a wall of `disable` directives.
+  shellcheck:
+    name: shellcheck install.sh
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: ShellCheck install.sh and the bash test harness
+        # Default severity: style and info findings fail too. An installer that
+        # only reports warnings is a warning nobody fixes, and this file is not
+        # large enough for that exemption to be worth its cost.
+        run: |
+          shellcheck --version
+          shellcheck install.sh scripts/install-selftest.sh
+
+  # The real test: run the real installer against the archives this commit built,
+  # served over loopback HTTP, on all three platforms.
+  #
+  # Nothing here downloads a published release. SAEL_RELEASE_BASE_URL replaces the
+  # whole base URL, which is what makes a released artifact unnecessary: the
+  # scripts under test are the ones in this checkout, and the bytes they install
+  # are the ones this commit produced.
+  #
+  # SAEL_INSTALL_DIR and SAEL_HOME both point into a temp directory. A test that
+  # installed into the runner's real ~/.local/bin would be testing a different
+  # thing on every run, and on a developer's machine it would overwrite the sael
+  # they are using to investigate the failure.
+  install:
+    name: install ${{ matrix.os }}
+    needs: archives
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      # One platform's failure is not evidence about another's; hiding two of
+      # three results because the first failed defeats the point of the matrix.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+
+      # Not for the installers -- neither needs Go -- but for
+      # scripts/servedist, the tiny file server the tests point the installers at.
+      # Using the toolchain that is already here beats adding a Python or a
+      # PowerShell HTTP listener that exists on two runners out of three.
+      - uses: actions/setup-go@v7
+        with:
+          # No root go.mod here, so setup-go's default dependency file is
+          # missing and it throws. Name both modules instead.
+          cache-dependency-path: |
+            sdk/go.sum
+            cli/go.sum
+          go-version: stable
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: dist
+          path: dist
+
+      - name: Install and self-test
+        if: runner.os != 'Windows'
+        run: scripts/install-selftest.sh --dist dist --installer install.sh
+
+      # The Windows half is a PowerShell script for the same reason install.ps1 is:
+      # bash is not reliably present, and a test that cannot run on the platform it
+      # is about is not a test of that platform.
+      - name: Install and self-test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: scripts/install-selftest.ps1 -Dist dist -Installer install.ps1

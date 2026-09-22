@@ -18,6 +18,18 @@ coverage.html
 *.test
 *.prof
 
+# A Go workspace, deliberately not committed.
+#
+# The two modules are joined by the replace directive in cli/go.mod, which works
+# in a plain checkout. A committed go.work would be more convenient and is
+# rejected for a specific reason: workspace mode is incompatible with
+# GOFLAGS=-mod=mod, a setting from before Go 1.16 that is still common, and the
+# failure it produces ("-mod may only be set to readonly or vendor when in
+# workspace mode") does not hint at the cause. Anyone who prefers a workspace for
+# editor support can create one locally; it will not be committed by accident.
+go.work
+go.work.sum
+
 # Editor and OS noise.
 .DS_Store
 .idea/

@@ -1,0 +1,126 @@
+# GoReleaser configuration for the CLI.
+#
+# Two things in this file are contracts with install.sh and install.ps1 rather
+# than preferences, and both fail somewhere far from the cause if they drift:
+# the archive names (the installers build the name from the tag and 404 if it
+# disagrees) and the version string injected into the binary (the installer
+# compares the tag against what `sael --version` prints). Neither drift breaks a
+# build, which is why they are spelled out rather than left to defaults.
+#
+# The reason they are not one-liners is that this repository has no root module.
+# The CLI is the `cli/` module, so it is tagged in its own namespace --
+# `cli/v0.0.1-rc1` -- because Go requires a subdirectory module's tag to carry
+# the directory name as a prefix. GoReleaser's open-source build knows nothing
+# about module prefixes: it takes `{{ .Version }}` to be the tag with a leading
+# `v` removed, which leaves the literal string `cli/v0.0.1-rc1`. That string in a
+# file name is a path, not a name, and `-X ...version=cli/v0.0.1-rc1` is a
+# version no installer would match. Every use of the version below therefore
+# trims the prefix back off. (GoReleaser Pro has `monorepo.tag_prefix` for
+# exactly this case; the version pinned in the Makefile is the open-source one,
+# so the same reasoning is repeated in the release workflow, which has to pass
+# `--skip=validate` for the mirror-image reason.)
+#
+# Exercise this file through the Makefile -- `make release-check` and
+# `make release-snapshot` -- so the pinned GoReleaser version is used in exactly
+# one place.
+
+version: 2
+
+project_name: sael
+
+git:
+  # Release notes are generated from the commits since the previous tag, so
+  # "previous tag" has to mean the previous *CLI* tag. Both modules are usually
+  # tagged at the same commit and neither can be told apart by version sort, so
+  # without this the notes for a CLI release can be generated against an
+  # `sdk/v...` tag -- and would then list SDK-only work as if the CLI had
+  # shipped it.
+  ignore_tags:
+    - 'sdk/v*'
+
+builds:
+  - id: sael
+    # The module is cli/; the repository root is not a module at all.
+    dir: cli
+    main: ./cmd/sael
+    # The binary inside the archive is `sael` (`sael.exe` on Windows), which is
+    # the name the installers extract and put on the PATH. It happens to be the
+    # project name, but it is not derived from it here.
+    binary: sael
+    env:
+      # No cgo: linux/amd64 has to run on musl as well as glibc, and all three
+      # targets are cross-compiled from one runner where a C toolchain for the
+      # other two platforms does not exist.
+      - CGO_ENABLED=0
+    flags:
+      # The build machine's paths are embedded in the binary otherwise, and a
+      # release artifact is not the place to publish the builder's home
+      # directory.
+      - -trimpath
+    ldflags:
+      # Symbols and DWARF are dead weight in a binary that is downloaded rather
+      # than debugged in place.
+      - -s -w
+      # The symbol path is the release contract that cli/internal/cli/version.go
+      # documents: renaming or moving it fails no build, it only produces a
+      # binary that reports "devel". The value is the version without the module
+      # prefix and without a leading `v` (`0.0.1-rc1`), which is what the archive
+      # names carry and what the installer checks `--version` against.
+      - -X github.com/cipherTing/sael/cli/internal/cli.version={{ trimprefix .Version "cli/v" }}
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - arm64
+      - amd64
+    ignore:
+      # Exactly three targets, and the unsupported half of the matrix is named
+      # rather than omitted: Intel macOS is out of scope, and linux/arm64 and
+      # windows/arm64 are not built yet. install.sh accepts the same three and
+      # refuses anything else, so a target added here without being added there
+      # hands someone an archive name that does not exist.
+      - goos: darwin
+        goarch: amd64
+      - goos: linux
+        goarch: arm64
+      - goos: windows
+        goarch: arm64
+
+archives:
+  - id: sael
+    ids:
+      - sael
+    formats:
+      - tar.gz
+    # Byte for byte what the installers ask for: each composes
+    # `sael_${VERSION}_${OS}_${ARCH}` from the tag and has no fallback if the
+    # name differs. `{{ .Version }}` is `cli/v0.0.1-rc1` here -- see the note at
+    # the top -- so the module prefix is trimmed off.
+    name_template: '{{ .ProjectName }}_{{ trimprefix .Version "cli/v" }}_{{ .Os }}_{{ .Arch }}'
+    format_overrides:
+      # Windows gets a zip because cmd.exe and Explorer have no tar. The name
+      # template above is the one from the contract either way.
+      - goos: windows
+        formats:
+          - zip
+    # No wrapping directory: the installer extracts the archive and expects
+    # `sael` (`sael.exe`) at the root. A directory level would leave it looking
+    # one level down, and it reports that and installs nothing.
+    wrap_in_directory: false
+
+# Singular, while the file it writes is `checksums.txt`: the key and the file
+# name are two different things, and only `make release-check` catches writing
+# one for the other.
+checksum:
+  # Named rather than defaulted, and pinned for the same reason as the archives:
+  # install.sh fetches `<release>/checksums.txt` by that exact name before it
+  # extracts anything. A rename here silently removes the checksum verification
+  # from every install without failing any build.
+  name_template: checksums.txt
+  algorithm: sha256
+
+release:
+  # Without this the title is the raw tag, `cli/v0.0.1-rc1`. The module prefix is
+  # how `go get` finds the module and it means nothing on a releases page.
+  name_template: '{{ .ProjectName }} {{ trimprefix .Version "cli/v" }}'

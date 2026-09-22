@@ -26,7 +26,7 @@ call against a real endpoint, a manual check of the wire bytes.
 ## If this changes the wire contract
 
 <!--
-The wire contract lives in systemone/doc.go and is the source of truth for every
+The wire contract lives in sdk/doc.go and is the source of truth for every
 file in the package. If this pull request changes it, say what was observed and
 how, and update doc.go in the same commit.
 -->

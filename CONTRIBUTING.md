@@ -14,9 +14,16 @@ make help      # lists every target
 make check     # everything CI runs except the live tests
 ```
 
-`make check` installs its own linters into `./bin` at pinned versions, so it will
-not touch the rest of your machine and cannot disagree with CI about what "clean"
-means.
+The repository holds two modules, `sdk/` and `cli/`, joined by a `replace`
+directive in `cli/go.mod`. Every target runs once per module, so a failure names
+which one broke. There is deliberately no committed `go.work`: workspace mode is
+incompatible with `GOFLAGS=-mod=mod`, a setting from before Go 1.16 that is still
+common, and its error message does not hint at the cause.
+
+`make check` downloads its linters and its release tool into shared caches — the
+module cache, and `~/.cache/sael/tools` — rather than installing anything into the
+clone. The versions are pinned in the Makefile, which is also what CI calls, so the
+two cannot disagree about what "clean" means.
 
 ## Before opening a pull request
 
@@ -26,9 +33,10 @@ Run:
 make check
 ```
 
-That covers formatting, a tidy `go.mod`, `go vet`, staticcheck, golangci-lint and
-the offline test suite under the race detector. CI runs exactly the same set, plus
-a build and test on Linux, macOS and Windows.
+That covers formatting, a tidy `go.mod` in both modules, `go vet`, staticcheck,
+golangci-lint, a check of the workflow files themselves, and the offline test suite
+under the race detector. CI runs exactly the same set, plus a build and test on
+Linux, macOS and Windows.
 
 The live tests are separate, because they need a key:
 
@@ -44,6 +52,12 @@ live tests skip themselves when the environment is not set up.
 
 - **A test that fails before the change and passes after it.** For a bug fix, the
   failing test is the part that matters most; the fix is usually the easy half.
+  Prove it: break the code on purpose, watch the test fail, then restore it.
+- **A test that cannot pass for the wrong reason.** The whole suite runs with
+  `TYPESAFE_API_KEY`, `TYPESAFE_BASE_URL` and `TYPESAFE_DEFAULT_MODEL` poisoned,
+  `SAEL_HOME` pointing nowhere, `NO_COLOR=1` and `TERM=dumb`. A test whose outcome
+  depends on the developer's environment is a test that will be believed when it
+  is wrong, so assert on what you set up rather than on what you inherited.
 - **A comment explaining why, when the code cannot.** This package has a lot of
   them, because most of it encodes decisions made against a live API that a reader
   cannot reproduce: which shape the host rejects, which field is only present
@@ -53,9 +67,10 @@ live tests skip themselves when the environment is not set up.
 
 ## What to avoid
 
-- **New dependencies.** There are two, both deliberate: `backoff/v5` for the
-  backoff schedule and `testify` in tests. A new one needs a reason that survives
-  being written down, particularly in the library itself rather than its tests.
+- **New dependencies.** The SDK has two, both deliberate: `backoff/v5` for the
+  backoff schedule and `testify` in tests. The CLI adds `cobra` for the command
+  tree and `x/term` for terminal detection. Anything else needs a reason that
+  survives being written down, particularly in the library rather than its tests.
 - **Baking in a host.** `BaseURL` is configuration on purpose. A default that
   points at one vendor, a special case for one gateway's behaviour, or an
   assumption that a field the official schema does not list will always be
@@ -64,7 +79,7 @@ live tests skip themselves when the environment is not set up.
 
 ## Reporting a bug
 
-Include the version (`systemone.Version()`), the model id from the response, and
+Include the version (`sdk.Version()`), the model id from the response, and
 what you expected. If the problem is a decoding failure, paste the raw response
 body — but **redact your key**, and remember that `state` often contains the
 content being classified.

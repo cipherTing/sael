@@ -3,7 +3,10 @@ name: CI
 on:
   push:
     branches: [main]
-    tags: ['v*']
+    # Both modules are tagged in their own namespace, because a subdirectory
+    # module's version tag must carry the directory name as a prefix. A bare
+    # `v*` would match neither.
+    tags: ['v*', 'sdk/v*', 'cli/v*']
   pull_request:
   schedule:
     # Weekly, so a dependency or toolchain change surfaces as a red build rather
@@ -14,19 +17,34 @@ permissions:
   contents: read
 
 jobs:
+  # The two modules are tested separately rather than together. They are separate
+  # so that a user can depend on the SDK without the CLI, and a failure has to
+  # name which one broke: "the SDK stopped compiling on Windows" and "the CLI
+  # stopped compiling on Windows" are different problems with different owners.
   test:
-    name: test ${{ matrix.os }} go${{ matrix.go }}
+    name: test ${{ matrix.module }} ${{ matrix.os }} go${{ matrix.go }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         go: ['1.23', 'stable']
+        module: [sdk, cli]
+    defaults:
+      run:
+        # Every run step below happens inside one module. The replace directive in
+        # cli/go.mod points at ../sdk, which a full checkout provides.
+        working-directory: ${{ matrix.module }}
     steps:
       - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v7
         with:
+          # No root go.mod here, so setup-go's default dependency file is
+          # missing and it throws. Name both modules instead.
+          cache-dependency-path: |
+            sdk/go.sum
+            cli/go.sum
           go-version: ${{ matrix.go }}
           check-latest: true
 
@@ -39,6 +57,16 @@ jobs:
       - name: Test with the race detector
         run: go test -race -short -count=1 ./...
 
+  # The checks here are invoked through make, which is the single source of truth
+  # for what "clean" means and for the pinned linter versions. Running the same
+  # commands a developer runs is the only way the two cannot disagree; spelling
+  # them out here has already let a pin drift once, silently, with the workflow
+  # claiming in a comment that it matched the Makefile.
+  #
+  # The golangci-lint GitHub action is not used, and the trade is deliberate: it
+  # would give pull-request annotations, but it needs the version string passed to
+  # it, which reintroduces the second copy of the pin. `make lint` runs exactly the
+  # pinned version, on both modules.
   lint:
     name: lint
     runs-on: ubuntu-latest
@@ -47,40 +75,15 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
+          # No root go.mod here, so setup-go's default dependency file is
+          # missing and it throws. Name both modules instead.
+          cache-dependency-path: |
+            sdk/go.sum
+            cli/go.sum
           go-version: stable
 
-      - name: gofmt
-        run: |
-          files=$(gofmt -l $(git ls-files '*.go'))
-          if [ -n "$files" ]; then
-            echo "these files are not gofmt-ed:"
-            echo "$files"
-            exit 1
-          fi
-
-      - name: go mod tidy
-        run: |
-          go mod tidy
-          if ! git diff --quiet -- go.mod go.sum; then
-            echo "go.mod or go.sum is not tidy"
-            git --no-pager diff -- go.mod go.sum
-            exit 1
-          fi
-
-      # Both linters are pinned in the Makefile, which is the single source of
-      # truth for the versions. staticcheck is invoked through make so the pin
-      # cannot drift out of sync with a local run. golangci-lint is the one
-      # exception: the action needs the version string itself, so v2.13.2 is
-      # repeated below and the two must be bumped together in one commit.
-      #
-      # The action has to be v7 or newer to drive golangci-lint v2 at all; v6
-      # refuses the version string.
-      - uses: golangci/golangci-lint-action@v9
-        with:
-          version: v2.13.2
-
-      - name: staticcheck
-        run: make staticcheck
+      - name: Format, tidy, vet, lint every module, and check the workflows
+        run: make fmt-check tidy-check vet staticcheck lint lint-workflows
 
   # The live tests only run where a key is available. Forks do not receive
   # secrets, so this job is skipped rather than failed on a pull request from a
@@ -94,6 +97,11 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
+          # No root go.mod here, so setup-go's default dependency file is
+          # missing and it throws. Name both modules instead.
+          cache-dependency-path: |
+            sdk/go.sum
+            cli/go.sum
           go-version: stable
 
       - name: Check for a key
@@ -112,7 +120,7 @@ jobs:
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
           TYPESAFE_BASE_URL: ${{ vars.TYPESAFE_BASE_URL }}
           TYPESAFE_DEFAULT_MODEL: ${{ vars.TYPESAFE_DEFAULT_MODEL }}
-        run: go test -run Integration -count=1 -v ./systemone/
+        run: make test-integration
 
   coverage:
     name: coverage
@@ -122,16 +130,26 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
+          # No root go.mod here, so setup-go's default dependency file is
+          # missing and it throws. Name both modules instead.
+          cache-dependency-path: |
+            sdk/go.sum
+            cli/go.sum
           go-version: stable
 
+      # One profile per module. They cannot be merged into a single profile
+      # without rewriting the file paths inside them, and a per-module number is
+      # the more useful one anyway: the SDK's coverage is a promise to strangers,
+      # the CLI's is a promise to us.
       - name: Cover
-        run: go test -short -count=1 -coverprofile=coverage.out -covermode=atomic ./...
-
-      - name: Report
-        run: go tool cover -func=coverage.out | tail -1
+        run: make cover
 
       - uses: actions/upload-artifact@v7
         with:
           name: coverage
-          path: coverage.out
+          path: |
+            sdk/coverage.out
+            sdk/coverage.html
+            cli/coverage.out
+            cli/coverage.html
           retention-days: 7
