@@ -1,3 +1,5 @@
+**简体中文** | [English](docs/README_en.md)
+
 <h1 align="center">sael</h1>
 
 <p align="center">
@@ -13,8 +15,6 @@
 </p>
 
 ---
-
-简体中文 | [English](docs/README_en.md)
 
 ## 是什么
 
@@ -189,9 +189,7 @@ duration 写成字符串，如 `"10s"`、`"500ms"`。
 ## 文档
 
 - [包文档](https://pkg.go.dev/github.com/cipherTing/sael/sdk) · [可运行示例](sdk/example_test.go)
-- [设计决策](docs/)
 - [已知限制](docs/LIMITS.md)
-- [English README](docs/README_en.md)
 
 ## 贡献
 

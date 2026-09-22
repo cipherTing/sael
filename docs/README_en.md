@@ -1,4 +1,4 @@
-*[English](README_en.md) | [简体中文](../README.md)*
+[简体中文](../README.md) | **English**
 
 <h1 align="center">sael</h1>
 

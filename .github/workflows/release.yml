@@ -84,3 +84,23 @@ jobs:
           # one of the tags pointing at HEAD by version sort; picking the SDK's
           # would build the CLI's archives from the SDK's tag.
           GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
+
+      # GoReleaser decides whether a release is a pre-release by parsing the tag
+      # as a semantic version, and `--skip=validate` above is exactly what makes it
+      # skip that parse, so a `-rc` tag publishes as an ordinary release.
+      #
+      # That is harmless while the only release is a pre-release, and it is why it
+      # was left this way: install.sh resolves `/releases/latest` when it is not
+      # given a version, and GitHub's "latest" is the most recently published
+      # ordinary release, so marking this one as a pre-release would leave the
+      # documented one-line install with nothing to find. It stops being harmless
+      # the moment a stable version exists, because a later `0.0.2-rc1` would then
+      # take "latest" and hand everyone running that one-liner a pre-release.
+      #
+      # Fixed here rather than by dropping `--skip=validate`, which cannot work: the
+      # tag carries a module prefix and is not a semantic version at all.
+      - name: Mark a pre-release as one
+        if: contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${GITHUB_REF_NAME}" --prerelease
