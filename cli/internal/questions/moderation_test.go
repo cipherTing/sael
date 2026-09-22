@@ -347,7 +347,14 @@ func TestModerationWordingMatchesGolden(t *testing.T) {
 		"text is what the model is actually asked, so editing it moves the " +
 		"false-positive rate"
 
-	wantLines := strings.Split(string(want), "\n")
+	// Line endings are normalised before the comparison, and that is not cosmetic.
+	// The file arrives with whatever the platform's git decided, which on Windows
+	// is CRLF, and a byte comparison then finds every line changed while printing
+	// two lines that look identical. That is a test failing over a checkout setting
+	// rather than over the wording it exists to protect, and it cost a CI run to
+	// find out. .gitattributes pins the ending too; this makes the test correct
+	// regardless of whether it did.
+	wantLines := strings.Split(normalisedNewlines(string(want)), "\n")
 	gotLines := strings.Split(got, "\n")
 
 	if !assert.Equal(t, len(wantLines), len(gotLines),
@@ -371,6 +378,12 @@ func TestModerationWordingMatchesGolden(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+// normalisedNewlines makes CRLF and a lone CR read as LF, so that comparing text
+// is comparing text and not the checkout settings of the machine running it.
+func normalisedNewlines(s string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(s, "\r\n", "\n"), "\r", "\n")
+}
 
 // renderModeration renders the set as a stable, diffable text form: one field per
 // line, in id order. One field per line is the point — a single reworded clause

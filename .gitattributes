@@ -1,0 +1,24 @@
+# Line endings, fixed at the source rather than left to each checkout.
+#
+# Without this, a Windows checkout applies core.autocrlf and rewrites every text
+# file to CRLF. Two things here break on that rather than merely looking untidy:
+# install.sh and scripts/install-selftest.sh are fed to bash, where a trailing \r
+# becomes part of the command, and the question-set golden file is compared against
+# generated text, so a CRLF checkout fails a test about wording. That is what
+# happened on the first CI run, in the two Windows jobs, and it is the reason this
+# file exists.
+* text=auto eol=lf
+
+# Windows scripts carry their native ending, should any be added.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Already binary, so never sniff and convert.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.zip binary
+*.gz binary
+*.tgz binary
