@@ -1,11 +1,14 @@
 version: 2
 
 updates:
-  # The module has two direct dependencies and one indirect; keeping them
-  # current is cheap, and the CI matrix will say so if an update breaks a
-  # supported Go version.
+  # Two modules, so two directories. This was a single `directory: /` before the
+  # repository was split, which silently stopped finding anything: there is no
+  # go.mod at the root any more, and Dependabot reports nothing rather than
+  # failing when a directory holds no manifest.
   - package-ecosystem: gomod
-    directory: /
+    directories:
+      - /sdk
+      - /cli
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
@@ -13,7 +16,8 @@ updates:
       prefix: deps
 
   # Actions are pinned by major tag; this is what moves them when a new major
-  # arrives.
+  # arrives. `/` is the correct value here and always was: for this ecosystem it
+  # means the workflows under .github/ and any action.yml at the root.
   - package-ecosystem: github-actions
     directory: /
     schedule:
