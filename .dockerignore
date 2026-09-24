@@ -1,0 +1,11 @@
+.git
+.github
+.agents
+.secrets
+dist
+gateway/web/node_modules
+gateway/web/dist
+gateway/web/.env
+gateway/deploy/.env
+**/.DS_Store
+**/var

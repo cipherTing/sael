@@ -12,6 +12,10 @@
 # Build and test output.
 /bin/
 /dist/
+/gateway/web/node_modules/
+/gateway/web/dist/
+/gateway/web/tsconfig.tsbuildinfo
+/gateway/var/
 coverage.out
 coverage.html
 *.out

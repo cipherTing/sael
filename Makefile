@@ -4,11 +4,11 @@
 # carrying a `##` comment shows up there, and nothing else does. A stale help
 # listing is worse than none, so update the comment with the target.
 #
-# The repository holds two modules, sdk/ and cli/, so that each can be tagged and
+# The repository holds three modules, sdk/, cli/, and gateway/, so that each can be tagged and
 # depended on on its own. Every target below therefore runs once per module: a
 # change to one module's go.mod is a change only that module has to answer for.
 #
-# The two modules are joined by a `replace` directive in cli/go.mod rather than by
+# The SDK and CLI modules are joined by a `replace` directive in cli/go.mod rather than by
 # a committed go.work. A workspace would be convenient and is deliberately not
 # used: it is incompatible with GOFLAGS=-mod=mod, a setting that predates Go 1.16
 # and is still common on developer machines, and a checkout that only builds on
@@ -52,7 +52,7 @@ PKG     := ./...
 
 # Ordered so that a failure names the SDK first: a broken SDK explains a broken
 # CLI, and reading them in the other order sends you looking in the wrong place.
-MODULES := sdk cli
+MODULES := sdk cli gateway
 
 # Pinned deliberately. Bump these in a commit that also fixes whatever the new
 # version reports, so the change is reviewable rather than arriving by surprise.

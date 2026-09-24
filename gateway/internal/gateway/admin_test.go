@@ -1,0 +1,110 @@
+package gateway
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+func login(t *testing.T, s *Server) *http.Cookie {
+	t.Helper()
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest("POST", "/admin/login", strings.NewReader(`{"password":"secret"}`)))
+	if w.Code != 200 {
+		t.Fatalf("login status %d: %s", w.Code, w.Body.String())
+	}
+	for _, c := range w.Result().Cookies() {
+		if c.Name == "sael_session" && c.HttpOnly {
+			return c
+		}
+	}
+	t.Fatal("missing HttpOnly session cookie")
+	return nil
+}
+
+func TestRuntimeShowsClassifierFailure(t *testing.T) {
+	s, _, _ := makeServer(t, activePolicy(), &testClassifier{err: errors.New("unavailable")})
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"messages":[{"role":"user","content":"text"}]}`)))
+	cookie := login(t, s)
+	r := httptest.NewRequest("GET", "/admin/runtime", http.NoBody)
+	r.AddCookie(cookie)
+	runtime := httptest.NewRecorder()
+	s.ServeHTTP(runtime, r)
+	if runtime.Code != 200 || !strings.Contains(runtime.Body.String(), `"classifier":"error"`) || !strings.Contains(runtime.Body.String(), `"last_error_kind":"classifier_unavailable"`) {
+		t.Fatalf("runtime: %d %s", runtime.Code, runtime.Body.String())
+	}
+}
+
+func TestRuntimeShowsFixedUpstreamOriginWithoutCredentials(t *testing.T) {
+	s, _, _ := makeServer(t, activePolicy(), &testClassifier{})
+	w := adminRequest(t, s, http.MethodGet, "/admin/runtime", "")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"upstream_url":"http://`) {
+		t.Fatalf("runtime status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestAdminAPIRequiresSession(t *testing.T) {
+	s, _, _ := makeServer(t, activePolicy(), &testClassifier{})
+	for _, path := range []string{"/admin/policy", "/admin/overview", "/admin/events"} {
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, httptest.NewRequest("GET", path, http.NoBody))
+		if w.Code != 401 {
+			t.Fatalf("%s status=%d", path, w.Code)
+		}
+	}
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest("POST", "/admin/login", strings.NewReader(`{"password":"wrong"}`)))
+	if w.Code != 401 {
+		t.Fatalf("wrong password status=%d", w.Code)
+	}
+}
+
+func TestAdminPolicySaveRejectsStaleVersion(t *testing.T) {
+	s, store, _ := makeServer(t, activePolicy(), &testClassifier{})
+	cookie := login(t, s)
+	read := httptest.NewRecorder()
+	get := httptest.NewRequest("GET", "/admin/policy", http.NoBody)
+	get.AddCookie(cookie)
+	s.ServeHTTP(read, get)
+	if read.Code != 200 || !strings.Contains(read.Body.String(), `"version":2`) {
+		t.Fatalf("get policy: %d %s", read.Code, read.Body.String())
+	}
+	payload := `{"enabled":false,"version":2,"thresholds":{},"scenes":[],"unmatched_action":"allow"}`
+	put := httptest.NewRequest("PUT", "/admin/policy", strings.NewReader(payload))
+	put.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, put)
+	if w.Code != 200 || store.policy.Version != 3 || store.policy.Enabled {
+		t.Fatalf("save: %d %+v", w.Code, store.policy)
+	}
+	stale := httptest.NewRequest("PUT", "/admin/policy", strings.NewReader(payload))
+	stale.AddCookie(cookie)
+	w2 := httptest.NewRecorder()
+	s.ServeHTTP(w2, stale)
+	if w2.Code != 409 || store.policy.Version != 3 {
+		t.Fatalf("stale save: %d %+v", w2.Code, store.policy)
+	}
+}
+
+func TestCannotEnableReviewUntilJevConnectionIsSaved(t *testing.T) {
+	p := activePolicy()
+	p.Enabled = false
+	s, store, _ := makeServer(t, p, &testClassifier{})
+	input, err := json.Marshal(activePolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := adminRequest(t, s, http.MethodPut, "/admin/policy", string(input))
+	if w.Code != 400 || store.policy.Enabled {
+		t.Fatalf("unconfigured status=%d body=%s", w.Code, w.Body.String())
+	}
+	store.jev = JevConfig{BaseURL: "https://api.example/v1", Model: "jev-test", APIKey: "secret"}
+	w = adminRequest(t, s, http.MethodPut, "/admin/policy", string(input))
+	if w.Code != 200 || !store.policy.Enabled {
+		t.Fatalf("configured status=%d body=%s", w.Code, w.Body.String())
+	}
+}

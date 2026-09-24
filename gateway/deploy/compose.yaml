@@ -1,0 +1,39 @@
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: sael
+      POSTGRES_USER: sael
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sael -d sael"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  gateway:
+    build:
+      context: ../..
+      dockerfile: gateway/deploy/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${GATEWAY_PORT:-8080}:8080"
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL}
+      UPSTREAM_URL: ${UPSTREAM_URL:?set UPSTREAM_URL}
+      UPSTREAM_API_KEY: ${UPSTREAM_API_KEY:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD}
+      CLASSIFIER_TIMEOUT: ${CLASSIFIER_TIMEOUT:-5s}
+      CLASSIFIER_CONCURRENCY: ${CLASSIFIER_CONCURRENCY:-32}
+    volumes:
+      - spool_data:/var/lib/sael
+
+volumes:
+  postgres_data:
+  spool_data:
