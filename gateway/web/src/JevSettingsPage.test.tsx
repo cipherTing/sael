@@ -5,14 +5,14 @@ import JevSettingsPage from './JevSettingsPage'
 afterEach(cleanup)
 
 it('requires address, model and key before the first save', async () => {
-  const onSave = vi.fn().mockResolvedValue({ base_url: 'https://api.example/v1', model: 'jev-test', api_key_set: true, updated_at: '' })
+  const onSave = vi.fn().mockResolvedValue({ base_url: 'https://api.example/v1', model: 'jev-test', api_key_set: true, timeout_ms: 5000, updated_at: '' })
   render(<JevSettingsPage config={{ base_url: '', model: '', api_key_set: false, updated_at: '' }} onSave={onSave} onTest={vi.fn()} />)
   fireEvent.change(screen.getByLabelText('接口地址'), { target: { value: 'https://api.example/v1' } })
   fireEvent.change(screen.getByLabelText('模型 ID'), { target: { value: 'jev-test' } })
   expect(screen.getByRole('button', { name: '保存 Jev 配置' }).hasAttribute('disabled')).toBe(true)
   fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'secret-key' } })
   fireEvent.click(screen.getByRole('button', { name: '保存 Jev 配置' }))
-  await waitFor(() => expect(onSave).toHaveBeenCalledWith({ base_url: 'https://api.example/v1', model: 'jev-test', api_key: 'secret-key' }))
+  await waitFor(() => expect(onSave).toHaveBeenCalledWith({ base_url: 'https://api.example/v1', model: 'jev-test', api_key: 'secret-key', timeout_ms: 5000 }))
   expect(screen.queryByDisplayValue('secret-key')).toBeNull()
 })
 
@@ -46,8 +46,13 @@ it('does not test an old connection after the saved connection is edited', () =>
 })
 
 it('shows classifier health next to the debugging workflow', () => {
-  render(<JevSettingsPage config={{ base_url: 'https://api.example/v1', model: 'jev-test', api_key_set: true, updated_at: '' }} runtime={{ classifier: 'ok', timeout_ms: 5000, concurrency: 32, in_flight: 0, last_checked_at: '2026-09-23T01:00:00Z', last_error_kind: '' }} onSave={vi.fn()} onTest={vi.fn()} />)
+  render(<JevSettingsPage config={{ base_url: 'https://api.example/v1', model: 'jev-test', api_key_set: true, timeout_ms: 5000, updated_at: '' }} runtime={{ classifier: 'ok', last_checked_at: '2026-09-23T01:00:00Z', last_error_kind: '' }} onSave={vi.fn()} onTest={vi.fn()} />)
   expect(screen.getByText('分类器正常')).toBeTruthy()
-  expect(screen.getByText(/并发 0\/32/)).toBeTruthy()
+  expect((screen.getByLabelText('分类器超时（毫秒）') as HTMLInputElement).value).toBe('5000')
   expect(screen.queryByText(/先保存模型连接/)).toBeNull()
+})
+
+it('does not show a last-updated explanation beside the connection form', () => {
+  render(<JevSettingsPage config={{ base_url: 'https://api.example/v1', model: 'jev-test', api_key_set: true, timeout_ms: 5000, updated_at: '2026-09-23T08:13:28Z' }} onSave={vi.fn()} onTest={vi.fn()} />)
+  expect(screen.queryByText(/更新于/)).toBeNull()
 })

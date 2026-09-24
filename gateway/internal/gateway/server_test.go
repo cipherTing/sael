@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -26,14 +25,22 @@ func (c *testClassifier) Check(_ context.Context, _ string) ([]policy.Answer, er
 }
 
 type testStore struct {
-	policy    policy.Policy
-	policyErr error
-	jev       JevConfig
-	events    []Event
-	counts    []Count
+	policy        policy.Policy
+	policyErr     error
+	jev           JevConfig
+	upstream      UpstreamConfig
+	events        []Event
+	counts        []Count
+	overviewSince time.Time
+	overviewUntil time.Time
 }
 
-func (s *testStore) Jev(context.Context) (JevConfig, error) { return s.jev, nil }
+func (s *testStore) Jev(context.Context) (JevConfig, error)           { return s.jev, nil }
+func (s *testStore) Upstream(context.Context) (UpstreamConfig, error) { return s.upstream, nil }
+func (s *testStore) UpdateUpstream(_ context.Context, next UpstreamConfig) (UpstreamConfig, error) {
+	s.upstream = next
+	return next, nil
+}
 func (s *testStore) UpdateJev(_ context.Context, next JevConfig) (JevConfig, error) {
 	s.jev = next
 	return next, nil
@@ -56,8 +63,11 @@ func (s *testStore) Increment(_ context.Context, c Count) error {
 	s.counts = append(s.counts, c)
 	return nil
 }
-func (s *testStore) Overview(context.Context, time.Time) (Overview, error) { return Overview{}, nil }
-func (s *testStore) Events(context.Context, EventFilter) ([]Event, error)  { return s.events, nil }
+func (s *testStore) Overview(_ context.Context, since, until time.Time) (Overview, error) {
+	s.overviewSince, s.overviewUntil = since, until
+	return Overview{}, nil
+}
+func (s *testStore) Events(context.Context, EventFilter) ([]Event, error) { return s.events, nil }
 func (s *testStore) Event(_ context.Context, id string) (Event, error) {
 	for _, e := range s.events {
 		if e.ID == id {
@@ -80,9 +90,8 @@ func makeServer(t *testing.T, p policy.Policy, classifier *testClassifier) (*Ser
 		_, _ = w.Write([]byte("upstream"))
 	}))
 	t.Cleanup(upstream.Close)
-	u, _ := url.Parse(upstream.URL)
-	store := &testStore{policy: p}
-	server := New(store, classifier, u, "secret")
+	store := &testStore{policy: p, upstream: UpstreamConfig{BaseURL: upstream.URL}}
+	server := New(store, classifier, "secret")
 	return server, store, &calls
 }
 
@@ -95,13 +104,9 @@ func fullAnswers(values map[string]float64) []policy.Answer {
 }
 
 func activePolicy() policy.Policy {
-	thresholds := map[string]float64{}
-	for _, q := range policy.Questions {
-		thresholds[q.Key] = q.Max / 2
-	}
 	preview, days := 0, 30
-	return policy.Policy{Enabled: true, Version: 2, Thresholds: thresholds, PreviewChars: &preview, RetentionDays: &days, UnmatchedAction: policy.Allow,
-		Scenes: []policy.Scene{{ID: "block", Name: "block cyber", Questions: []string{"cyber_abuse"}, Match: policy.Any, Action: policy.Block}}}
+	return policy.Policy{Enabled: true, Version: 2, PreviewChars: &preview, RetentionDays: &days,
+		Scenes: []policy.Scene{{ID: "block", Name: "block cyber", Conditions: []policy.Condition{{Question: "cyber_abuse", Threshold: 0.5}}, Match: policy.Any, Action: policy.Block}}}
 }
 
 func TestBlockedRequestDoesNotReachUpstream(t *testing.T) {
@@ -174,15 +179,14 @@ func TestDisabledPolicyForwardsWithoutClassifying(t *testing.T) {
 	}
 }
 
-func TestUpstreamFailureIsCountedWithoutLosingReviewOutcome(t *testing.T) {
+func TestUpstreamFailureDoesNotChangeIngressCount(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(503) }))
 	defer upstream.Close()
-	u, _ := url.Parse(upstream.URL)
-	store := &testStore{policy: policy.Policy{Version: 1}}
-	s := New(store, &testClassifier{}, u, "secret")
+	store := &testStore{policy: policy.Policy{Version: 1}, upstream: UpstreamConfig{BaseURL: upstream.URL}}
+	s := New(store, &testClassifier{}, "secret")
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"messages":[{"role":"user","content":"hello"}]}`)))
-	if w.Code != 503 || len(store.counts) != 1 || store.counts[0].Outcome != "disabled" || !store.counts[0].UpstreamError {
+	if w.Code != 503 || len(store.counts) != 1 || store.counts[0].Outcome != "disabled" {
 		t.Fatalf("status=%d counts=%+v", w.Code, store.counts)
 	}
 }

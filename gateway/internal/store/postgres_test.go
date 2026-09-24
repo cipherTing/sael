@@ -26,7 +26,7 @@ func TestPostgresPolicyEventsAndCounts(t *testing.T) {
 	defer s.Close()
 	_, _ = s.pool.Exec(ctx, "TRUNCATE audit_events, gateway_counts_minute, policy_changes")
 	_, _ = s.pool.Exec(ctx, `UPDATE gateway_policy SET version=1, body='{"enabled":false,"version":1,"thresholds":{},"scenes":[],"unmatched_action":""}' WHERE id=1`)
-	empty, err := s.Overview(ctx, time.Now().Add(-time.Hour))
+	empty, err := s.Overview(ctx, time.Now().Add(-time.Hour), time.Now())
 	if err != nil || empty.Total != 0 {
 		t.Fatalf("empty overview: %+v %v", empty, err)
 	}
@@ -35,7 +35,7 @@ func TestPostgresPolicyEventsAndCounts(t *testing.T) {
 		t.Fatalf("initial policy: %+v %v", p, err)
 	}
 	preview, days := 0, 30
-	next := policy.Policy{Version: 1, Thresholds: map[string]float64{"cyber_abuse": 0.8}, Scenes: []policy.Scene{{ID: "scene", Name: "cyber", Questions: []string{"cyber_abuse"}, Match: policy.Any, Action: policy.Block}}, UnmatchedAction: policy.Allow, PreviewChars: &preview, RetentionDays: &days}
+	next := policy.Policy{Version: 1, Scenes: []policy.Scene{{ID: "scene", Name: "cyber", Conditions: []policy.Condition{{Question: "cyber_abuse", Threshold: 0.8}}, Match: policy.Any, Action: policy.Block}}, PreviewChars: &preview, RetentionDays: &days}
 	updated, err := s.UpdatePolicy(ctx, 1, next, "admin")
 	if err != nil || updated.Version != 2 {
 		t.Fatalf("update: %+v %v", updated, err)
@@ -68,9 +68,18 @@ func TestPostgresPolicyEventsAndCounts(t *testing.T) {
 	if err != nil || len(items) != 1 {
 		t.Fatalf("events: %+v %v", items, err)
 	}
-	overview, err := s.Overview(ctx, now.Add(-time.Hour))
+	overview, err := s.Overview(ctx, now.Add(-time.Hour), now.Add(time.Minute))
 	if err != nil || overview.Total != 2 || overview.Checked != 2 || overview.Hits != 1 || overview.Blocked != 1 || len(overview.Scenes) != 1 || overview.Scenes[0].Name != "cyber" {
 		t.Fatalf("overview: %+v %v", overview, err)
+	}
+}
+
+func TestClonePolicySeparatesSceneConditions(t *testing.T) {
+	before := policy.Policy{Scenes: []policy.Scene{{ID: "one", Conditions: []policy.Condition{{Question: "gore", Threshold: 1.5}}}}}
+	after := clonePolicy(before)
+	after.Scenes[0].Conditions[0].Threshold = 2
+	if before.Scenes[0].Conditions[0].Threshold != 1.5 {
+		t.Fatal("cached scene conditions must not share memory with returned policies")
 	}
 }
 
@@ -115,7 +124,7 @@ func TestSavedJevConnectionRemainsAvailableDuringDatabaseOutage(t *testing.T) {
 	}
 }
 
-func TestOverviewAggregatesClassifierLatencyAndUpstreamFailures(t *testing.T) {
+func TestOverviewAggregatesClassifierLatencyWithoutUpstreamFailures(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("TEST_DATABASE_URL not set")
@@ -130,14 +139,14 @@ func TestOverviewAggregatesClassifierLatencyAndUpstreamFailures(t *testing.T) {
 	now := time.Now().UTC()
 	for _, c := range []gateway.Count{
 		{ID: "latency-1", Time: now, Protocol: "openai_chat", Outcome: "clean", ClassifierSample: true, ClassifierMS: 20},
-		{ID: "latency-2", Time: now, Protocol: "openai_chat", Outcome: "hit_allowed", ClassifierSample: true, ClassifierMS: 40, UpstreamError: true},
+		{ID: "latency-2", Time: now, Protocol: "openai_chat", Outcome: "hit_allowed", ClassifierSample: true, ClassifierMS: 40},
 	} {
 		if err := s.Increment(ctx, c); err != nil {
 			t.Fatal(err)
 		}
 	}
-	got, err := s.Overview(ctx, now.Add(-time.Minute))
-	if err != nil || got.Total != 2 || got.UpstreamErrors != 1 || got.ClassifierAvgMS != 30 {
+	got, err := s.Overview(ctx, now.Add(-time.Minute), now.Add(time.Minute))
+	if err != nil || got.Total != 2 || got.ClassifierAvgMS != 30 {
 		t.Fatalf("overview: %+v %v", got, err)
 	}
 }
@@ -162,7 +171,7 @@ func TestOverviewIncludesFailuresBeforeReview(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	got, err := s.Overview(ctx, now.Add(-time.Minute))
+	got, err := s.Overview(ctx, now.Add(-time.Minute), now.Add(time.Minute))
 	if err != nil || got.Total != 2 || got.Checked != 0 || got.Hits != 0 || got.Blocked != 0 || len(got.Trend) != 2 {
 		t.Fatalf("overview: %+v %v", got, err)
 	}
@@ -255,7 +264,7 @@ func TestFailedCountWriteReplaysExactlyOnce(t *testing.T) {
 	if err := recovered.Replay(ctx); err != nil {
 		t.Fatal(err)
 	}
-	overview, err := recovered.Overview(ctx, count.Time.Add(-time.Minute))
+	overview, err := recovered.Overview(ctx, count.Time.Add(-time.Minute), count.Time.Add(time.Minute))
 	if err != nil || overview.Total != 1 || overview.Blocked != 1 {
 		t.Fatalf("replayed count: %+v %v", overview, err)
 	}

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"net/http/httputil"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -39,16 +38,14 @@ func run() error {
 		return err
 	}
 	defer db.Close()
-	api := gateway.New(db, classifier.CLI{Path: cfg.CLIPath}, cfg.Upstream, cfg.AdminPassword)
-	api.Timeout = cfg.Timeout
-	api.Slots = make(chan struct{}, cfg.Concurrency)
-	if cfg.UpstreamAPIKey != "" {
-		api.Proxy.Rewrite = func(pr *httputil.ProxyRequest) {
-			pr.SetURL(cfg.Upstream)
-			pr.SetXForwarded()
-			pr.Out.Header.Set("Authorization", "Bearer "+cfg.UpstreamAPIKey)
+	if cfg.Upstream != nil {
+		if err := db.SeedUpstream(ctx, cfg.Upstream.String()); err != nil {
+			return err
 		}
 	}
+	api := gateway.New(db, classifier.CLI{Path: cfg.CLIPath}, cfg.AdminPassword)
+	api.Timeout = cfg.Timeout
+	api.Slots = make(chan struct{}, cfg.Concurrency)
 	server := &http.Server{Addr: cfg.Listen, Handler: webHandler(api, cfg.WebDir), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()
@@ -82,7 +79,7 @@ func run() error {
 			}
 		}
 	}()
-	slog.Info("gateway listening", "address", cfg.Listen, "upstream", cfg.Upstream.Host)
+	slog.Info("gateway listening", "address", cfg.Listen)
 	err = server.ListenAndServe()
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil

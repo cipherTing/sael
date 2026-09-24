@@ -13,15 +13,14 @@ it('places sparse minute counts into the full selected time window', () => {
   expect(result.counts.clean).toEqual([0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0])
 })
 
-it('keeps invalid requests visible in the request outcome distribution', () => {
+it('keeps invalid requests visible without tracking upstream responses', () => {
   const result = buildTrafficBuckets('2026-09-24T00:00:00Z', 24, [
     { time: '2026-09-24T01:00:00Z', outcome: 'invalid_json', count: 2 },
-    { time: '2026-09-24T02:00:00Z', outcome: 'unreviewed', count: 1, upstream_errors: 1 }
+    { time: '2026-09-24T02:00:00Z', outcome: 'unreviewed', count: 1 }
   ])
   expect(result.labels).toHaveLength(24)
   expect(result.counts.invalid_json[1]).toBe(2)
   expect(result.counts.unreviewed[2]).toBe(1)
-  expect(result.upstreamErrors[2]).toBe(1)
 })
 
 it('includes request read and gateway failures in the traffic denominator', () => {

@@ -44,22 +44,30 @@ const (
 	All Match = "all"
 )
 
-// Scene combines question hits into one ordered action rule.
+// Condition compares one classifier score with a threshold belonging to a scene.
+type Condition struct {
+	Question  string  `json:"question"`
+	Threshold float64 `json:"threshold"`
+}
+
+// Scene combines score conditions into one ordered action rule.
 type Scene struct {
-	ID        string   `json:"id"`
-	Name      string   `json:"name"`
-	Questions []string `json:"questions"`
-	Match     Match    `json:"match"`
-	Action    Action   `json:"action"`
+	ID         string      `json:"id"`
+	Name       string      `json:"name"`
+	Note       string      `json:"note,omitempty"`
+	Conditions []Condition `json:"conditions"`
+	Questions  []string    `json:"questions,omitempty"` // Legacy policies are converted on load.
+	Match      Match       `json:"match"`
+	Action     Action      `json:"action"`
 }
 
 // Policy is one versioned snapshot used for a whole request.
 type Policy struct {
 	Enabled         bool               `json:"enabled"`
 	Version         int64              `json:"version"`
-	Thresholds      map[string]float64 `json:"thresholds"`
+	Thresholds      map[string]float64 `json:"thresholds,omitempty"` // Legacy policies are converted on load.
 	Scenes          []Scene            `json:"scenes"`
-	UnmatchedAction Action             `json:"unmatched_action"`
+	UnmatchedAction Action             `json:"unmatched_action,omitempty"` // Legacy policies are converted on load.
 	PreviewChars    *int               `json:"preview_chars"`
 	RetentionDays   *int               `json:"retention_days"`
 }
@@ -88,11 +96,28 @@ type Decision struct {
 	AlsoMatched   []string `json:"also_matched,omitempty"`
 }
 
+// UpgradeLegacy moves the old shared thresholds into each scene once.
+func UpgradeLegacy(p *Policy) {
+	if p.Enabled && len(p.Scenes) == 0 {
+		p.Enabled = false
+	}
+	for i := range p.Scenes {
+		scene := &p.Scenes[i]
+		if len(scene.Conditions) == 0 && len(scene.Questions) > 0 {
+			for _, key := range scene.Questions {
+				if threshold, ok := p.Thresholds[key]; ok {
+					scene.Conditions = append(scene.Conditions, Condition{Question: key, Threshold: threshold})
+				}
+			}
+		}
+		scene.Questions = nil
+	}
+	p.Thresholds = nil
+	p.UnmatchedAction = ""
+}
+
 // Validate checks ranges, references, and required fields before a policy is enabled.
 func Validate(p Policy) error {
-	if p.UnmatchedAction != "" && p.UnmatchedAction != Allow && p.UnmatchedAction != Block {
-		return errors.New("invalid unmatched action")
-	}
 	if p.PreviewChars != nil && (*p.PreviewChars < 0 || *p.PreviewChars > 10000) {
 		return errors.New("preview chars must be 0–10000")
 	}
@@ -103,27 +128,8 @@ func Validate(p Policy) error {
 	for _, q := range Questions {
 		known[q.Key] = q
 	}
-	for key, value := range p.Thresholds {
-		q, ok := known[key]
-		if !ok {
-			return fmt.Errorf("unknown question %q", key)
-		}
-		if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 || value > q.Max {
-			return fmt.Errorf("threshold for %s must be 0–%g", key, q.Max)
-		}
-	}
-	if p.Enabled {
-		for _, q := range Questions {
-			if _, ok := p.Thresholds[q.Key]; !ok {
-				return fmt.Errorf("threshold for %s is required", q.Key)
-			}
-		}
-		if p.UnmatchedAction == "" {
-			return errors.New("unmatched action is required")
-		}
-		if p.PreviewChars == nil || p.RetentionDays == nil {
-			return errors.New("preview chars and retention days are required")
-		}
+	if p.Enabled && len(p.Scenes) == 0 {
+		return errors.New("at least one scene is required to enable review")
 	}
 	seen := map[string]bool{}
 	for _, scene := range p.Scenes {
@@ -137,15 +143,19 @@ func Validate(p Policy) error {
 		if scene.Action != Allow && scene.Action != Block {
 			return fmt.Errorf("invalid action for %s", scene.Name)
 		}
-		if len(scene.Questions) == 0 {
-			return fmt.Errorf("scene %s needs a question", scene.Name)
+		if len(scene.Conditions) == 0 {
+			return fmt.Errorf("scene %s needs a condition", scene.Name)
 		}
 		chosen := map[string]bool{}
-		for _, key := range scene.Questions {
-			if _, ok := known[key]; !ok || chosen[key] {
-				return fmt.Errorf("invalid question %q in scene %s", key, scene.Name)
+		for _, condition := range scene.Conditions {
+			q, ok := known[condition.Question]
+			if !ok || chosen[condition.Question] {
+				return fmt.Errorf("invalid question %q in scene %s", condition.Question, scene.Name)
 			}
-			chosen[key] = true
+			if math.IsNaN(condition.Threshold) || math.IsInf(condition.Threshold, 0) || condition.Threshold < 0 || condition.Threshold > q.Max {
+				return fmt.Errorf("threshold for %s must be 0–%g", condition.Question, q.Max)
+			}
+			chosen[condition.Question] = true
 		}
 	}
 	return nil
@@ -164,31 +174,18 @@ func Evaluate(p Policy, answers []Answer) (Decision, error) {
 		return Decision{}, err
 	}
 	decision := Decision{Action: Allow, Hits: []Hit{}}
-	hitSet := map[string]bool{}
-	for _, q := range Questions {
-		answer := byKey[q.Key]
-		threshold := p.Thresholds[q.Key]
-		if answer.Value > threshold {
-			decision.Hits = append(decision.Hits, Hit{q.Key, answer.Value, threshold})
-			hitSet[q.Key] = true
-		}
-	}
-	if len(decision.Hits) == 0 {
-		return decision, nil
-	}
-	decision.Action = p.UnmatchedAction
 	for i, scene := range p.Scenes {
-		matches := 0
-		for _, key := range scene.Questions {
-			if hitSet[key] {
-				matches++
+		hits := make([]Hit, 0, len(scene.Conditions))
+		for _, condition := range scene.Conditions {
+			if value := byKey[condition.Question].Value; value > condition.Threshold {
+				hits = append(hits, Hit{condition.Question, value, condition.Threshold})
 			}
 		}
-		if (scene.Match == Any && matches == 0) || (scene.Match == All && matches != len(scene.Questions)) {
+		if (scene.Match == Any && len(hits) == 0) || (scene.Match == All && len(hits) != len(scene.Conditions)) {
 			continue
 		}
 		if decision.SceneID == "" {
-			decision.SceneID, decision.SceneName, decision.ScenePriority, decision.Action = scene.ID, scene.Name, i+1, scene.Action
+			decision.SceneID, decision.SceneName, decision.ScenePriority, decision.Action, decision.Hits = scene.ID, scene.Name, i+1, scene.Action, hits
 		} else {
 			decision.AlsoMatched = append(decision.AlsoMatched, scene.ID)
 		}

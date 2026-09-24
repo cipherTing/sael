@@ -38,6 +38,18 @@ func TestJevConfigRequiresAllFieldsAndNeverReturnsSecret(t *testing.T) {
 	}
 }
 
+func TestJevTimeoutIsSavedAsConnectionSetting(t *testing.T) {
+	s, store, _ := makeServer(t, activePolicy(), &testClassifier{})
+	w := adminRequest(t, s, http.MethodPut, "/admin/jev", `{"base_url":"https://api.example/v1","model":"jev-test","api_key":"secret-key","timeout_ms":2500}`)
+	if w.Code != http.StatusOK || store.jev.TimeoutMS != 2500 {
+		t.Fatalf("save timeout: status=%d config=%+v body=%s", w.Code, store.jev, w.Body.String())
+	}
+	get := adminRequest(t, s, http.MethodGet, "/admin/jev", "")
+	if get.Code != http.StatusOK || !strings.Contains(get.Body.String(), `"timeout_ms":2500`) {
+		t.Fatalf("read timeout: %d %s", get.Code, get.Body.String())
+	}
+}
+
 func TestJevTextTestReturnsScoresAndSimulatedDecisionWithoutProductionEvents(t *testing.T) {
 	c := &testClassifier{answers: fullAnswers(map[string]float64{"cyber_abuse": 0.9})}
 	s, store, upstream := makeServer(t, activePolicy(), c)

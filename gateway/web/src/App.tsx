@@ -12,13 +12,17 @@ import ShieldOutlined from '@mui/icons-material/ShieldOutlined'
 import { request } from './api'
 import type { EventFilters } from './EventsPage'
 import type { Policy, PolicyResponse } from './policy'
-import type { Event, Overview, PolicyChange } from './types'
+import type { UpstreamConfig } from './SettingsPage'
+import type { Event, Overview } from './types'
 import type { JevConfig, JevInput, JevRuntime, JevTestResult } from './JevSettingsPage'
+import type { TimeRangeValue } from './TimeRangePicker'
 
 const OverviewPage = lazy(() => import('./OverviewPage'))
 const EventsPage = lazy(() => import('./EventsPage'))
 const SettingsPage = lazy(() => import('./SettingsPage'))
 const JevSettingsPage = lazy(() => import('./JevSettingsPage'))
+
+const defaultOverviewRange: TimeRangeValue = { key: '24h', label: '近 24 小时', hours: 24 }
 
 function Login({ onLogin }: { onLogin: () => void }) {
   const [password, setPassword] = useState('')
@@ -54,9 +58,10 @@ export default function App() {
   const navigate = useNavigate()
   const [authenticated, setAuthenticated] = useState<boolean | null>(null)
   const [policy, setPolicy] = useState<PolicyResponse | null>(null)
+  const [upstream, setUpstream] = useState<UpstreamConfig | null>(null)
   const [overview, setOverview] = useState<Overview | null>(null)
   const [overviewError, setOverviewError] = useState('')
-  const [hours, setHours] = useState(24)
+  const [overviewRange, setOverviewRange] = useState<TimeRangeValue>(defaultOverviewRange)
   const [refreshToken, setRefreshToken] = useState(0)
   const [events, setEvents] = useState<Event[]>([])
   const [activeFilters, setActiveFilters] = useState<EventFilters>(() => {
@@ -65,7 +70,6 @@ export default function App() {
   })
   const [eventsLoading, setEventsLoading] = useState(false)
   const [eventsError, setEventsError] = useState('')
-  const [changes, setChanges] = useState<PolicyChange[]>([])
   const [jev, setJev] = useState<JevConfig | null>(null)
   const [jevError, setJevError] = useState('')
   const [settingsTab, setSettingsTab] = useState(0)
@@ -74,15 +78,22 @@ export default function App() {
   useEffect(() => {
     if (!authenticated) return
     request<PolicyResponse>('/admin/policy').then(setPolicy).catch(error => setOverviewError(String(error)))
-    request<PolicyChange[]>('/admin/policy-changes').then(setChanges).catch(() => {})
+    request<UpstreamConfig>('/admin/upstream').then(setUpstream).catch(() => setUpstream({ base_url: '', updated_at: '' }))
     request<JevConfig>('/admin/jev').then(setJev).catch(error => setJevError(String(error)))
   }, [authenticated])
   useEffect(() => {
     if (!authenticated) return
     setOverviewError('')
-    request<Overview>(`/admin/overview?hours=${hours}`).then(setOverview).catch(error => setOverviewError(String(error)))
+    const query = new URLSearchParams()
+    if (overviewRange.start && overviewRange.end) {
+      query.set('start', overviewRange.start)
+      query.set('end', overviewRange.end)
+    } else {
+      query.set('hours', String(overviewRange.hours))
+    }
+    request<Overview>(`/admin/overview?${query}`).then(setOverview).catch(error => setOverviewError(String(error)))
     request<typeof runtime>('/admin/runtime').then(setRuntime).catch(() => {})
-  }, [authenticated, hours, refreshToken])
+  }, [authenticated, overviewRange, refreshToken])
 
   const loadEvents = useCallback(async (filters: EventFilters, offset = 0) => {
     setEventsLoading(true); setEventsError('')
@@ -109,13 +120,17 @@ export default function App() {
   async function savePolicy(next: Policy) {
     const saved = await request<Policy>('/admin/policy', { method: 'PUT', body: JSON.stringify(next) })
     setPolicy({ ...saved, questions: policy?.questions || [] })
-    setChanges(await request<PolicyChange[]>('/admin/policy-changes'))
     setRefreshToken(value => value + 1)
   }
   async function saveJev(input: JevInput) {
     const saved = await request<JevConfig>('/admin/jev', { method: 'PUT', body: JSON.stringify(input) })
     setJev(saved)
     setRefreshToken(value => value + 1)
+    return saved
+  }
+  async function saveUpstream(input: { base_url: string }) {
+    const saved = await request<UpstreamConfig>('/admin/upstream', { method: 'PUT', body: JSON.stringify(input) })
+    setUpstream(saved)
     return saved
   }
   async function testJev(text: string) {
@@ -149,10 +164,10 @@ export default function App() {
       <Stack direction="row" sx={{ display: { xs: 'flex', md: 'none' }, overflowX: 'auto', px: 2, bgcolor: '#fff', borderBottom: '1px solid #e4e8ee' }}>{nav.map(item => <Button key={item.path} component={Link} to={item.path} color={current === item.path ? 'primary' : 'inherit'} sx={{ whiteSpace: 'nowrap' }}>{item.label}</Button>)}</Stack>
       <Box component="main" sx={{ p: { xs: 2, sm: 3, lg: 4 }, maxWidth: 1500, mx: 'auto' }}>
         <Suspense fallback={<CircularProgress />}><Routes>
-          <Route path="/" element={overviewError ? <Alert severity="error">{overviewError}</Alert> : overview ? <OverviewPage data={overview} enabled={Boolean(policy?.enabled)} hours={hours} onHoursChange={setHours} onRefresh={() => setRefreshToken(value => value + 1)} /> : <CircularProgress />} />
+          <Route path="/" element={overviewError ? <Alert severity="error">{overviewError}</Alert> : overview ? <OverviewPage data={overview} enabled={Boolean(policy?.enabled)} hours={overviewRange.hours} range={overviewRange} onRangeChange={setOverviewRange} onRefresh={() => setRefreshToken(value => value + 1)} /> : <CircularProgress />} />
           <Route path="/events" element={<EventsPage events={events} loading={eventsLoading} error={eventsError} onFilter={filters => { setActiveFilters(filters); const q = new URLSearchParams({ hours: String(filters.hours), kind: filters.kind, action: filters.action, search: filters.search }); navigate(`/events?${q}`) }} onMore={() => void loadEvents(activeFilters, events.length)} />} />
           <Route path="/settings" element={policy ? <Stack spacing={2}><Paper variant="outlined" sx={{ px: 1 }}><Tabs value={settingsTab} onChange={(_, value: number) => { setSettingsTab(value); navigate(`/settings?tab=${value}`) }}><Tab label="审查策略" /><Tab label="Jev 连接与调试" /></Tabs></Paper>
-            {settingsTab === 0 ? <SettingsPage policy={policy} changes={changes} onSave={savePolicy} /> : jev ? <JevSettingsPage config={jev} runtime={runtime} onSave={saveJev} onTest={testJev} /> : jevError ? <Alert severity="error">{jevError}</Alert> : <CircularProgress />}
+            {settingsTab === 0 ? upstream ? <SettingsPage policy={policy} upstream={upstream} onSave={savePolicy} onSaveUpstream={saveUpstream} /> : <CircularProgress /> : jev ? <JevSettingsPage config={jev} runtime={runtime} onSave={saveJev} onTest={testJev} /> : jevError ? <Alert severity="error">{jevError}</Alert> : <CircularProgress />}
           </Stack> : <CircularProgress />} />
         </Routes></Suspense>
       </Box>

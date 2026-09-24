@@ -11,7 +11,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httputil"
-	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -65,7 +64,6 @@ type Count struct {
 	Outcome          string    `json:"outcome"`
 	ClassifierSample bool      `json:"classifier_sample"`
 	ClassifierMS     int64     `json:"classifier_ms"`
-	UpstreamError    bool      `json:"upstream_error"`
 }
 
 // TrendPoint is one minute and outcome in the overview series.
@@ -75,7 +73,6 @@ type TrendPoint struct {
 	Count             int64     `json:"count"`
 	ClassifierSumMS   int64     `json:"classifier_sum_ms"`
 	ClassifierSamples int64     `json:"classifier_samples"`
-	UpstreamErrors    int64     `json:"upstream_errors"`
 }
 
 // NamedCount is an aggregated scene or question count.
@@ -95,7 +92,6 @@ type Overview struct {
 	Unreviewed      int64        `json:"unreviewed"`
 	NoText          int64        `json:"no_text"`
 	Disabled        int64        `json:"disabled"`
-	UpstreamErrors  int64        `json:"upstream_errors"`
 	ClassifierAvgMS int64        `json:"classifier_avg_ms"`
 	Trend           []TrendPoint `json:"trend"`
 	Scenes          []NamedCount `json:"scenes"`
@@ -123,10 +119,12 @@ type Store interface {
 	Policy(context.Context) (policy.Policy, error)
 	Jev(context.Context) (JevConfig, error)
 	UpdateJev(context.Context, JevConfig) (JevConfig, error)
+	Upstream(context.Context) (UpstreamConfig, error)
+	UpdateUpstream(context.Context, UpstreamConfig) (UpstreamConfig, error)
 	UpdatePolicy(context.Context, int64, policy.Policy, string) (policy.Policy, error)
 	WriteEvent(context.Context, Event) error
 	Increment(context.Context, Count) error
-	Overview(context.Context, time.Time) (Overview, error)
+	Overview(context.Context, time.Time, time.Time) (Overview, error)
 	Events(context.Context, EventFilter) ([]Event, error)
 	Event(context.Context, string) (Event, error)
 	Changes(context.Context) ([]PolicyChange, error)
@@ -136,8 +134,6 @@ type Store interface {
 type Server struct {
 	Store           Store
 	Classifier      Classifier
-	Proxy           *httputil.ReverseProxy
-	UpstreamURL     string
 	AdminPassword   string
 	Timeout         time.Duration
 	Slots           chan struct{}
@@ -150,17 +146,9 @@ type Server struct {
 	lastErrorAt     time.Time
 }
 
-// New wires a store, classifier, and fixed upstream into an HTTP server.
-func New(store Store, classifier Classifier, upstream *url.URL, adminPassword string) *Server {
-	proxy := &httputil.ReverseProxy{
-		Rewrite:       func(pr *httputil.ProxyRequest) { pr.SetURL(upstream); pr.SetXForwarded() },
-		FlushInterval: -1,
-		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
-			slog.Error("upstream failed", "error", err)
-			http.Error(w, "upstream unavailable", http.StatusBadGateway)
-		},
-	}
-	return &Server{Store: store, Classifier: classifier, Proxy: proxy, UpstreamURL: upstream.String(), AdminPassword: adminPassword, Timeout: 5 * time.Second, Slots: make(chan struct{}, 32), sessions: make(map[string]time.Time)}
+// New wires the saved configuration and classifier into an HTTP server.
+func New(store Store, classifier Classifier, adminPassword string) *Server {
+	return &Server{Store: store, Classifier: classifier, AdminPassword: adminPassword, Timeout: 5 * time.Second, Slots: make(chan struct{}, 32), sessions: make(map[string]time.Time)}
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -208,10 +196,28 @@ func (s *Server) proxyRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	forward := func(outcome string) {
+		config, err := s.Store.Upstream(r.Context())
+		if err != nil {
+			http.Error(w, "upstream configuration unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		target, err := config.target()
+		if err != nil {
+			http.Error(w, "upstream is not configured", http.StatusServiceUnavailable)
+			return
+		}
+		proxy := &httputil.ReverseProxy{
+			Rewrite: func(pr *httputil.ProxyRequest) {
+				pr.SetURL(target)
+				pr.SetXForwarded()
+			},
+			FlushInterval: -1,
+			ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
+				http.Error(w, "upstream unavailable", http.StatusBadGateway)
+			},
+		}
 		count.Outcome = outcome
-		capture := &statusWriter{ResponseWriter: w}
-		s.Proxy.ServeHTTP(capture, r)
-		count.UpstreamError = capture.status >= 500
+		proxy.ServeHTTP(w, r)
 	}
 	if !p.Enabled {
 		forward("disabled")
@@ -221,13 +227,17 @@ func (s *Server) proxyRequest(w http.ResponseWriter, r *http.Request) {
 		forward("no_text")
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), s.Timeout)
+	config, configErr := s.Store.Jev(r.Context())
+	timeout := s.Timeout
+	if configErr == nil {
+		timeout = config.timeout()
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 	started := time.Now()
 	var scores []policy.Answer
 	select {
 	case s.Slots <- struct{}{}:
-		config, configErr := s.Store.Jev(ctx)
 		if configErr != nil {
 			err = configErr
 		} else if configured, ok := s.Classifier.(configuredClassifier); ok {
@@ -277,33 +287,6 @@ func (s *Server) proxyRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	forward("hit_allowed")
 }
-
-type statusWriter struct {
-	http.ResponseWriter
-	status int
-}
-
-func (w *statusWriter) WriteHeader(status int) {
-	if w.status == 0 {
-		w.status = status
-	}
-	w.ResponseWriter.WriteHeader(status)
-}
-
-func (w *statusWriter) Write(p []byte) (int, error) {
-	if w.status == 0 {
-		w.status = http.StatusOK
-	}
-	return w.ResponseWriter.Write(p)
-}
-
-func (w *statusWriter) Flush() {
-	if f, ok := w.ResponseWriter.(http.Flusher); ok {
-		f.Flush()
-	}
-}
-
-func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 func (s *Server) markClassifier(err error, timedOut bool) {
 	s.statusMu.Lock()

@@ -13,7 +13,6 @@ import (
 type Config struct {
 	DatabaseURL    string
 	Upstream       *url.URL
-	UpstreamAPIKey string
 	AdminPassword  string
 	CLIPath        string
 	Listen         string
@@ -25,18 +24,21 @@ type Config struct {
 
 // Load reads and validates a gateway configuration.
 func Load(getenv func(string) string) (Config, error) {
-	c := Config{DatabaseURL: getenv("DATABASE_URL"), UpstreamAPIKey: getenv("UPSTREAM_API_KEY"), AdminPassword: getenv("ADMIN_PASSWORD"), CLIPath: getenv("SAEL_CLI_PATH"), Listen: getenv("LISTEN_ADDR"), WebDir: getenv("WEB_DIR"), SpoolPath: getenv("SPOOL_PATH"), Timeout: 5 * time.Second, Concurrency: 32}
-	if c.DatabaseURL == "" || c.AdminPassword == "" || getenv("UPSTREAM_URL") == "" {
-		return c, errors.New("DATABASE_URL, UPSTREAM_URL and ADMIN_PASSWORD are required")
+	c := Config{DatabaseURL: getenv("DATABASE_URL"), AdminPassword: getenv("ADMIN_PASSWORD"), CLIPath: getenv("SAEL_CLI_PATH"), Listen: getenv("LISTEN_ADDR"), WebDir: getenv("WEB_DIR"), SpoolPath: getenv("SPOOL_PATH"), Timeout: 5 * time.Second, Concurrency: 32}
+	if c.DatabaseURL == "" || c.AdminPassword == "" {
+		return c, errors.New("DATABASE_URL and ADMIN_PASSWORD are required")
 	}
-	u, err := url.Parse(getenv("UPSTREAM_URL"))
-	if err != nil {
-		return c, err
+	var err error
+	if raw := getenv("UPSTREAM_URL"); raw != "" {
+		u, parseErr := url.Parse(raw)
+		if parseErr != nil {
+			return c, parseErr
+		}
+		if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
+			return c, errors.New("UPSTREAM_URL must be an HTTP(S) origin without path, query or credentials")
+		}
+		c.Upstream = u
 	}
-	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
-		return c, errors.New("UPSTREAM_URL must be an HTTP(S) origin without path, query or credentials")
-	}
-	c.Upstream = u
 	if c.Listen == "" {
 		c.Listen = ":8080"
 	}

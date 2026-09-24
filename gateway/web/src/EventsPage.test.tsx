@@ -13,9 +13,9 @@ it('opens a hit record with the effective scene and historical threshold', () =>
   expect(screen.getByText(/0.9 > 0.8/)).toBeTruthy()
 })
 
-it('explains why forwarding traffic has no individual record', () => {
+it('uses a compact empty state', () => {
   render(<EventsPage events={[]} loading={false} error="" onFilter={() => {}} onMore={() => {}} />)
-  expect(screen.getByText(/透传请求.*计入总览/)).toBeTruthy()
+  expect(screen.getByText('暂无数据')).toBeTruthy()
 })
 
 it('shows a compact result summary before the event table', () => {

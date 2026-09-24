@@ -12,8 +12,8 @@ export type Event = {
 export type Overview = {
   since: string; updated_at: string; total: number; checked: number; hits: number;
   blocked: number; unreviewed: number; no_text: number; disabled: number;
-  upstream_errors?: number; classifier_avg_ms?: number;
-  trend: { time: string; outcome: string; count: number; classifier_sum_ms?: number; classifier_samples?: number; upstream_errors?: number }[];
+  classifier_avg_ms?: number;
+  trend: { time: string; outcome: string; count: number; classifier_sum_ms?: number; classifier_samples?: number }[];
   scenes: { name: string; count: number }[];
   questions: { name: string; count: number }[]
 }

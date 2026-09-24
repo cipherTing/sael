@@ -59,15 +59,15 @@ it('shows no invented percentage without a denominator and no permanent failure 
   expect(screen.queryByText(/审查失败后转发/)).toBeNull()
 })
 
-it('reports forwarded 5xx responses without blaming the upstream service', () => {
+it('does not surface upstream response failures in the overview', () => {
   render(<BrowserRouter><OverviewPage enabled={true} hours={24} onHoursChange={() => {}} data={{
     since: '2026-09-23T00:00:00Z', updated_at: '', total: 10,
     checked: 10, hits: 0, blocked: 0, unreviewed: 0, no_text: 0, disabled: 0,
-    upstream_errors: 2, trend: [], scenes: [], questions: []
+    trend: [], scenes: [], questions: []
   }} /></BrowserRouter>)
 
-  expect(screen.getByText('转发请求返回 5xx：2 条')).toBeTruthy()
-  expect(screen.queryByText('上游故障')).toBeNull()
+  expect(screen.queryByText('转发请求返回 5xx：2 条')).toBeNull()
+  expect(screen.queryByText(/5xx/)).toBeNull()
 })
 
 it('surfaces gateway processing failures only when they occur', () => {

@@ -1,14 +1,14 @@
 # Sael 网关
 
-网关位于 `gateway/`，独立于现有 CLI 和 SDK。首次启动时审查关闭，所有受支持请求按原协议转发。管理员登录后，在设置页配置 11 项阈值、场景和未匹配动作，再开启审查。
+网关位于 `gateway/`，独立于现有 CLI 和 SDK。首次启动时审查关闭，所有受支持请求按原协议转发。管理员登录后，在设置页配置转发目标和场景规则，再开启审查。
 
 ## Docker Compose 部署
 
-1. 复制 `deploy/.env.example` 为 `deploy/.env`，填写 PostgreSQL 密码、管理员密码和上游地址。`DATABASE_URL` 中的密码要与 `POSTGRES_PASSWORD` 一致。
+1. 复制 `deploy/.env.example` 为 `deploy/.env`，填写 PostgreSQL 密码和管理员密码。`DATABASE_URL` 中的密码要与 `POSTGRES_PASSWORD` 一致；转发目标可以启动后在设置页填写。
 2. 在 `gateway/deploy/` 运行 `docker compose --env-file .env up --build -d`。
-3. 打开 `http://localhost:8080`，用 `ADMIN_PASSWORD` 登录。在「设置 → Jev 连接与调试」保存 Jev API 根地址、模型 ID 和 API Key，并用文本测试分类器。在「审查策略」保存阈值、场景、未匹配动作、预览长度和保留天数，再开启审查。首次启动默认透传。
+3. 打开 `http://localhost:8080`，用 `ADMIN_PASSWORD` 登录。在「设置」保存转发目标。在「Jev 连接与调试」保存分类器地址、模型、API Key 和超时，并用文本测试分类器。在「场景规则」中为每条场景配置审核项原始分数、任一/全部条件和处理动作，再开启审查。首次启动默认透传。
 
-Compose 只把网关绑定到本机 `127.0.0.1:8080`。需要对外提供服务时，在前面配置 HTTPS 反向代理及访问控制。`UPSTREAM_URL` 只能是 HTTP(S) origin，不能包含路径；请求路径和查询参数会原样转到上游。设置 `UPSTREAM_API_KEY` 时，网关会覆盖发往上游的 `Authorization`。
+Compose 只把网关绑定到本机 `127.0.0.1:8080`。需要对外提供服务时，在前面配置 HTTPS 反向代理及访问控制。转发目标只能是 HTTP(S) 根地址，不能包含路径；请求路径、查询参数和客户端认证头会原样转到目标站。
 
 支持 `POST /v1/chat/completions`、`POST /v1/responses`、`POST /v1/messages`，以及 Gemini `POST /v1beta/models/*:generateContent` 和 `*:streamGenerateContent`。只提取最后一个当前用户输入的文本；图片、音频等本身不会送往分类器。
 

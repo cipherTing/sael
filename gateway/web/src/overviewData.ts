@@ -14,7 +14,6 @@ export function buildTrafficBuckets(since: string, hours: number, trend: TrendPo
   const counts: Record<string, number[]> = Object.fromEntries(outcomes.map(key => [key, Array(length).fill(0)]))
   const latencySum = Array<number>(length).fill(0)
   const latencySamples = Array<number>(length).fill(0)
-  const upstreamErrors = Array<number>(length).fill(0)
   const ranges = Array.from({ length }, (_, index) => ({
     start: Math.max(start, alignedStart + size * index),
     end: Math.min(end, alignedStart + size * (index + 1))
@@ -38,7 +37,6 @@ export function buildTrafficBuckets(since: string, hours: number, trend: TrendPo
     counts[point.outcome][index] += point.count
     latencySum[index] += point.classifier_sum_ms || 0
     latencySamples[index] += point.classifier_samples || 0
-    upstreamErrors[index] += point.upstream_errors || 0
   }
 
   return {
@@ -47,7 +45,6 @@ export function buildTrafficBuckets(since: string, hours: number, trend: TrendPo
     ranges,
     counts,
     latency: latencySum.map((sum, index) => latencySamples[index] ? Math.round(sum / latencySamples[index]) : null),
-    upstreamErrors,
     granularity: hours === 1 ? '5 分钟' : hours === 24 ? '1 小时' : '6 小时'
   }
 }

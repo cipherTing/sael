@@ -3,14 +3,14 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { FailureTrendChart, RequestTrendChart, SignalChart, SparseActivityChart } from './DashboardCharts'
 import { buildTrafficBuckets } from './overviewData'
 
-const captured = vi.hoisted(() => ({ line: null as any, bar: null as any }))
+const captured = vi.hoisted(() => ({ line: null as any, bar: null as any, doughnut: null as any }))
 vi.mock('react-chartjs-2', () => ({
   Line: (props: any) => { captured.line = props; return <div /> },
   Bar: (props: any) => { captured.bar = props; return <div /> },
-  Doughnut: () => <div />
+  Doughnut: (props: any) => { captured.doughnut = props; return <div /> }
 }))
 
-afterEach(() => { cleanup(); captured.line = null; captured.bar = null })
+afterEach(() => { cleanup(); captured.line = null; captured.bar = null; captured.doughnut = null })
 
 const buckets = buildTrafficBuckets(new Date(2026, 8, 23, 10, 37).toISOString(), 24, [])
 
@@ -53,4 +53,10 @@ it('shows zero-request intervals in hover details', () => {
   const barFilter = captured.bar.options.plugins.tooltip.filter
   expect(barFilter({ dataIndex: 1, parsed: { y: 0 } })).toBe(true)
   expect(captured.bar.options.plugins.tooltip.callbacks.footer([{ dataIndex: 1 }])).toBe('共 0 次')
+})
+
+it('keeps a complete ring when one outcome accounts for all requests', async () => {
+  const { OutcomeChart } = await import('./DashboardCharts')
+  render(<OutcomeChart totals={{ disabled: 10 }} />)
+  expect(captured.doughnut.data.datasets[0].spacing).toBe(0)
 })

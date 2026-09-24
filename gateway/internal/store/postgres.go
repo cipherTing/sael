@@ -34,6 +34,9 @@ type PG struct {
 	jevMu           sync.RWMutex
 	cachedJev       gateway.JevConfig
 	hasCachedJev    bool
+	upstreamMu      sync.RWMutex
+	cachedUpstream  gateway.UpstreamConfig
+	hasUpstream     bool
 }
 
 // Open connects to PostgreSQL and applies the embedded schema.
@@ -46,7 +49,7 @@ func Open(ctx context.Context, dsn, spoolPath string) (*PG, error) {
 		pool.Close()
 		return nil, err
 	}
-	for _, name := range []string{"migrations/001_init.sql", "migrations/002_jev.sql", "migrations/003_metrics.sql"} {
+	for _, name := range []string{"migrations/001_init.sql", "migrations/002_jev.sql", "migrations/003_metrics.sql", "migrations/004_connections.sql", "migrations/005_remove_upstream_errors.sql"} {
 		sql, err := migrations.ReadFile(name)
 		if err != nil {
 			pool.Close()
@@ -66,16 +69,62 @@ func Open(ctx context.Context, dsn, spoolPath string) (*PG, error) {
 		pool.Close()
 		return nil, err
 	}
+	if _, err := store.Upstream(ctx); err != nil {
+		pool.Close()
+		return nil, err
+	}
 	return store, nil
 }
 
 // Close releases PostgreSQL pool resources.
 func (s *PG) Close() { s.pool.Close() }
 
+// Upstream returns the saved forwarding destination, using the last known value during a database outage.
+func (s *PG) Upstream(ctx context.Context) (gateway.UpstreamConfig, error) {
+	var c gateway.UpstreamConfig
+	err := s.pool.QueryRow(ctx, "SELECT base_url,updated_at FROM gateway_upstream WHERE id=1").Scan(&c.BaseURL, &c.UpdatedAt)
+	if err != nil {
+		s.upstreamMu.RLock()
+		defer s.upstreamMu.RUnlock()
+		if s.hasUpstream {
+			return s.cachedUpstream, nil
+		}
+		return c, err
+	}
+	s.upstreamMu.Lock()
+	s.cachedUpstream, s.hasUpstream = c, true
+	s.upstreamMu.Unlock()
+	return c, nil
+}
+
+// UpdateUpstream saves the forwarding destination.
+func (s *PG) UpdateUpstream(ctx context.Context, c gateway.UpstreamConfig) (gateway.UpstreamConfig, error) {
+	err := s.pool.QueryRow(ctx, "UPDATE gateway_upstream SET base_url=$1,updated_at=now() WHERE id=1 RETURNING updated_at", c.BaseURL).Scan(&c.UpdatedAt)
+	if err == nil {
+		s.upstreamMu.Lock()
+		s.cachedUpstream, s.hasUpstream = c, true
+		s.upstreamMu.Unlock()
+	}
+	return c, err
+}
+
+// SeedUpstream imports deployment values only when the platform has no saved destination.
+func (s *PG) SeedUpstream(ctx context.Context, baseURL string) error {
+	if baseURL == "" {
+		return nil
+	}
+	_, err := s.pool.Exec(ctx, "UPDATE gateway_upstream SET base_url=$1,updated_at=now() WHERE id=1 AND base_url=''", baseURL)
+	if err != nil {
+		return err
+	}
+	_, err = s.Upstream(ctx)
+	return err
+}
+
 // Jev returns the current saved classifier connection.
 func (s *PG) Jev(ctx context.Context) (gateway.JevConfig, error) {
 	var c gateway.JevConfig
-	err := s.pool.QueryRow(ctx, "SELECT base_url,model,api_key,updated_at FROM gateway_jev WHERE id=1").Scan(&c.BaseURL, &c.Model, &c.APIKey, &c.UpdatedAt)
+	err := s.pool.QueryRow(ctx, "SELECT base_url,model,api_key,timeout_ms,updated_at FROM gateway_jev WHERE id=1").Scan(&c.BaseURL, &c.Model, &c.APIKey, &c.TimeoutMS, &c.UpdatedAt)
 	if err != nil {
 		s.jevMu.RLock()
 		defer s.jevMu.RUnlock()
@@ -92,7 +141,10 @@ func (s *PG) Jev(ctx context.Context) (gateway.JevConfig, error) {
 
 // UpdateJev saves one complete classifier connection.
 func (s *PG) UpdateJev(ctx context.Context, c gateway.JevConfig) (gateway.JevConfig, error) {
-	err := s.pool.QueryRow(ctx, "UPDATE gateway_jev SET base_url=$1, model=$2, api_key=$3, updated_at=now() WHERE id=1 RETURNING updated_at", c.BaseURL, c.Model, c.APIKey).Scan(&c.UpdatedAt)
+	if c.TimeoutMS == 0 {
+		c.TimeoutMS = 5000
+	}
+	err := s.pool.QueryRow(ctx, "UPDATE gateway_jev SET base_url=$1, model=$2, api_key=$3, timeout_ms=$4, updated_at=now() WHERE id=1 RETURNING updated_at", c.BaseURL, c.Model, c.APIKey, c.TimeoutMS).Scan(&c.UpdatedAt)
 	if err == nil {
 		s.jevMu.Lock()
 		s.cachedJev, s.hasCachedJev = c, true
@@ -116,6 +168,7 @@ func (s *PG) Policy(ctx context.Context) (policy.Policy, error) {
 	}
 	err = json.Unmarshal(raw, &result)
 	if err == nil {
+		policy.UpgradeLegacy(&result)
 		s.policyMu.Lock()
 		s.cachedPolicy, s.hasCachedPolicy = clonePolicy(result), true
 		s.policyMu.Unlock()
@@ -171,6 +224,7 @@ func clonePolicy(p policy.Policy) policy.Policy {
 	for i, scene := range p.Scenes {
 		out.Scenes[i] = scene
 		out.Scenes[i].Questions = append([]string(nil), scene.Questions...)
+		out.Scenes[i].Conditions = append([]policy.Condition(nil), scene.Conditions...)
 	}
 	if p.PreviewChars != nil {
 		value := *p.PreviewChars
@@ -270,16 +324,15 @@ func (s *PG) replayEvents(ctx context.Context) error {
 	return os.Remove(s.spoolPath)
 }
 
-const incrementSQL = `INSERT INTO gateway_counts_minute(bucket,protocol,model,outcome,count,last_seen,classifier_sum_ms,classifier_samples,upstream_errors)
-		VALUES (date_trunc('minute',$1::timestamptz),$2,$3,$4,1,$1,$5,CASE WHEN $6::boolean THEN 1 ELSE 0 END,CASE WHEN $7::boolean THEN 1 ELSE 0 END)
+const incrementSQL = `INSERT INTO gateway_counts_minute(bucket,protocol,model,outcome,count,last_seen,classifier_sum_ms,classifier_samples)
+		VALUES (date_trunc('minute',$1::timestamptz),$2,$3,$4,1,$1,$5,CASE WHEN $6::boolean THEN 1 ELSE 0 END)
 		ON CONFLICT (bucket,protocol,model,outcome) DO UPDATE SET count=gateway_counts_minute.count+1,last_seen=EXCLUDED.last_seen,
 		classifier_sum_ms=gateway_counts_minute.classifier_sum_ms+EXCLUDED.classifier_sum_ms,
-		classifier_samples=gateway_counts_minute.classifier_samples+EXCLUDED.classifier_samples,
-		upstream_errors=gateway_counts_minute.upstream_errors+EXCLUDED.upstream_errors`
+		classifier_samples=gateway_counts_minute.classifier_samples+EXCLUDED.classifier_samples`
 
 // Increment adds one request outcome to its minute bucket or local spool.
 func (s *PG) Increment(ctx context.Context, count gateway.Count) error {
-	_, err := s.pool.Exec(ctx, incrementSQL, count.Time, count.Protocol, count.Model, count.Outcome, count.ClassifierMS, count.ClassifierSample, count.UpstreamError)
+	_, err := s.pool.Exec(ctx, incrementSQL, count.Time, count.Protocol, count.Model, count.Outcome, count.ClassifierMS, count.ClassifierSample)
 	if err == nil {
 		return nil
 	}
@@ -318,7 +371,7 @@ func (s *PG) replayCounts(ctx context.Context) error {
 		}
 		tag, err := tx.Exec(ctx, "INSERT INTO replayed_counts(id) VALUES ($1) ON CONFLICT DO NOTHING", count.ID)
 		if err == nil && tag.RowsAffected() == 1 {
-			_, err = tx.Exec(ctx, incrementSQL, count.Time, count.Protocol, count.Model, count.Outcome, count.ClassifierMS, count.ClassifierSample, count.UpstreamError)
+			_, err = tx.Exec(ctx, incrementSQL, count.Time, count.Protocol, count.Model, count.Outcome, count.ClassifierMS, count.ClassifierSample)
 		}
 		if err != nil {
 			_ = tx.Rollback(ctx)
@@ -339,22 +392,21 @@ func (s *PG) replayCounts(ctx context.Context) error {
 }
 
 // Overview aggregates minute outcomes and event breakdowns.
-func (s *PG) Overview(ctx context.Context, since time.Time) (gateway.Overview, error) {
+func (s *PG) Overview(ctx context.Context, since, until time.Time) (gateway.Overview, error) {
 	out := gateway.Overview{Since: since, Trend: []gateway.TrendPoint{}, Scenes: []gateway.NamedCount{}, Questions: []gateway.NamedCount{}}
-	rows, err := s.pool.Query(ctx, `SELECT bucket,outcome,sum(count),sum(classifier_sum_ms),sum(classifier_samples),sum(upstream_errors) FROM gateway_counts_minute WHERE bucket >= date_trunc('minute',$1::timestamptz) GROUP BY bucket,outcome ORDER BY bucket`, since)
+	rows, err := s.pool.Query(ctx, `SELECT bucket,outcome,sum(count),sum(classifier_sum_ms),sum(classifier_samples) FROM gateway_counts_minute WHERE bucket >= date_trunc('minute',$1::timestamptz) AND bucket < $2::timestamptz GROUP BY bucket,outcome ORDER BY bucket`, since, until)
 	if err != nil {
 		return out, err
 	}
 	var classifierSum, classifierSamples int64
 	for rows.Next() {
 		var point gateway.TrendPoint
-		if err := rows.Scan(&point.Time, &point.Outcome, &point.Count, &point.ClassifierSumMS, &point.ClassifierSamples, &point.UpstreamErrors); err != nil {
+		if err := rows.Scan(&point.Time, &point.Outcome, &point.Count, &point.ClassifierSumMS, &point.ClassifierSamples); err != nil {
 			rows.Close()
 			return out, err
 		}
 		out.Trend = append(out.Trend, point)
 		out.Total += point.Count
-		out.UpstreamErrors += point.UpstreamErrors
 		classifierSum += point.ClassifierSumMS
 		classifierSamples += point.ClassifierSamples
 		switch point.Outcome {
@@ -384,13 +436,13 @@ func (s *PG) Overview(ctx context.Context, since time.Time) (gateway.Overview, e
 		return out, err
 	}
 	var updatedAt *time.Time
-	if err := s.pool.QueryRow(ctx, `SELECT max(last_seen) FROM gateway_counts_minute WHERE bucket >= date_trunc('minute',$1::timestamptz)`, since).Scan(&updatedAt); err != nil {
+	if err := s.pool.QueryRow(ctx, `SELECT max(last_seen) FROM gateway_counts_minute WHERE bucket >= date_trunc('minute',$1::timestamptz) AND bucket < $2::timestamptz`, since, until).Scan(&updatedAt); err != nil {
 		return out, err
 	}
 	if updatedAt != nil {
 		out.UpdatedAt = *updatedAt
 	}
-	rows, err = s.pool.Query(ctx, `SELECT coalesce(nullif(body->'decision'->>'scene_name',''),nullif(body->'decision'->>'scene_id',''),'unmatched'),count(*) FROM audit_events WHERE kind='hit' AND time >= $1 GROUP BY 1 ORDER BY 2 DESC`, since)
+	rows, err = s.pool.Query(ctx, `SELECT coalesce(nullif(body->'decision'->>'scene_name',''),nullif(body->'decision'->>'scene_id',''),'unmatched'),count(*) FROM audit_events WHERE kind='hit' AND time >= $1 AND time < $2 GROUP BY 1 ORDER BY 2 DESC`, since, until)
 	if err != nil {
 		return out, err
 	}
@@ -407,7 +459,7 @@ func (s *PG) Overview(ctx context.Context, since time.Time) (gateway.Overview, e
 	if err != nil {
 		return out, err
 	}
-	rows, err = s.pool.Query(ctx, `SELECT hit->>'question',count(*) FROM audit_events CROSS JOIN LATERAL jsonb_array_elements(body->'decision'->'hits') hit WHERE kind='hit' AND time >= $1 GROUP BY 1 ORDER BY 2 DESC`, since)
+	rows, err = s.pool.Query(ctx, `SELECT hit->>'question',count(*) FROM audit_events CROSS JOIN LATERAL jsonb_array_elements(body->'decision'->'hits') hit WHERE kind='hit' AND time >= $1 AND time < $2 GROUP BY 1 ORDER BY 2 DESC`, since, until)
 	if err != nil {
 		return out, err
 	}

@@ -12,12 +12,23 @@ type JevConfig struct {
 	BaseURL   string    `json:"base_url"`
 	Model     string    `json:"model"`
 	APIKey    string    `json:"api_key"`
+	TimeoutMS int       `json:"timeout_ms"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func (c JevConfig) timeout() time.Duration {
+	if c.TimeoutMS <= 0 {
+		return 5 * time.Second
+	}
+	return time.Duration(c.TimeoutMS) * time.Millisecond
 }
 
 func (c JevConfig) validate() error {
 	if strings.TrimSpace(c.APIKey) == "" || strings.TrimSpace(c.Model) == "" || strings.TrimSpace(c.BaseURL) == "" {
 		return errors.New("Jev 接口地址、模型和 API Key 均不能为空")
+	}
+	if c.TimeoutMS < 0 || c.TimeoutMS > 120000 {
+		return errors.New("分类器超时须在 1–120000 毫秒之间")
 	}
 	u, err := url.Parse(c.BaseURL)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
@@ -31,6 +42,7 @@ func (c JevConfig) public() any {
 		BaseURL   string    `json:"base_url"`
 		Model     string    `json:"model"`
 		APIKeySet bool      `json:"api_key_set"`
+		TimeoutMS int       `json:"timeout_ms"`
 		UpdatedAt time.Time `json:"updated_at"`
-	}{c.BaseURL, c.Model, c.APIKey != "", c.UpdatedAt}
+	}{c.BaseURL, c.Model, c.APIKey != "", int(c.timeout().Milliseconds()), c.UpdatedAt}
 }

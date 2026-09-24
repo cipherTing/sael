@@ -4,9 +4,9 @@ import HelpOutlineOutlined from '@mui/icons-material/HelpOutlineOutlined'
 import type { Answer, Hit } from './types'
 import { questionMeta, questionName } from './questionMeta'
 
-export type JevConfig = { base_url: string; model: string; api_key_set: boolean; updated_at: string }
-export type JevRuntime = { classifier: string; timeout_ms: number; concurrency: number; in_flight: number; last_checked_at?: string; last_error_kind?: string }
-export type JevInput = { base_url: string; model: string; api_key: string }
+export type JevConfig = { base_url: string; model: string; api_key_set: boolean; timeout_ms?: number; updated_at: string }
+export type JevRuntime = { classifier: string; last_checked_at?: string; last_error_kind?: string }
+export type JevInput = { base_url: string; model: string; api_key: string; timeout_ms: number }
 export type JevTestResult = { scores: Answer[]; decision: { action: 'allow' | 'block'; hits: Hit[]; scene_name?: string; scene_priority?: number } | null; policy_ready: boolean; classifier_ms: number }
 type Props = { config: JevConfig; runtime?: JevRuntime | null; onSave: (input: JevInput) => Promise<JevConfig>; onTest: (text: string) => Promise<JevTestResult> }
 
@@ -14,6 +14,7 @@ export default function JevSettingsPage({ config, runtime, onSave, onTest }: Pro
   const [baseURL, setBaseURL] = useState(config.base_url)
   const [model, setModel] = useState(config.model)
   const [key, setKey] = useState('')
+  const [timeoutMS, setTimeoutMS] = useState(config.timeout_ms || 5000)
   const [saved, setSaved] = useState(config)
   const [text, setText] = useState('')
   const [result, setResult] = useState<JevTestResult | null>(null)
@@ -21,17 +22,17 @@ export default function JevSettingsPage({ config, runtime, onSave, onTest }: Pro
   const [testError, setTestError] = useState('')
   const [busy, setBusy] = useState(false)
   const [testing, setTesting] = useState(false)
-  useEffect(() => { setSaved(config); setBaseURL(config.base_url); setModel(config.model) }, [config])
+  useEffect(() => { setSaved(config); setBaseURL(config.base_url); setModel(config.model); setTimeoutMS(config.timeout_ms || 5000) }, [config])
   let urlValid = false
   try { const u = new URL(baseURL); urlValid = ['http:', 'https:'].includes(u.protocol) && !u.username && !u.password && !u.search && !u.hash } catch { /* field error below */ }
-  const canSave = urlValid && Boolean(model.trim()) && (saved.api_key_set || Boolean(key.trim())) && !busy
-  const dirty = baseURL !== saved.base_url || model !== saved.model || key !== ''
+  const canSave = urlValid && Boolean(model.trim()) && (saved.api_key_set || Boolean(key.trim())) && timeoutMS >= 1 && timeoutMS <= 120000 && !busy
+  const dirty = baseURL !== saved.base_url || model !== saved.model || key !== '' || timeoutMS !== (saved.timeout_ms || 5000)
   const canTest = saved.api_key_set && !dirty && Boolean(text.trim()) && !testing
 
   async function save() {
     setBusy(true); setError('')
     try {
-      const next = await onSave({ base_url: baseURL.trim(), model: model.trim(), api_key: key.trim() })
+      const next = await onSave({ base_url: baseURL.trim(), model: model.trim(), api_key: key.trim(), timeout_ms: timeoutMS })
       setSaved(next); setKey('')
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Jev 配置保存失败') }
     finally { setBusy(false) }
@@ -51,7 +52,7 @@ export default function JevSettingsPage({ config, runtime, onSave, onTest }: Pro
   return <Stack spacing={2.5}>
     <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ alignItems: { sm: 'center' }, justifyContent: 'space-between' }}>
       <Typography variant="h5" sx={{ fontWeight: 750 }}>Jev 连接与调试</Typography>
-      <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center' }}><Tooltip title={runtime?.last_checked_at && !runtime.last_checked_at.startsWith('0001') ? `最近验证 ${new Date(runtime.last_checked_at).toLocaleString('zh-CN')}` : '尚未验证'}><Chip size="small" color={runtime?.classifier === 'ok' ? 'success' : runtime?.classifier === 'error' ? 'error' : 'default'} label={runtime?.classifier === 'ok' ? '分类器正常' : runtime?.classifier === 'error' ? '分类器异常' : '未验证'} /></Tooltip><Typography variant="caption" color="text.secondary">并发 {runtime?.in_flight ?? 0}/{runtime?.concurrency ?? '—'} · 超时 {runtime?.timeout_ms ?? '—'} ms</Typography></Stack>
+      <Tooltip title={runtime?.last_checked_at && !runtime.last_checked_at.startsWith('0001') ? `最近验证 ${new Date(runtime.last_checked_at).toLocaleString('zh-CN')}` : '尚未验证'}><Chip size="small" color={runtime?.classifier === 'ok' ? 'success' : runtime?.classifier === 'error' ? 'error' : 'default'} label={runtime?.classifier === 'ok' ? '分类器正常' : runtime?.classifier === 'error' ? '分类器异常' : '未验证'} /></Tooltip>
     </Stack>
     {runtime?.classifier === 'error' && <Alert severity="error">{runtime.last_error_kind || '分类调用失败'}</Alert>}
     <Paper variant="outlined" sx={{ p: 2.5 }}>
@@ -64,7 +65,8 @@ export default function JevSettingsPage({ config, runtime, onSave, onTest }: Pro
         <TextField size="small" label="接口地址" value={baseURL} onChange={e => setBaseURL(e.target.value)} error={Boolean(baseURL) && !urlValid} helperText={Boolean(baseURL) && !urlValid ? '请输入有效的 HTTP(S) API 根地址' : undefined} placeholder="https://api.typesafe.ai/v1" fullWidth />
         <TextField size="small" label="模型 ID" value={model} onChange={e => setModel(e.target.value)} placeholder="jev-latest" fullWidth />
         <TextField size="small" label="API Key" type="password" autoComplete="new-password" value={key} onChange={e => setKey(e.target.value)} helperText={saved.api_key_set ? '留空则保留当前密钥；输入新值会替换' : '首次保存必须填写'} fullWidth />
-        <Stack direction="row" spacing={1} sx={{ alignItems: 'center', justifyContent: 'flex-end' }}><Typography variant="caption" color="text.secondary">{dirty ? '有未保存的连接修改' : saved.updated_at ? `更新于 ${new Date(saved.updated_at).toLocaleString('zh-CN')}` : '未保存修改'}</Typography><Button variant="contained" disabled={!canSave || !dirty} onClick={() => void save()}>保存 Jev 配置</Button></Stack>
+        <TextField size="small" label="分类器超时（毫秒）" type="number" value={timeoutMS} onChange={e => setTimeoutMS(Number(e.target.value))} slotProps={{ htmlInput: { min: 1, max: 120000 } }} fullWidth />
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center', justifyContent: 'flex-end' }}><Button variant="contained" disabled={!canSave || !dirty} onClick={() => void save()}>保存 Jev 配置</Button></Stack>
       </Box>
     </Paper>
     <Paper variant="outlined" sx={{ p: 2.5 }}>

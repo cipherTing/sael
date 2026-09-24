@@ -2,7 +2,7 @@ package config
 
 import "testing"
 
-func TestLoadRequiresDeploymentSecretsAndFixedUpstream(t *testing.T) {
+func TestLoadAcceptsInitialUpstreamAndRequiresDeploymentSecrets(t *testing.T) {
 	env := map[string]string{"DATABASE_URL": "postgres://example", "UPSTREAM_URL": "https://api.example.test", "ADMIN_PASSWORD": "secret"}
 	get := func(k string) string { return env[k] }
 	if _, err := Load(get); err != nil {
@@ -16,5 +16,13 @@ func TestLoadRequiresDeploymentSecretsAndFixedUpstream(t *testing.T) {
 	env["UPSTREAM_URL"] = "https://api.example.test/path"
 	if _, err := Load(get); err == nil {
 		t.Fatal("upstream path would change proxy routing")
+	}
+}
+
+func TestLoadAllowsAdminToConfigureUpstreamAfterStartup(t *testing.T) {
+	env := map[string]string{"DATABASE_URL": "postgres://example", "ADMIN_PASSWORD": "secret"}
+	got, err := Load(func(k string) string { return env[k] })
+	if err != nil || got.Upstream != nil {
+		t.Fatalf("config=%+v err=%v", got, err)
 	}
 }

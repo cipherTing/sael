@@ -94,7 +94,7 @@ export function OutcomeChart({ totals }: { totals: Record<string, number> }) {
   const total = rows.reduce((sum, row) => sum + row.value, 0)
   return <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', sm: '170px minmax(0, 1fr)' }, alignItems: 'center', gap: 1.25, minHeight: 205 }}>
     <Box sx={{ height: 184, position: 'relative' }}>
-      <Doughnut aria-label="处理结果分布图" data={{ labels: rows.map(row => row.name), datasets: [{ data: rows.map(row => row.value), backgroundColor: rows.map(row => row.color), borderWidth: 0, hoverOffset: 5, spacing: 3 }] }} options={{ responsive: true, maintainAspectRatio: false, cutout: '76%', plugins: { legend: { display: false }, tooltip: { ...tooltipStyle, position: 'nearest', callbacks: { label: item => `${item.parsed.toLocaleString()} 次 · ${Math.round(item.parsed / total * 100)}%` } } } }} />
+      <Doughnut aria-label="处理结果分布图" data={{ labels: rows.map(row => row.name), datasets: [{ data: rows.map(row => row.value), backgroundColor: rows.map(row => row.color), borderWidth: 0, hoverOffset: 5, spacing: 0 }] }} options={{ responsive: true, maintainAspectRatio: false, cutout: '76%', plugins: { legend: { display: false }, tooltip: { ...tooltipStyle, position: 'nearest', callbacks: { label: item => `${item.parsed.toLocaleString()} 次 · ${Math.round(item.parsed / total * 100)}%` } } } }} />
       <Stack sx={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}><Typography variant="h4" sx={{ fontWeight: 750, lineHeight: 1 }}>{total.toLocaleString()}</Typography><Typography variant="caption" color="text.secondary">总请求</Typography></Stack>
     </Box>
     <Box sx={{ minWidth: 0 }}>
@@ -114,8 +114,7 @@ export function SignalChart({ buckets, values, name, color, unit }: { buckets: T
 
 export function FailureTrendChart({ buckets }: { buckets: TrafficBuckets }) {
   const sources = [
-    { label: '审查失败转发', data: buckets.counts.unreviewed, color: '#e6a14b' },
-    { label: '转发请求 5xx', data: buckets.upstreamErrors, color: '#e16a70' }
+    { label: '审查失败转发', data: buckets.counts.unreviewed, color: '#e6a14b' }
   ].filter(source => source.data.some(value => value > 0))
   const datasets = sources.map(source => ({
     label: source.label,

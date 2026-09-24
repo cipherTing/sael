@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -34,6 +35,32 @@ func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
 		s.logout(w, r)
 	case r.URL.Path == "/admin/session" && r.Method == http.MethodGet:
 		writeJSON(w, map[string]bool{"authenticated": true})
+	case r.URL.Path == "/admin/upstream" && r.Method == http.MethodGet:
+		config, err := s.Store.Upstream(r.Context())
+		if err != nil {
+			http.Error(w, "上游配置暂不可用", http.StatusServiceUnavailable)
+			return
+		}
+		writeJSON(w, config.public())
+	case r.URL.Path == "/admin/upstream" && r.Method == http.MethodPut:
+		var input UpstreamConfig
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		if dec.Decode(&input) != nil {
+			http.Error(w, "上游配置格式错误", http.StatusBadRequest)
+			return
+		}
+		input.BaseURL = strings.TrimSpace(input.BaseURL)
+		if _, err := input.target(); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		saved, err := s.Store.UpdateUpstream(r.Context(), input)
+		if err != nil {
+			http.Error(w, "上游配置保存失败", http.StatusServiceUnavailable)
+			return
+		}
+		writeJSON(w, saved.public())
 	case r.URL.Path == "/admin/jev" && r.Method == http.MethodGet:
 		settings, err := s.Store.Jev(r.Context())
 		if err != nil {
@@ -57,6 +84,9 @@ func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
 		input.BaseURL, input.Model = strings.TrimSpace(input.BaseURL), strings.TrimSpace(input.Model)
 		if input.APIKey == "" {
 			input.APIKey = previous.APIKey
+		}
+		if input.TimeoutMS == 0 {
+			input.TimeoutMS = int(previous.timeout().Milliseconds())
 		}
 		if err := input.validate(); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -87,7 +117,7 @@ func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), s.Timeout)
+		ctx, cancel := context.WithTimeout(r.Context(), settings.timeout())
 		defer cancel()
 		started := time.Now()
 		var scores []policy.Answer
@@ -176,11 +206,12 @@ func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, updated)
 	case r.URL.Path == "/admin/overview" && r.Method == http.MethodGet:
-		hours, _ := strconv.Atoi(r.URL.Query().Get("hours"))
-		if hours < 1 || hours > 168 {
-			hours = 24
+		since, until, rangeErr := overviewRange(r.URL.Query(), time.Now().UTC())
+		if rangeErr != nil {
+			http.Error(w, rangeErr.Error(), http.StatusBadRequest)
+			return
 		}
-		result, err := s.Store.Overview(r.Context(), time.Now().Add(-time.Duration(hours)*time.Hour))
+		result, err := s.Store.Overview(r.Context(), since, until)
 		if err != nil {
 			http.Error(w, "statistics unavailable", http.StatusServiceUnavailable)
 			return
@@ -226,12 +257,47 @@ func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
 		if state == "" {
 			state = "not_checked"
 		}
-		value := map[string]any{"classifier": state, "timeout_ms": s.Timeout.Milliseconds(), "concurrency": cap(s.Slots), "in_flight": len(s.Slots), "upstream_url": s.UpstreamURL, "last_checked_at": s.lastCheckedAt, "last_error_kind": s.lastErrorKind, "last_error_at": s.lastErrorAt}
+		value := map[string]any{"classifier": state, "last_checked_at": s.lastCheckedAt, "last_error_kind": s.lastErrorKind, "last_error_at": s.lastErrorAt}
 		s.statusMu.Unlock()
 		writeJSON(w, value)
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+func overviewRange(query url.Values, now time.Time) (time.Time, time.Time, error) {
+	startText, endText := strings.TrimSpace(query.Get("start")), strings.TrimSpace(query.Get("end"))
+	if startText == "" && endText == "" {
+		hours, _ := strconv.Atoi(query.Get("hours"))
+		if hours < 1 || hours > 720 {
+			hours = 24
+		}
+		return now.Add(-time.Duration(hours) * time.Hour), now, nil
+	}
+	if startText == "" || endText == "" {
+		return time.Time{}, time.Time{}, errors.New("开始和结束时间必须同时提供")
+	}
+	parse := func(value string) (time.Time, error) {
+		if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+			return parsed, nil
+		}
+		return time.ParseInLocation("2006-01-02", value, time.UTC)
+	}
+	since, err := parse(startText)
+	if err != nil {
+		return time.Time{}, time.Time{}, errors.New("开始时间格式错误")
+	}
+	until, err := parse(endText)
+	if err != nil {
+		return time.Time{}, time.Time{}, errors.New("结束时间格式错误")
+	}
+	if !until.After(since) {
+		return time.Time{}, time.Time{}, errors.New("结束时间必须晚于开始时间")
+	}
+	if until.Sub(since) > 366*24*time.Hour {
+		return time.Time{}, time.Time{}, errors.New("时间范围不能超过 366 天")
+	}
+	return since, until, nil
 }
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {

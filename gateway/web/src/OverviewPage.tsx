@@ -1,5 +1,5 @@
 import { Link } from 'react-router'
-import { Alert, Box, Button, FormControl, InputLabel, LinearProgress, MenuItem, Paper, Select, Stack, Typography } from '@mui/material'
+import { Alert, Box, Button, LinearProgress, Paper, Stack, Typography } from '@mui/material'
 import TrafficOutlined from '@mui/icons-material/TrafficOutlined'
 import FactCheckOutlined from '@mui/icons-material/FactCheckOutlined'
 import GppMaybeOutlined from '@mui/icons-material/GppMaybeOutlined'
@@ -8,8 +8,9 @@ import type { Overview } from './types'
 import { questionName } from './questionMeta'
 import { buildRequestSeries, buildTrafficBuckets } from './overviewData'
 import { FailureTrendChart, OutcomeChart, outcomeMeta, RankingChart, RequestTrendChart, SignalChart, SparseActivityChart } from './DashboardCharts'
+import { TimeRangePicker, type TimeRangeValue } from './TimeRangePicker'
 
-type Props = { data: Overview; enabled: boolean; hours: number; onHoursChange: (hours: number) => void; onRefresh?: () => void }
+type Props = { data: Overview; enabled: boolean; hours: number; onHoursChange?: (hours: number) => void; range?: TimeRangeValue; onRangeChange?: (range: TimeRangeValue) => void; onRefresh?: () => void }
 
 function percent(part: number, whole: number) {
   if (!whole) return '—'
@@ -32,7 +33,8 @@ function EmptyChart() {
   return <Box sx={{ height: 180, display: 'grid', placeItems: 'center' }}><Typography variant="body2" color="text.secondary">暂无数据</Typography></Box>
 }
 
-export default function OverviewPage({ data, hours, onHoursChange, onRefresh }: Props) {
+export default function OverviewPage({ data, hours, range, onRangeChange, onHoursChange, onRefresh }: Props) {
+  const selectedRange = range || { key: `${hours}h`, label: hours === 24 ? '近 24 小时' : `近 ${hours} 小时`, hours }
   const buckets = buildTrafficBuckets(data.since, hours, data.trend)
   const outcomeTotals = data.trend.reduce<Record<string, number>>((totals, point) => {
     totals[point.outcome] = (totals[point.outcome] || 0) + point.count
@@ -41,7 +43,7 @@ export default function OverviewPage({ data, hours, onHoursChange, onRefresh }: 
   const hasTrend = data.trend.length > 0
   const activeBuckets = buildRequestSeries(buckets).total.filter(value => value > 0).length
   const hasLatency = buckets.latency.filter(value => value !== null).length > 1
-  const hasErrors = buckets.labels.filter((_, index) => buckets.counts.unreviewed[index] > 0 || buckets.upstreamErrors[index] > 0).length > 1
+  const hasErrors = buckets.labels.filter((_, index) => buckets.counts.unreviewed[index] > 0).length > 1
   const hasOutcomes = outcomeMeta.some(item => outcomeTotals[item.key] > 0)
   const hitQuestions = data.questions.filter(item => item.count > 0).sort((a, b) => b.count - a.count).slice(0, 8)
   const scenes = data.scenes.filter(item => item.count > 0).sort((a, b) => b.count - a.count).slice(0, 6)
@@ -49,7 +51,7 @@ export default function OverviewPage({ data, hours, onHoursChange, onRefresh }: 
   return <Stack spacing={2.2}>
     <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ justifyContent: 'space-between', alignItems: { sm: 'center' } }}>
       <Typography variant="h5" sx={{ fontWeight: 750 }}>运行总览</Typography>
-      <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}><FormControl size="small" sx={{ minWidth: 140 }}><InputLabel>时间范围</InputLabel><Select value={hours} label="时间范围" onChange={event => onHoursChange(Number(event.target.value))}><MenuItem value={1}>近 1 小时</MenuItem><MenuItem value={24}>近 24 小时</MenuItem><MenuItem value={168}>近 7 天</MenuItem></Select></FormControl><Button variant="outlined" onClick={onRefresh}>刷新</Button></Stack>
+      <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}><TimeRangePicker value={selectedRange} onChange={next => { if (onRangeChange) onRangeChange(next); else if (next.hours && onHoursChange) onHoursChange(next.hours) }} /><Button variant="outlined" onClick={onRefresh}>刷新</Button></Stack>
     </Stack>
 
     <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', md: 'repeat(4, minmax(0, 1fr))' }, gap: 1.25 }}>
@@ -59,10 +61,9 @@ export default function OverviewPage({ data, hours, onHoursChange, onRefresh }: 
       {metric('策略拦截', data.blocked.toLocaleString(), `${percent(data.blocked, data.checked)} · 已审 ${data.checked.toLocaleString()}`, <BlockOutlined />, '#c66e78', '#fff0f1', '/events?action=block')}
     </Box>
 
-    {(outcomeTotals.gateway_error > 0 || data.unreviewed > 0 || (data.upstream_errors || 0) > 0) && <Stack spacing={0.75}>
+    {(outcomeTotals.gateway_error > 0 || data.unreviewed > 0) && <Stack spacing={0.75}>
       {outcomeTotals.gateway_error > 0 && <Alert severity="error" sx={{ py: 0 }}><Typography component="span" variant="body2">网关处理失败 {outcomeTotals.gateway_error.toLocaleString()} 条</Typography></Alert>}
       {data.unreviewed > 0 && <Alert severity="warning" action={<Button component={Link} to="/events?kind=failure" size="small">查看记录</Button>} sx={{ py: 0 }}><Typography component="span" variant="body2">审查失败后转发 {data.unreviewed.toLocaleString()} 条</Typography><Typography component="span" variant="body2" color="text.secondary"> · 应审请求中 {percent(data.unreviewed, data.checked + data.unreviewed)}</Typography></Alert>}
-      {(data.upstream_errors || 0) > 0 && <Alert severity="info" sx={{ py: 0 }}><Typography component="span" variant="body2">转发请求返回 5xx：{data.upstream_errors?.toLocaleString()} 条</Typography></Alert>}
     </Stack>}
 
     <Panel title="请求量" meta={`每 ${buckets.granularity}`}>

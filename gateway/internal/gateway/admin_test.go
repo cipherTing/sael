@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func login(t *testing.T, s *Server) *http.Cookie {
@@ -39,17 +40,17 @@ func TestRuntimeShowsClassifierFailure(t *testing.T) {
 	}
 }
 
-func TestRuntimeShowsFixedUpstreamOriginWithoutCredentials(t *testing.T) {
+func TestAdminShowsSavedUpstreamOriginWithoutCredentials(t *testing.T) {
 	s, _, _ := makeServer(t, activePolicy(), &testClassifier{})
-	w := adminRequest(t, s, http.MethodGet, "/admin/runtime", "")
-	if w.Code != 200 || !strings.Contains(w.Body.String(), `"upstream_url":"http://`) {
-		t.Fatalf("runtime status=%d body=%s", w.Code, w.Body.String())
+	w := adminRequest(t, s, http.MethodGet, "/admin/upstream", "")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"base_url":"http://`) {
+		t.Fatalf("upstream status=%d body=%s", w.Code, w.Body.String())
 	}
 }
 
 func TestAdminAPIRequiresSession(t *testing.T) {
 	s, _, _ := makeServer(t, activePolicy(), &testClassifier{})
-	for _, path := range []string{"/admin/policy", "/admin/overview", "/admin/events"} {
+	for _, path := range []string{"/admin/policy", "/admin/upstream", "/admin/overview", "/admin/events"} {
 		w := httptest.NewRecorder()
 		s.ServeHTTP(w, httptest.NewRequest("GET", path, http.NoBody))
 		if w.Code != 401 {
@@ -60,6 +61,16 @@ func TestAdminAPIRequiresSession(t *testing.T) {
 	s.ServeHTTP(w, httptest.NewRequest("POST", "/admin/login", strings.NewReader(`{"password":"wrong"}`)))
 	if w.Code != 401 {
 		t.Fatalf("wrong password status=%d", w.Code)
+	}
+}
+
+func TestAdminOverviewAcceptsExplicitDateRange(t *testing.T) {
+	s, store, _ := makeServer(t, activePolicy(), &testClassifier{})
+	w := adminRequest(t, s, http.MethodGet, "/admin/overview?start=2026-09-23T00:00:00%2B08:00&end=2026-09-24T00:00:00%2B08:00", "")
+	start, _ := time.Parse(time.RFC3339, "2026-09-23T00:00:00+08:00")
+	end, _ := time.Parse(time.RFC3339, "2026-09-24T00:00:00+08:00")
+	if w.Code != 200 || !store.overviewSince.Equal(start) || !store.overviewUntil.Equal(end) {
+		t.Fatalf("status=%d since=%s until=%s", w.Code, store.overviewSince, store.overviewUntil)
 	}
 }
 
