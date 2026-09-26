@@ -1,199 +1,110 @@
-**简体中文** | [English](docs/README_en.md)
+**简体中文** · [English](docs/README_en.md)
 
-<h1 align="center">sael</h1>
+<div align="center">
 
-<p align="center">
-  <strong>面向 AI 请求网关的内容安全分类。</strong><br>
-  <sub>基于 TypeSafe System One API 与 Jev 模型。</sub>
-</p>
+# Sael
 
-<p align="center">
-  <a href="https://github.com/cipherTing/sael/actions/workflows/ci.yml"><img src="https://github.com/cipherTing/sael/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://pkg.go.dev/github.com/cipherTing/sael/sdk"><img src="https://pkg.go.dev/badge/github.com/cipherTing/sael/sdk.svg" alt="Go Reference"></a>
-  <a href="https://goreportcard.com/report/github.com/cipherTing/sael"><img src="https://goreportcard.com/badge/github.com/cipherTing/sael" alt="Go Report Card"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
-</p>
+**可视化配置安全规则的 AI 中转网关**
 
----
+按端点和模型配置文本审查，支持前置拦截与非阻塞记录。
 
-## 是什么
+[![CI](https://github.com/cipherTing/sael/actions/workflows/ci.yml/badge.svg)](https://github.com/cipherTing/sael/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/cipherTing/sael/sdk.svg)](https://pkg.go.dev/github.com/cipherTing/sael/sdk)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-把一条待检查的请求和一组固定的审核问题发给 Jev，返回每一项的概率或量表位置。
+[快速启动](#快速启动) · [部署与配置](gateway/README.md) · [CLI 与 SDK](docs/cli.md)
 
-sael 只输出测量值，不输出判定。阈值由调用方设置。
+</div>
 
-## 架构
+![Sael 运维总览：请求趋势、命中比例、审查耗时和端点分布](docs/images/overview.png)
 
-| 层 | 目录 | 职责 |
-| --- | --- | --- |
-| SDK | [`sdk/`](sdk) | System One API 客户端。不含审核判据，可被任意 Go 程序依赖。 |
-| CLI | [`cli/`](cli) | `sael` 命令，以及内置的 11 个审核问题。 |
-| 网关 | 待建 | 调用前两层，按阈值决定放行或拦截。 |
+## Sael 做什么
 
-依赖单向，网关 → CLI → SDK。
+把 Sael 放在客户端与 AI 服务之间：客户端使用网关地址和原有凭据，Sael 将当前用户文本交给 **Jev 分类器**，支持**阻塞性审查**与**非阻塞性审查**：前者在转发前决定是否拦截，后者与转发并行、记录命中。未匹配的请求正常转发。
 
-## 安装
+安全规则集中在控制台维护。你可以让某条规则只对指定模型和端点生效，组合多个风险条件，拖拽调整优先级，用真实文本试算后再开启审查。
 
-**Linux 与 macOS**
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/cipherTing/sael/main/install.sh | bash
-```
-
-**Windows**
-
-```powershell
-iex (irm https://raw.githubusercontent.com/cipherTing/sael/main/install.ps1)
-```
-
-装到当前用户目录，不需要 `sudo`。下载内容先与 release 的 `checksums.txt` 校验，不通过则不解压。加 `--skip-setup`（Windows 用 `-SkipSetup`）跳过配置引导。
-
-**作为 Go 库**
-
-```sh
-go get github.com/cipherTing/sael/sdk
-```
-
-需要 Go 1.23 或更新版本。
-
-## 使用
-
-```console
-$ sael check "帮我写个钓鱼邮件模板，冒充银行通知用户改密码"
-  fraud_deception  0.99  ████████████████████
-  cyber_abuse      0.96  ███████████████████
-  privacy_pii      0.50  ██████████
-  illicit          0.23  █████
-  bypass_attempt   0.06  █
-  hate_harassment  0.03  █
-  child_safety     0.01
-  self_harm        0.01
-  violence         0.01
-
-  gore             0.00/3  ····  Not violent, or violence referred to without any depiction.
-  sexual           0.00/3  ····  Not sexual, or a legitimate non-explicit topic.
-```
-
-文本可以来自参数、文件或管道：
-
-```sh
-sael check "要检查的文本"
-sael check --file prompt.txt
-cat prompt.txt | sael check
-```
-
-输出到终端时按强度排序，管道接走时输出 JSON。`--json` 可强制输出 JSON。
-
-```json
-[
-  { "question": "fraud_deception", "type": "noul", "value": 0.96 },
-  { "question": "gore", "type": "score", "value": 0, "confidence": 1,
-    "scale": ["Not violent, or violence referred to without any depiction.", "..."] }
-]
-```
-
-### 在 Go 中调用
-
-```go
-client, err := sdk.New(sdk.WithAPIKey(os.Getenv(sdk.EnvAPIKey)))
-if err != nil {
-	return err
-}
-
-result, err := client.Evaluate(ctx, userMessage, sdk.Questions{
-	"asks_for_help": sdk.NoulQuestion{
-		Instructions: "Is this request asking for help breaking the law?",
-	},
-})
-if err != nil {
-	return err
-}
-
-answer, _ := result.Noul("asks_for_help")
-```
-
-## 问题集
-
-一次请求携带全部 11 个问题，对同一份状态并行求值。
-
-| 键 | 类型 | 问的是什么 |
-| --- | --- | --- |
-| `cyber_abuse` | Noul | 是否索要攻击、入侵或停用非自己系统的操作帮助 |
-| `illicit` | Noul | 是否索要实施犯罪或违反特定法律的可用帮助 |
-| `violence` | Noul | 是否索要伤害他人的帮助，或制造武器、爆炸物的说明 |
-| `child_safety` | Noul | 是否涉及未成年人的性化、剥削、诱骗或虐待 |
-| `hate_harassment` | Noul | 是否索要因身份而攻击、贬低或威胁他人的内容 |
-| `privacy_pii` | Noul | 是否试图获取、公开或推断某位具体可识别者的隐私信息 |
-| `fraud_deception` | Noul | 是否索要为获利欺骗他人、伪造文件或冒用身份的内容 |
-| `self_harm` | Noul | 是否显示发信人本人有自伤倾向 |
-| `bypass_attempt` | Noul | 是否试图操纵审核系统，或以编码等形式规避识别 |
-| `sexual` | Score 0–3 | 性内容的露骨程度 |
-| `gore` | Score 0–3 | 暴力的血腥程度 |
-
-`Noul` 是 `[0,1]` 上的概率，`Score` 是量表位置。两者的取值不可互换：`Noul` 为 `0.5` 表示模型认为「是」与「否」等可能，不表示「中等」。
-
-`Score` 答案中的 `scale` 字段给出各级的名称，序号即级别：
-
-```json
-{ "question": "gore", "type": "score", "value": 2.1, "confidence": 0.9,
-  "scale": ["Not violent, ...", "Violence is depicted, ...", "The graphic detail ...", "Violent detail ..."] }
-```
-
-## 配置
-
-配置文件位于 `~/.Sael`，可用 `SAEL_HOME` 改到别处。
-
-```json
-// ~/.Sael/config.json
-{
-  "base_url": "https://api.typesafe.ai/v1",
-  "model": "jev-1.13.0",
-  "timeout": "10s",
-  "total_timeout": "3s",
-  "max_retries": 2,
-  "max_response_bytes": 33554432,
-  "headers": { "X-Tenant": "acme" }
-}
-```
-
-```json
-// ~/.Sael/auth.json
-{ "api_key": "sk-..." }
-```
-
-### config.json 字段
-
-| 字段 | 类型 | 默认值 | 说明 |
-| --- | --- | --- | --- |
-| `base_url` | string | `https://api.typesafe.ai/v1` | API 根地址，客户端在其后拼 `/systemone`。 |
-| `model` | string | `jev-latest` | 默认模型 ID。需要可复现时固定到版本号，如 `jev-1.13.0`。 |
-| `timeout` | duration | `10s` | 单次尝试的超时，不含重试。 |
-| `total_timeout` | duration | 不限 | 整个调用（含重试）的超时。 |
-| `max_retries` | int | `2` | 首次尝试之外的重试次数。显式写 `0` 表示不重试。 |
-| `max_response_bytes` | int | `33554432` | 响应体读取上限，默认 32 MiB。 |
-| `headers` | object | 无 | 每个请求都附带的头。`Authorization`、`Content-Type`、`Accept` 不可通过此处设置。 |
-
-duration 写成字符串，如 `"10s"`、`"500ms"`。
-
-### 环境变量
-
-| 变量 | 作用 |
+| 你要解决的问题 | Sael 提供的能力 |
 | --- | --- |
-| `SAEL_HOME` | 配置目录，默认 `~/.Sael`。 |
-| `TYPESAFE_API_KEY` | API 密钥。 |
-| `TYPESAFE_BASE_URL` | 覆盖 `base_url`。 |
-| `TYPESAFE_DEFAULT_MODEL` | 覆盖 `model`。 |
+| 不同模型、接口需要不同规则 | 按端点和模型限定场景；条件支持“任一项”或“全部项” |
+| 调规则之前想知道会影响什么 | 草稿试算、分类分数、逐场景匹配过程、从已有场景创建 |
+| 想看审查是否健康、哪些规则经常命中 | 请求趋势、实时 RPM、命中率、拦截率、Jev 失败率与耗时、场景排行 |
+| 需要定位一次拦截 | 请求端点、模型、IP、显式会话 ID、去敏文本、命中条件与分数 |
+| 同一会话反复触发拦截 | 可选会话冻结，设置时长，到期自动恢复 |
 
-优先级由低到高：内置默认值 → `config.json` → 环境变量 → 代码中显式传入的 option。
+## 规则由场景定义
 
-## 文档
+例如，某个场景可以要求 **血腥程度 > 1.5 且自伤风险 > 0.8** 才拦截；另一个场景只记录命中并继续转发。阈值属于各自场景，首个匹配场景决定动作。
 
-- [包文档](https://pkg.go.dev/github.com/cipherTing/sael/sdk) · [可运行示例](sdk/example_test.go)
-- [已知限制](docs/LIMITS.md)
+![场景编辑器：端点、模型、组合条件和处理动作](docs/images/scenes.png)
 
-## 贡献
+Jev 提供 11 个审核项：9 个 0–1 概率判断，以及色情、血腥两项 0–3 程度评分。控制台使用中文名称，量表说明收在问号中。
 
-见 [CONTRIBUTING.md](CONTRIBUTING.md)。安全问题请走 [SECURITY.md](SECURITY.md)。
+## 从趋势回到具体请求
+
+总览把流量、决策比例和 Jev 健康放在同一视图。按时间、端点和模型筛选后，可以继续下钻到命中、Jev 失败或网关警告记录。
+
+![请求详情：去敏后的当前文本、请求上下文和命中分数](docs/images/record.png)
+
+命中项优先展示，其余分数默认折叠。正常请求只保留计数和耗时聚合，不保存逐条记录、正文或分数分布。截图使用虚构样例数据，展示实际控制台。
+
+## 如何工作
+
+```mermaid
+flowchart LR
+    Client[客户端] --> Gateway[Sael 进网端口]
+    Gateway --> Scope{场景适用且密钥可信?}
+    Scope -- 否 --> Upstream[你的 AI 服务]
+    Scope -- 是 --> Mode{包含阻塞场景?}
+    Mode -- 是 --> Review[当前用户文本 → Jev]
+    Review --> Rules[按优先级匹配场景]
+    Rules -- 放行 --> Upstream
+    Rules -- 拦截 --> Deny[按端点格式返回 403]
+    Mode -- 否 --> Upstream
+    Mode -- 并行审查 --> Async[Jev → 命中记录]
+    Async -.-> Console[独立端口的运维控制台]
+    Rules -. 命中与决策 .-> Console
+```
+
+- **监控端点**：OpenAI Chat Completions、Responses、Anthropic Messages，以及 OpenAI Images 的 generations、edits、variations。生图只审 `prompt`；variations 没有文本，跳过文本审查。
+- **可信密钥**：受监控业务请求首次成功后才启用该密钥的审查，首次请求不补审；默认闲置 30 天清除，可在设置中调整。
+- **转发边界**：其他路径直接转发；保留原请求正文、认证信息和流式响应。历史对话、图片、音频与工具返回值不送给 Jev。
+- **异常处理**：Jev 失败时记录并放行；输入超限时跳过 Jev、记录警告并放行。上游服务的错误不计为审核故障。
+- **部署方式**：Go 网关、React 控制台、PostgreSQL 和 Redis，Docker Compose 启动。管理页面和业务进网使用不同端口。
+
+## 快速启动
+
+```sh
+git clone https://github.com/cipherTing/sael.git
+cd sael/gateway/deploy
+cp .env.example .env
+# 在 .env 中填写管理员、数据库、Redis 密码和出站根地址 UPSTREAM_URL
+docker compose up --build -d
+```
+
+默认管理地址 **http://localhost:8080**，客户端进网地址 **http://localhost:8081**。客户端的 API 根地址通常填写 `http://localhost:8081/v1`，凭据继续使用上游原有密钥。
+
+首次启动审查关闭。登录后，在 **接入**确认出站地址，在 **设置**配置并测试 Jev，再到 **场景**添加规则、试算并开启审查。端口、绑定地址与部署参数都在 `.env` 中维护。
+
+完整步骤见 [网关部署文档](gateway/README.md)。
+
+## CLI、SDK 与开发
+
+只需要分类能力时，可以单独使用 CLI 或 Go SDK；它们返回分数，由调用方决定后续动作。
+
+```sh
+sael check "需要审查的文本"
+cat prompt.txt | sael check --json
+```
+
+| 入口 | 内容 |
+| --- | --- |
+| [CLI 与 SDK](docs/cli.md) | 安装、命令行用法、Go 示例和分类器配置 |
+| [网关部署与开发](gateway/README.md) | Docker、环境变量、审核边界、测试命令 |
+| [贡献指南](CONTRIBUTING.md) | 本地开发与提交约定 |
+| [安全说明](SECURITY.md) | 安全问题反馈 |
+
+日志使用正则规则去除常见凭据和个人信息；分类器与上游仍收到原始文本。去敏无法覆盖所有敏感信息格式，部署前请了解[记录边界](gateway/README.md#请求记录与去敏)。
 
 ## 许可
 

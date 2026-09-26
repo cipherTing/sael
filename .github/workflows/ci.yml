@@ -17,7 +17,7 @@ permissions:
   contents: read
 
 jobs:
-  # The two modules are tested separately rather than together. They are separate
+  # The modules are tested separately rather than together. They are separate
   # so that a user can depend on the SDK without the CLI, and a failure has to
   # name which one broke: "the SDK stopped compiling on Windows" and "the CLI
   # stopped compiling on Windows" are different problems with different owners.
@@ -29,7 +29,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         go: ['1.23', 'stable']
-        module: [sdk, cli]
+        module: [sdk, cli, gateway]
+        exclude:
+          - module: gateway
+            go: '1.23'
     defaults:
       run:
         # Every run step below happens inside one module. The replace directive in
@@ -41,10 +44,11 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           # No root go.mod here, so setup-go's default dependency file is
-          # missing and it throws. Name both modules instead.
+          # missing and it throws. Name all modules instead.
           cache-dependency-path: |
             sdk/go.sum
             cli/go.sum
+            gateway/go.sum
           go-version: ${{ matrix.go }}
           check-latest: true
 
@@ -57,6 +61,68 @@ jobs:
       - name: Test with the race detector
         run: go test -race -short -count=1 ./...
 
+  web:
+    name: gateway web
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gateway/web
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: gateway/web/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+
+  docker:
+    name: gateway Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker build -f gateway/deploy/Dockerfile -t sael-gateway:ci .
+
+  gateway-db:
+    name: gateway PostgreSQL and Redis integration
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: sael_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d sael_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          cache-dependency-path: gateway/go.sum
+      - name: Test PostgreSQL and Redis persistence and recovery
+        working-directory: gateway
+        env:
+          TEST_DATABASE_URL: postgres://postgres:test@127.0.0.1:5432/sael_test?sslmode=disable
+          TEST_REDIS_URL: redis://127.0.0.1:6379/15
+        run: go test -race -count=1 ./internal/store
+
   # The checks here are invoked through make, which is the single source of truth
   # for what "clean" means and for the pinned linter versions. Running the same
   # commands a developer runs is the only way the two cannot disagree; spelling
@@ -66,7 +132,7 @@ jobs:
   # The golangci-lint GitHub action is not used, and the trade is deliberate: it
   # would give pull-request annotations, but it needs the version string passed to
   # it, which reintroduces the second copy of the pin. `make lint` runs exactly the
-  # pinned version, on both modules.
+  # pinned version, on all modules.
   lint:
     name: lint
     runs-on: ubuntu-latest
@@ -76,10 +142,11 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           # No root go.mod here, so setup-go's default dependency file is
-          # missing and it throws. Name both modules instead.
+          # missing and it throws. Name all modules instead.
           cache-dependency-path: |
             sdk/go.sum
             cli/go.sum
+            gateway/go.sum
           go-version: stable
 
       - name: Format, tidy, vet, lint every module, and check the workflows
@@ -98,10 +165,11 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           # No root go.mod here, so setup-go's default dependency file is
-          # missing and it throws. Name both modules instead.
+          # missing and it throws. Name all modules instead.
           cache-dependency-path: |
             sdk/go.sum
             cli/go.sum
+            gateway/go.sum
           go-version: stable
 
       - name: Check for a key
@@ -131,10 +199,11 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           # No root go.mod here, so setup-go's default dependency file is
-          # missing and it throws. Name both modules instead.
+          # missing and it throws. Name all modules instead.
           cache-dependency-path: |
             sdk/go.sum
             cli/go.sum
+            gateway/go.sum
           go-version: stable
 
       # One profile per module. They cannot be merged into a single profile
@@ -152,4 +221,6 @@ jobs:
             sdk/coverage.html
             cli/coverage.out
             cli/coverage.html
+            gateway/coverage.out
+            gateway/coverage.html
           retention-days: 7
