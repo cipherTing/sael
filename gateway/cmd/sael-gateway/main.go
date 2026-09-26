@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -43,16 +44,31 @@ func run() error {
 			return err
 		}
 	}
-	api := gateway.New(db, classifier.CLI{Path: cfg.CLIPath}, cfg.AdminPassword)
+	if err := db.SeedJevDefaults(ctx, cfg.JevMaxInputTokens); err != nil {
+		return err
+	}
+	runtimeStore, err := store.OpenRedis(ctx, db, cfg.RedisURL)
+	if err != nil {
+		return err
+	}
+	defer runtimeStore.Close()
+	direct := classifier.NewSDK()
+	defer direct.Close()
+	var detector gateway.Classifier = direct
+	if cfg.CLIPath != "" {
+		detector = classifier.CLI{Path: cfg.CLIPath}
+	}
+	api := gateway.New(runtimeStore, detector, cfg.AdminPassword)
+	defer api.Close()
 	api.Timeout = cfg.Timeout
-	api.Slots = make(chan struct{}, cfg.Concurrency)
-	server := &http.Server{Addr: cfg.Listen, Handler: webHandler(api, cfg.WebDir), ReadHeaderTimeout: 10 * time.Second}
-	go func() {
-		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_ = server.Shutdown(shutdownCtx)
-	}()
+	api.MaxBodyBytes = cfg.MaxRequestBodySize
+	api.AsyncReviewConcurrency = cfg.AsyncReviewConcurrency
+	api.TrustedProxies = cfg.TrustedProxies
+	api.IngressAddress, api.PublicIngressURL = cfg.Listen, cfg.PublicIngressURL
+	servers := []*http.Server{
+		{Addr: cfg.AdminListen, Handler: webHandler(api.AdminHandler(), cfg.WebDir), ReadHeaderTimeout: cfg.ReadHeaderTimeout, MaxHeaderBytes: cfg.MaxHeaderBytes, IdleTimeout: cfg.IdleTimeout},
+		{Addr: cfg.Listen, Handler: api, ReadHeaderTimeout: cfg.ReadHeaderTimeout, MaxHeaderBytes: cfg.MaxHeaderBytes, IdleTimeout: cfg.IdleTimeout},
+	}
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
@@ -66,9 +82,18 @@ func run() error {
 				if err := db.Replay(work); err != nil {
 					slog.Error("local spool replay failed", "error", err)
 				}
+				if p, err := runtimeStore.Policy(work); err == nil {
+					if err := runtimeStore.PruneTrustedKeys(work, p.TrustedKeyIdle()); err != nil {
+						slog.Warn("trusted credential cleanup failed", "error", err)
+					}
+				}
 				if time.Since(lastPrune) >= 24*time.Hour {
-					if p, err := db.Policy(work); err == nil && p.RetentionDays != nil {
-						if err := db.Prune(work, *p.RetentionDays); err != nil {
+					if p, err := db.Policy(work); err == nil {
+						days := 0
+						if p.RetentionDays != nil {
+							days = *p.RetentionDays
+						}
+						if err := db.Prune(work, days); err != nil {
 							slog.Error("event pruning failed", "error", err)
 						} else {
 							lastPrune = time.Now()
@@ -79,19 +104,53 @@ func run() error {
 			}
 		}
 	}()
-	slog.Info("gateway listening", "address", cfg.Listen)
-	err = server.ListenAndServe()
-	if errors.Is(err, http.ErrServerClosed) {
+	slog.Info("gateway listening", "admin", cfg.AdminListen, "ingress", cfg.Listen)
+	return serve(ctx, servers)
+}
+
+func serve(ctx context.Context, servers []*http.Server) error {
+	listeners := make([]net.Listener, 0, len(servers))
+	for _, server := range servers {
+		listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", server.Addr)
+		if err != nil {
+			for _, open := range listeners {
+				_ = open.Close()
+			}
+			return err
+		}
+		listeners = append(listeners, listener)
+	}
+	errorsCh := make(chan error, len(servers))
+	for i, server := range servers {
+		go func() { errorsCh <- server.Serve(listeners[i]) }()
+	}
+	var result error
+	select {
+	case <-ctx.Done():
+	case result = <-errorsCh:
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for _, server := range servers {
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			_ = server.Close()
+		}
+	}
+	if errors.Is(result, http.ErrServerClosed) {
 		return nil
 	}
-	return err
+	return result
 }
 
 func webHandler(api http.Handler, dir string) http.Handler {
 	files := http.FileServer(http.Dir(dir))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/admin/") || strings.HasPrefix(r.URL.Path, "/v1/") || strings.HasPrefix(r.URL.Path, "/v1beta/") {
+		if strings.HasPrefix(r.URL.Path, "/admin/") {
 			api.ServeHTTP(w, r)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/v1/") || strings.HasPrefix(r.URL.Path, "/v1beta/") {
+			http.NotFound(w, r)
 			return
 		}
 		if r.URL.Path == "/healthz" {

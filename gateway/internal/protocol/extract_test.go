@@ -1,6 +1,11 @@
 package protocol
 
-import "testing"
+import (
+	"bytes"
+	"mime/multipart"
+	"net/textproto"
+	"testing"
+)
 
 func TestExtractCurrentUserText(t *testing.T) {
 	tests := []struct {
@@ -38,5 +43,84 @@ func TestExtractRejectsInvalidJSON(t *testing.T) {
 func TestExtractRejectsUnsupportedPath(t *testing.T) {
 	if _, err := Extract("/other", []byte(`{}`)); err == nil {
 		t.Fatal("expected unsupported path error")
+	}
+}
+
+func TestImageGenerationPromptIsMonitored(t *testing.T) {
+	got, err := ExtractWithContentType("/v1/images/generations", "application/json", []byte(`{"model":"gpt-image-1","prompt":"draw a quiet lake"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Protocol != "openai_images_generations" || got.Model != "gpt-image-1" || got.Text != "draw a quiet lake" || got.HasNonText {
+		t.Fatalf("unexpected image generation request: %+v", got)
+	}
+}
+
+func TestJSONImageEditReviewsPromptOnly(t *testing.T) {
+	got, err := ExtractWithContentType("/v1/images/edits", "application/json", []byte(`{"model":"image-test","prompt":"add a tree","images":[{"image_url":"data:image/png;base64,private"}],"mask":"private"}`))
+	if err != nil || got.Text != "add a tree" || !got.HasNonText || got.Model != "image-test" {
+		t.Fatalf("missed edit prompt: %+v %v", got, err)
+	}
+}
+
+func TestImageEditExtractsPromptAndIgnoresFiles(t *testing.T) {
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	_ = writer.WriteField("model", "gpt-image-1")
+	_ = writer.WriteField("prompt", "add a sailboat")
+	header := make(textproto.MIMEHeader)
+	header.Set("Content-Disposition", `form-data; name="image"; filename="secret.png"`)
+	header.Set("Content-Type", "image/png")
+	part, err := writer.CreatePart(header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = part.Write([]byte("image-bytes-must-not-be-sent-to-jev"))
+	_ = writer.Close()
+
+	got, err := ExtractWithContentType("/v1/images/edits", writer.FormDataContentType(), body.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Protocol != "openai_images_edits" || got.Model != "gpt-image-1" || got.Text != "add a sailboat" || !got.HasNonText {
+		t.Fatalf("unexpected image edit request: %+v", got)
+	}
+}
+
+func TestImageVariationIsMonitoredButHasNoPrompt(t *testing.T) {
+	got, err := ExtractWithContentType("/v1/images/variations", "multipart/form-data; boundary=missing", []byte{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Protocol != "openai_images_variations" || got.Text != "" || !got.HasNonText {
+		t.Fatalf("unexpected image variation request: %+v", got)
+	}
+}
+
+func TestNonMonitoredEndpointIsNotInCatalog(t *testing.T) {
+	if Monitored("openai_embeddings") || Supported("/v1/embeddings") {
+		t.Fatal("unmonitored endpoint must remain transparent")
+	}
+}
+
+func TestEndpointParametersKeepOnlySelectedRequestOptions(t *testing.T) {
+	for _, tc := range []struct {
+		path, body string
+		check      func(Parameters) bool
+	}{
+		{"/v1/chat/completions", `{"messages":[{"role":"user","content":"hi"}],"reasoning_effort":"high","max_completion_tokens":200,"temperature":0,"tools":[{},{}],"response_format":{"type":"json_schema","schema":{"secret":"ignored"}}}`, func(p Parameters) bool {
+			return p.ReasoningEffort == "high" && p.MaxCompletionTokens != nil && *p.MaxCompletionTokens == 200 && p.Temperature != nil && *p.Temperature == 0 && p.ToolCount == 2 && p.ResponseFormat == "json_schema"
+		}},
+		{"/v1/messages", `{"messages":[{"role":"user","content":"hi"}],"thinking":{"type":"enabled","budget_tokens":4096},"output_config":{"effort":"max"},"max_tokens":8192}`, func(p Parameters) bool {
+			return p.ThinkingType == "enabled" && p.ThinkingBudget != nil && *p.ThinkingBudget == 4096 && p.ReasoningEffort == "max"
+		}},
+		{"/v1/responses", `{"input":"hi","conversation":{"id":"conv_123"},"max_output_tokens":"invalid"}`, func(p Parameters) bool { return p.ConversationID == "conv_123" && p.MaxOutputTokens == nil }},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			got, err := Extract(tc.path, []byte(tc.body))
+			if err != nil || !tc.check(got.Parameters) {
+				t.Fatalf("%+v %v", got, err)
+			}
+		})
 	}
 }

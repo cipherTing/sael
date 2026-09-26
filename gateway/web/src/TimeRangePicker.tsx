@@ -1,118 +1,282 @@
-import { useState } from 'react'
-import { ArrowForwardOutlined, CalendarMonthOutlined } from '@mui/icons-material'
-import { Box, Button, Divider, Paper, Popover, Stack, TextField, Typography } from '@mui/material'
+import { useState } from "react";
+import { CalendarDays, ChevronDown } from "lucide-react";
+import { zhCN } from "react-day-picker/locale";
+import {
+  format,
+  startOfDay,
+  subDays,
+  startOfWeek,
+  startOfMonth,
+  subMonths,
+} from "date-fns";
+import { Button } from "./components/ui/button";
+import { Input } from "./components/ui/input";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "./components/ui/popover";
+import { Calendar } from "./components/ui/calendar";
 
 export type TimeRangeValue = {
-  key: string
-  label: string
-  hours: number
-  start?: string
-  end?: string
-  startDate?: string
-  endDate?: string
-}
-
-function dateInputValue(date: Date) {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
-function localDay(value: string) {
-  const [year, month, day] = value.split('-').map(Number)
-  return new Date(year, month - 1, day)
-}
-
-function exactRange(key: string, label: string, startDate: string, endDate: string): TimeRangeValue {
-  const start = localDay(startDate)
-  const end = localDay(endDate)
-  end.setDate(end.getDate() + 1)
+  key: string;
+  label: string;
+  hours: number;
+  start?: string;
+  end?: string;
+  startDate?: string;
+  endDate?: string;
+};
+const relative = [
+  { key: "15m", label: "近 15 分钟", hours: 0.25 },
+  { key: "1h", label: "近 1 小时", hours: 1 },
+  { key: "6h", label: "近 6 小时", hours: 6 },
+  { key: "24h", label: "近 24 小时", hours: 24 },
+  { key: "3d", label: "近 3 天", hours: 72 },
+  { key: "7d", label: "近 7 天", hours: 168 },
+  { key: "14d", label: "近 14 天", hours: 336 },
+  { key: "30d", label: "近 30 天", hours: 720 },
+];
+const dateText = (date: Date) => format(date, "yyyy-MM-dd");
+const calendarLabels: Record<string, string> = {
+  today: "今天",
+  yesterday: "昨天",
+  week: "本周",
+  month: "本月",
+  lastMonth: "上月",
+};
+function calendarRange(key: string, now = new Date()): TimeRangeValue {
+  let from = startOfDay(now),
+    to = now;
+  if (key === "yesterday") {
+    from = subDays(from, 1);
+    to = startOfDay(now);
+  }
+  if (key === "week") from = startOfWeek(now, { weekStartsOn: 1 });
+  if (key === "month") from = startOfMonth(now);
+  if (key === "lastMonth") {
+    from = startOfMonth(subMonths(now, 1));
+    to = startOfMonth(now);
+  }
   return {
     key,
-    label,
-    hours: Math.max(1, Math.round((end.getTime() - start.getTime()) / 3_600_000)),
-    start: start.toISOString(),
-    end: end.toISOString(),
-    startDate,
-    endDate
-  }
+    label: calendarLabels[key],
+    hours: (to.getTime() - from.getTime()) / 3600000,
+    start: from.toISOString(),
+    end: to.toISOString(),
+  };
 }
-
-function quickRanges(now = new Date()): TimeRangeValue[] {
-  const today = dateInputValue(now)
-  const todayDate = localDay(today)
-  const yesterdayDate = new Date(todayDate)
-  yesterdayDate.setDate(yesterdayDate.getDate() - 1)
-  const yesterday = dateInputValue(yesterdayDate)
-  const monthStart = new Date(todayDate.getFullYear(), todayDate.getMonth(), 1)
-  const nextMonthStart = new Date(todayDate.getFullYear(), todayDate.getMonth() + 1, 1)
-  const previousMonthStart = new Date(todayDate.getFullYear(), todayDate.getMonth() - 1, 1)
-  const monthEnd = new Date(nextMonthStart)
-  monthEnd.setDate(monthEnd.getDate() - 1)
-  const previousMonthEnd = new Date(monthStart)
-  previousMonthEnd.setDate(previousMonthEnd.getDate() - 1)
-  return [
-    exactRange('today', '今天', today, today),
-    exactRange('yesterday', '昨天', yesterday, yesterday),
-    { key: '1h', label: '近 1 小时', hours: 1 },
-    { key: '6h', label: '近 6 小时', hours: 6 },
-    { key: '12h', label: '近 12 小时', hours: 12 },
-    { key: '24h', label: '近 24 小时', hours: 24 },
-    { key: '7d', label: '近 7 天', hours: 168 },
-    { key: '14d', label: '近 14 天', hours: 336 },
-    { key: '30d', label: '近 30 天', hours: 720 },
-    exactRange('month', '本月', dateInputValue(monthStart), dateInputValue(monthEnd)),
-    exactRange('last-month', '上月', dateInputValue(previousMonthStart), dateInputValue(previousMonthEnd))
-  ]
-}
-
-function defaultDraft(value: TimeRangeValue) {
-  const end = new Date()
-  const start = new Date(end.getTime() - Math.min(value.hours, 24) * 3_600_000)
-  return { start: value.startDate || dateInputValue(start), end: value.endDate || dateInputValue(end) }
-}
-
-export function TimeRangePicker({ value, onChange }: { value: TimeRangeValue; onChange: (value: TimeRangeValue) => void }) {
-  const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null)
-  const draft = defaultDraft(value)
-  const [startDate, setStartDate] = useState(draft.start)
-  const [endDate, setEndDate] = useState(draft.end)
-  const open = Boolean(anchorEl)
-  const ranges = quickRanges()
-  const customValid = Boolean(startDate && endDate && endDate >= startDate)
-
-  function openPicker(event: React.MouseEvent<HTMLElement>) {
-    const next = defaultDraft(value)
-    setStartDate(next.start)
-    setEndDate(next.end)
-    setAnchorEl(event.currentTarget)
+export function requestRange(query: URLSearchParams, now = new Date()) {
+  const next = new URLSearchParams(query),
+    key = next.get("range") || "";
+  next.delete("range");
+  if (Object.hasOwn(calendarLabels, key)) {
+    const value = calendarRange(key, now);
+    next.delete("minutes");
+    next.set("start", value.start!);
+    next.set("end", value.end!);
   }
-
-  function applyCustom() {
-    if (!customValid) return
-    onChange(exactRange('custom', `${startDate.replaceAll('-', '/')} – ${endDate.replaceAll('-', '/')}`, startDate, endDate))
-    setAnchorEl(null)
+  return next;
+}
+export function rangeFromQuery(query: URLSearchParams): TimeRangeValue {
+  const key = query.get("range") || "";
+  if (Object.hasOwn(calendarLabels, key)) return calendarRange(key);
+  const start = query.get("start"),
+    end = query.get("end");
+  if (start && end)
+    return {
+      key: "custom",
+      label: `${format(new Date(start), "MM/dd HH:mm")} – ${format(new Date(end), "MM/dd HH:mm")}`,
+      hours: (Date.parse(end) - Date.parse(start)) / 3600000,
+      start,
+      end,
+      startDate: dateText(new Date(start)),
+      endDate: dateText(new Date(Date.parse(end) - 1)),
+    };
+  const hours = Number(query.get("minutes") || 1440) / 60;
+  return (
+    relative.find((item) => item.hours === hours) || {
+      key: "relative",
+      label: `近 ${hours} 小时`,
+      hours,
+    }
+  );
+}
+export function rangeQuery(query: URLSearchParams, value: TimeRangeValue) {
+  const next = new URLSearchParams(query);
+  for (const key of ["minutes", "hours", "start", "end", "range"])
+    next.delete(key);
+  if (Object.hasOwn(calendarLabels, value.key)) next.set("range", value.key);
+  else if (value.start && value.end) {
+    next.set("start", value.start);
+    next.set("end", value.end);
+  } else next.set("minutes", String(Math.round(value.hours * 60)));
+  return next;
+}
+export function TimeRangePicker({
+  value,
+  onChange,
+}: {
+  value: TimeRangeValue;
+  onChange: (v: TimeRangeValue) => void;
+}) {
+  const [open, setOpen] = useState(false),
+    [start, setStart] = useState(
+      value.startDate || dateText(subDays(new Date(), 1)),
+    ),
+    [end, setEnd] = useState(value.endDate || dateText(new Date())),
+    [startTime, setStartTime] = useState("00:00"),
+    [endTime, setEndTime] = useState("23:59"),
+    [error, setError] = useState("");
+  function choose(v: TimeRangeValue) {
+    onChange(v);
+    setOpen(false);
+    setError("");
   }
-
-  return <>
-    <Button aria-label={`时间范围：${value.label}`} variant="outlined" size="small" startIcon={<CalendarMonthOutlined />} onClick={openPicker} sx={{ minWidth: 150, justifyContent: 'flex-start', whiteSpace: 'nowrap' }}>
-      {value.label}
-    </Button>
-    <Popover open={open} anchorEl={anchorEl} onClose={() => setAnchorEl(null)} anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }} transformOrigin={{ vertical: 'top', horizontal: 'right' }}>
-      <Paper sx={{ width: { xs: 320, sm: 420 }, p: 1.5 }}>
-        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 0.5 }}>
-          {ranges.map(range => <Button key={range.key} size="small" color={range.key === value.key ? 'primary' : 'inherit'} variant={range.key === value.key ? 'contained' : 'text'} onClick={() => { onChange(range); setAnchorEl(null) }} sx={{ minHeight: 36, justifyContent: 'center' }}>{range.label}</Button>)}
-        </Box>
-        <Divider sx={{ my: 1.25 }} />
-        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ alignItems: { sm: 'center' } }}>
-          <TextField size="small" type="date" label="开始日期" value={startDate} onChange={event => setStartDate(event.target.value)} slotProps={{ inputLabel: { shrink: true } }} fullWidth />
-          <ArrowForwardOutlined sx={{ color: 'text.secondary', display: { xs: 'none', sm: 'block' } }} />
-          <TextField size="small" type="date" label="结束日期" value={endDate} onChange={event => setEndDate(event.target.value)} slotProps={{ inputLabel: { shrink: true } }} fullWidth />
-          <Button variant="contained" onClick={applyCustom} disabled={!customValid} sx={{ minWidth: 72 }}>应用</Button>
-        </Stack>
-        {!customValid && <Typography variant="caption" color="error" sx={{ display: 'block', mt: 0.75 }}>结束日期不能早于开始日期</Typography>}
-      </Paper>
+  function apply() {
+    const from = new Date(`${start}T${startTime}`),
+      to = new Date(new Date(`${end}T${endTime}`).getTime() + 60000);
+    if (
+      !Number.isFinite(from.getTime()) ||
+      !Number.isFinite(to.getTime()) ||
+      to <= from
+    ) {
+      setError("请选择有效的开始和结束时间");
+      return;
+    }
+    if (to.getTime() - from.getTime() > 366 * 86400000) {
+      setError("时间范围不能超过 366 天");
+      return;
+    }
+    choose({
+      key: "custom",
+      label: `${format(from, "MM/dd HH:mm")} – ${format(to, "MM/dd HH:mm")}`,
+      hours: (to.getTime() - from.getTime()) / 3600000,
+      start: from.toISOString(),
+      end: to.toISOString(),
+      startDate: start,
+      endDate: end,
+    });
+  }
+  function calendarPreset(key: string) {
+    choose(calendarRange(key));
+  }
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        if (next && value.start && value.end) {
+          const from = new Date(value.start),
+            to = new Date(Date.parse(value.end) - 60000);
+          setStart(dateText(from));
+          setStartTime(format(from, "HH:mm"));
+          setEnd(dateText(to));
+          setEndTime(format(to, "HH:mm"));
+        }
+        setOpen(next);
+        setError("");
+      }}
+    >
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          className="time-trigger"
+          aria-label={`时间范围：${value.label}`}
+        >
+          <CalendarDays size={15} />
+          {value.label}
+          <ChevronDown size={13} />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="end"
+        className="time-popover p-0"
+        collisionPadding={12}
+      >
+        <div className="time-presets">
+          {relative.map((item) => (
+            <Button
+              key={item.key}
+              variant={value.key === item.key ? "secondary" : "ghost"}
+              size="sm"
+              onClick={() => choose(item)}
+            >
+              {item.label}
+            </Button>
+          ))}
+          <div className="preset-divider" />
+          {[
+            { key: "today", label: "今天" },
+            { key: "yesterday", label: "昨天" },
+            { key: "week", label: "本周" },
+            { key: "month", label: "本月" },
+            { key: "lastMonth", label: "上月" },
+          ].map((item) => (
+            <Button
+              key={item.key}
+              variant={value.key === item.key ? "secondary" : "ghost"}
+              size="sm"
+              onClick={() => calendarPreset(item.key)}
+            >
+              {item.label}
+            </Button>
+          ))}
+        </div>
+        <div className="time-calendar">
+          <Calendar
+            locale={zhCN}
+            defaultMonth={start ? new Date(`${start}T00:00`) : undefined}
+            mode="range"
+            numberOfMonths={2}
+            selected={{
+              from: start ? new Date(`${start}T00:00`) : undefined,
+              to: end ? new Date(`${end}T00:00`) : undefined,
+            }}
+            onSelect={(range) => {
+              setStart(range?.from ? dateText(range.from) : "");
+              setEnd(range?.to ? dateText(range.to) : "");
+            }}
+          />
+          <div className="date-apply">
+            <label>
+              开始
+              <Input
+                aria-label="开始日期"
+                type="date"
+                value={start}
+                onChange={(e) => setStart(e.target.value)}
+              />
+              <Input
+                aria-label="开始时间"
+                type="time"
+                value={startTime}
+                onChange={(e) => setStartTime(e.target.value)}
+              />
+            </label>
+            <label>
+              结束
+              <Input
+                aria-label="结束日期"
+                type="date"
+                value={end}
+                onChange={(e) => setEnd(e.target.value)}
+              />
+              <Input
+                aria-label="结束时间"
+                type="time"
+                value={endTime}
+                onChange={(e) => setEndTime(e.target.value)}
+              />
+            </label>
+            <Button onClick={apply}>应用</Button>
+          </div>
+          {error && (
+            <p className="field-error" role="alert">
+              {error}
+            </p>
+          )}
+        </div>
+      </PopoverContent>
     </Popover>
-  </>
+  );
 }

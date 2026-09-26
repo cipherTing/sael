@@ -20,7 +20,7 @@ COPY --from=go-build /out/sael /usr/local/bin/sael
 COPY --from=go-build /out/sael-gateway /usr/local/bin/sael-gateway
 COPY --from=web /src/gateway/web/dist/ /opt/sael/web/
 USER sael
-ENV WEB_DIR=/opt/sael/web SAEL_CLI_PATH=/usr/local/bin/sael SPOOL_PATH=/var/lib/sael/spool.jsonl LISTEN_ADDR=:8080
-EXPOSE 8080
-HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://127.0.0.1:8080/healthz >/dev/null || exit 1
+ENV WEB_DIR=/opt/sael/web SPOOL_PATH=/var/lib/sael/spool.jsonl ADMIN_LISTEN_ADDR=:8080 INGRESS_LISTEN_ADDR=:8081
+EXPOSE 8080 8081
+HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://127.0.0.1:8080/healthz >/dev/null && wget -qO- http://127.0.0.1:8081/healthz >/dev/null || exit 1
 ENTRYPOINT ["/usr/local/bin/sael-gateway"]

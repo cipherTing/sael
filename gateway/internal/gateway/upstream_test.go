@@ -25,7 +25,7 @@ func TestAdminChangesForwardingDestinationAndPreservesRequestAuthorization(t *te
 	if put.Code != http.StatusOK || store.upstream.BaseURL != newUpstream.URL {
 		t.Fatalf("saved destination: status=%d config=%+v body=%s", put.Code, store.upstream, put.Body.String())
 	}
-	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions?x=1", strings.NewReader(`{"model":"test","messages":[{"role":"user","content":"hello"}]}`))
+	r := authorizedRequest(http.MethodPost, "/v1/chat/completions?x=1", strings.NewReader(`{"model":"test","messages":[{"role":"user","content":"hello"}]}`))
 	r.Header.Set("Authorization", "Bearer client-key")
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, r)

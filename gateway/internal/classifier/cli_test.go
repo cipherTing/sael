@@ -4,11 +4,12 @@ package classifier
 
 import (
 	"context"
-	"github.com/cipherTing/sael/gateway/internal/gateway"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/cipherTing/sael/gateway/internal/gateway"
 )
 
 func TestCLIReadsJSONAndSendsTextOnStdin(t *testing.T) {

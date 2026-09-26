@@ -28,3 +28,15 @@ func TestWebHandlerServesAppRoutesAndKeepsAdminAPI(t *testing.T) {
 		t.Fatalf("admin routed to UI: %d", w.Code)
 	}
 }
+
+func TestManagementListenerDoesNotForwardAIRequests(t *testing.T) {
+	calls := 0
+	h := webHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; w.WriteHeader(201) }), t.TempDir())
+	for _, method := range []string{"GET", "POST"} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(method, "/v1/responses", http.NoBody))
+		if w.Code != 404 || calls != 0 {
+			t.Fatalf("management forwarded business traffic: %d %d", w.Code, calls)
+		}
+	}
+}

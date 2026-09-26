@@ -5,15 +5,40 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
 )
 
+func TestAnalyticsRejectsInvalidGranularityAndTimezone(t *testing.T) {
+	for _, query := range []string{
+		"minutes=1440&granularity=42m",
+		"minutes=1440&granularity=auto",
+		"minutes=1440&timezone=Unknown/Invalid",
+	} {
+		q, _ := url.ParseQuery(query)
+		if _, err := analyticsFilter(q); err == nil {
+			t.Errorf("accepted invalid analytics query: %s", query)
+		}
+	}
+}
+
+func TestAnalyticsKeepsTheSelectedFineGranularityForLongerRanges(t *testing.T) {
+	q, _ := url.ParseQuery("minutes=4320&granularity=1m&timezone=Asia/Shanghai")
+	f, err := analyticsFilter(q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.StepSeconds() != 60 {
+		t.Fatalf("selected minute granularity changed to %d", f.StepSeconds())
+	}
+}
+
 func login(t *testing.T, s *Server) *http.Cookie {
 	t.Helper()
 	w := httptest.NewRecorder()
-	s.ServeHTTP(w, httptest.NewRequest("POST", "/admin/login", strings.NewReader(`{"password":"secret"}`)))
+	s.AdminHandler().ServeHTTP(w, authorizedRequest("POST", "/admin/login", strings.NewReader(`{"password":"secret"}`)))
 	if w.Code != 200 {
 		t.Fatalf("login status %d: %s", w.Code, w.Body.String())
 	}
@@ -29,12 +54,12 @@ func login(t *testing.T, s *Server) *http.Cookie {
 func TestRuntimeShowsClassifierFailure(t *testing.T) {
 	s, _, _ := makeServer(t, activePolicy(), &testClassifier{err: errors.New("unavailable")})
 	w := httptest.NewRecorder()
-	s.ServeHTTP(w, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"messages":[{"role":"user","content":"text"}]}`)))
+	s.ServeHTTP(w, authorizedRequest("POST", "/v1/chat/completions", strings.NewReader(`{"messages":[{"role":"user","content":"text"}]}`)))
 	cookie := login(t, s)
-	r := httptest.NewRequest("GET", "/admin/runtime", http.NoBody)
+	r := authorizedRequest("GET", "/admin/runtime", http.NoBody)
 	r.AddCookie(cookie)
 	runtime := httptest.NewRecorder()
-	s.ServeHTTP(runtime, r)
+	s.AdminHandler().ServeHTTP(runtime, r)
 	if runtime.Code != 200 || !strings.Contains(runtime.Body.String(), `"classifier":"error"`) || !strings.Contains(runtime.Body.String(), `"last_error_kind":"classifier_unavailable"`) {
 		t.Fatalf("runtime: %d %s", runtime.Code, runtime.Body.String())
 	}
@@ -52,13 +77,13 @@ func TestAdminAPIRequiresSession(t *testing.T) {
 	s, _, _ := makeServer(t, activePolicy(), &testClassifier{})
 	for _, path := range []string{"/admin/policy", "/admin/upstream", "/admin/overview", "/admin/events"} {
 		w := httptest.NewRecorder()
-		s.ServeHTTP(w, httptest.NewRequest("GET", path, http.NoBody))
+		s.AdminHandler().ServeHTTP(w, authorizedRequest("GET", path, http.NoBody))
 		if w.Code != 401 {
 			t.Fatalf("%s status=%d", path, w.Code)
 		}
 	}
 	w := httptest.NewRecorder()
-	s.ServeHTTP(w, httptest.NewRequest("POST", "/admin/login", strings.NewReader(`{"password":"wrong"}`)))
+	s.AdminHandler().ServeHTTP(w, authorizedRequest("POST", "/admin/login", strings.NewReader(`{"password":"wrong"}`)))
 	if w.Code != 401 {
 		t.Fatalf("wrong password status=%d", w.Code)
 	}
@@ -78,24 +103,24 @@ func TestAdminPolicySaveRejectsStaleVersion(t *testing.T) {
 	s, store, _ := makeServer(t, activePolicy(), &testClassifier{})
 	cookie := login(t, s)
 	read := httptest.NewRecorder()
-	get := httptest.NewRequest("GET", "/admin/policy", http.NoBody)
+	get := authorizedRequest("GET", "/admin/policy", http.NoBody)
 	get.AddCookie(cookie)
-	s.ServeHTTP(read, get)
+	s.AdminHandler().ServeHTTP(read, get)
 	if read.Code != 200 || !strings.Contains(read.Body.String(), `"version":2`) {
 		t.Fatalf("get policy: %d %s", read.Code, read.Body.String())
 	}
 	payload := `{"enabled":false,"version":2,"thresholds":{},"scenes":[],"unmatched_action":"allow"}`
-	put := httptest.NewRequest("PUT", "/admin/policy", strings.NewReader(payload))
+	put := authorizedRequest("PUT", "/admin/policy", strings.NewReader(payload))
 	put.AddCookie(cookie)
 	w := httptest.NewRecorder()
-	s.ServeHTTP(w, put)
+	s.AdminHandler().ServeHTTP(w, put)
 	if w.Code != 200 || store.policy.Version != 3 || store.policy.Enabled {
 		t.Fatalf("save: %d %+v", w.Code, store.policy)
 	}
-	stale := httptest.NewRequest("PUT", "/admin/policy", strings.NewReader(payload))
+	stale := authorizedRequest("PUT", "/admin/policy", strings.NewReader(payload))
 	stale.AddCookie(cookie)
 	w2 := httptest.NewRecorder()
-	s.ServeHTTP(w2, stale)
+	s.AdminHandler().ServeHTTP(w2, stale)
 	if w2.Code != 409 || store.policy.Version != 3 {
 		t.Fatalf("stale save: %d %+v", w2.Code, store.policy)
 	}

@@ -1,3 +1,5 @@
+> 历史设计参考。当前控制台、双端口监听及端点场景设计以 [gateway-redesign.md](gateway-redesign.md) 和 [部署说明](../gateway/README.md) 为准。
+
 # Sael 网关设计
 
 > 本文描述网关和运维界面。Sael 现有 CLI 负责提出 11 个审核问题并返回分数；网关负责提取当前用户文本，再按运维配置的场景条件和优先级决定记录并放行或记录并拦截。文中的界面数字都是示意，不代表默认阈值或真实性能。
@@ -349,7 +351,7 @@ gateway/
 ## 6. 实现依据与待确认数据
 
 - sub2api 的当前用户提取参考：[`content_moderation_input.go`](https://github.com/Wei-Shaw/sub2api/blob/main/backend/internal/service/content_moderation_input.go)。请求上下文字段参考：[`content_moderation.go`](https://github.com/Wei-Shaw/sub2api/blob/main/backend/internal/service/content_moderation.go)。它另有全对话扫描路径，本设计不采用。
-- Sael 的实际答案形状和问题集见仓库的 `cli/internal/cli/output.go`、`cli/internal/questions/moderation.go` 与 `sdk/answers.go`。TypeSafe 官方分别定义了 [Noul](https://docs.typesafe.ai/primitives/noul) 和 [Score](https://docs.typesafe.ai/primitives/score) 的取值语义。
+- Sael 的实际答案形状和问题集见仓库的 `cli/internal/cli/output.go`、`sdk/moderation/questions.go` 与 `sdk/answers.go`。TypeSafe 官方分别定义了 [Noul](https://docs.typesafe.ai/primitives/noul) 和 [Score](https://docs.typesafe.ai/primitives/score) 的取值语义。
 - 代理行为按 Go [`httputil.ReverseProxy`](https://pkg.go.dev/net/http/httputil#ReverseProxy) 的 HTTP 语义设计。四种协议的提取路径应以各自官方 API 文档和真实请求样本验证。
 
 落地前仍需给出两类业务数据：**各项初始阈值、初始场景顺序和未匹配命中处理**，以及**命中记录需要保留的去敏文本长度和天数**。这些数值不从旧文档的示意图抄作默认值。

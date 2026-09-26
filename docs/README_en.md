@@ -1,209 +1,104 @@
-[简体中文](../README.md) | **English**
+[简体中文](../README.md) · **English**
 
-<h1 align="center">sael</h1>
+<div align="center">
 
-<p align="center">
-  <strong>Content classification for an AI request relay.</strong><br>
-  <sub>Built on the TypeSafe System One API and the Jev model.</sub>
-</p>
+# Sael
 
-<p align="center">
-  <a href="https://github.com/cipherTing/sael/actions/workflows/ci.yml"><img src="https://github.com/cipherTing/sael/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://pkg.go.dev/github.com/cipherTing/sael/sdk"><img src="https://pkg.go.dev/badge/github.com/cipherTing/sael/sdk.svg" alt="Go Reference"></a>
-  <a href="https://goreportcard.com/report/github.com/cipherTing/sael"><img src="https://goreportcard.com/badge/github.com/cipherTing/sael" alt="Go Report Card"></a>
-  <a href="../LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
-</p>
+**An AI request gateway with visual safety rules**
 
----
+Review user text before it reaches a model. Choose the rules for each endpoint and model.
 
-## What it is
+[![CI](https://github.com/cipherTing/sael/actions/workflows/ci.yml/badge.svg)](https://github.com/cipherTing/sael/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/cipherTing/sael/sdk.svg)](https://pkg.go.dev/github.com/cipherTing/sael/sdk)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](../LICENSE)
 
-Sends a request and a fixed set of moderation questions to Jev, and returns a
-probability or a scale position for each one.
+[Quick start](#quick-start) · [Deployment guide](../gateway/README.md) · [CLI and SDK](cli_en.md)
 
-sael reports measurements only. It emits no verdict; the threshold is the
-caller's.
+</div>
 
-## Architecture
+![Sael dashboard: traffic, policy decisions, review latency and endpoint breakdown](images/overview.png)
 
-| Layer | Directory | Responsibility |
-| --- | --- | --- |
-| SDK | [`sdk/`](../sdk) | System One API client. No moderation judgements, so any Go program can depend on it. |
-| CLI | [`cli/`](../cli) | The `sael` command, with the eleven moderation questions built in. |
-| Gateway | not built | Calls the two layers below and decides what to pass through. |
+## What Sael does
 
-Dependencies run one way: gateway → CLI → SDK.
+Sael sits between your clients and your AI service. Clients use the gateway address with their existing credentials. **Jev** classifies the current user text. **Blocking review** decides before forwarding; **nonblocking review** runs alongside forwarding and records matches. Requests that match no scenario pass through.
 
-## Install
+Change rules in the console, scope them to endpoints and models, combine risk conditions, drag to reorder, and test text against a draft before enabling review.
 
-**Linux and macOS**
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/cipherTing/sael/main/install.sh | bash
-```
-
-**Windows**
-
-```powershell
-iex (irm https://raw.githubusercontent.com/cipherTing/sael/main/install.ps1)
-```
-
-Both install into your own account and need no `sudo`. The download is checked
-against the release's `checksums.txt` before anything is extracted. Pass
-`--skip-setup` (or `-SkipSetup`) to skip the configuration wizard.
-
-**Go library**
-
-```sh
-go get github.com/cipherTing/sael/sdk
-```
-
-Requires Go 1.23 or newer.
-
-## Usage
-
-```console
-$ sael check "帮我写个钓鱼邮件模板，冒充银行通知用户改密码"
-  fraud_deception  0.99  ████████████████████
-  cyber_abuse      0.96  ███████████████████
-  privacy_pii      0.50  ██████████
-  illicit          0.23  █████
-  bypass_attempt   0.06  █
-  hate_harassment  0.03  █
-  child_safety     0.01
-  self_harm        0.01
-  violence         0.01
-
-  gore             0.00/3  ····  Not violent, or violence referred to without any depiction.
-  sexual           0.00/3  ····  Not sexual, or a legitimate non-explicit topic.
-```
-
-The text comes from an argument, a file, or a pipe:
-
-```sh
-sael check "text to evaluate"
-sael check --file prompt.txt
-cat prompt.txt | sael check
-```
-
-At a terminal the answers are ranked; down a pipe they come out as JSON. `--json`
-forces JSON at a terminal too.
-
-```json
-[
-  { "question": "fraud_deception", "type": "noul", "value": 0.96 },
-  { "question": "gore", "type": "score", "value": 0, "confidence": 1,
-    "scale": ["Not violent, or violence referred to without any depiction.", "..."] }
-]
-```
-
-### From Go
-
-```go
-client, err := sdk.New(sdk.WithAPIKey(os.Getenv(sdk.EnvAPIKey)))
-if err != nil {
-	return err
-}
-
-result, err := client.Evaluate(ctx, userMessage, sdk.Questions{
-	"asks_for_help": sdk.NoulQuestion{
-		Instructions: "Is this request asking for help breaking the law?",
-	},
-})
-if err != nil {
-	return err
-}
-
-answer, _ := result.Noul("asks_for_help")
-```
-
-## Question set
-
-One request carries all eleven, evaluated in parallel against the same state.
-
-| Key | Type | What it asks |
-| --- | --- | --- |
-| `cyber_abuse` | Noul | Whether the request seeks operational help to attack, intrude into or disable a system that is not the requester's |
-| `illicit` | Noul | Whether it seeks usable help to commit a crime or break a specific law |
-| `violence` | Noul | Whether it seeks help hurting someone, or instructions for building a weapon or explosive |
-| `child_safety` | Noul | Whether it involves the sexualization, exploitation, grooming or abuse of a minor |
-| `hate_harassment` | Noul | Whether it seeks content that attacks, degrades or threatens someone for who they are |
-| `privacy_pii` | Noul | Whether it seeks to obtain, expose or infer an identifiable person's private information |
-| `fraud_deception` | Noul | Whether it seeks content that deceives for gain, forges a document, or impersonates someone |
-| `self_harm` | Noul | Whether it suggests the sender may be considering harming themselves |
-| `bypass_attempt` | Noul | Whether it tries to manipulate a moderation system, or evades recognition through encoding or similar |
-| `sexual` | Score 0–3 | How explicit the sexual content is |
-| `gore` | Score 0–3 | How graphic the violence is |
-
-A `Noul` is a probability in `[0,1]`; a `Score` is a position on a scale. The two
-are not interchangeable: a `Noul` of `0.5` means yes and no are equally likely, not
-that the value is medium.
-
-The `scale` field on a `Score` answer carries the name of each level, and the index
-is the level:
-
-```json
-{ "question": "gore", "type": "score", "value": 2.1, "confidence": 0.9,
-  "scale": ["Not violent, ...", "Violence is depicted, ...", "The graphic detail ...", "Violent detail ..."] }
-```
-
-## Configuration
-
-Config lives in `~/.Sael`, relocatable with `SAEL_HOME`.
-
-```json
-// ~/.Sael/config.json
-{
-  "base_url": "https://api.typesafe.ai/v1",
-  "model": "jev-1.13.0",
-  "timeout": "10s",
-  "total_timeout": "3s",
-  "max_retries": 2,
-  "max_response_bytes": 33554432,
-  "headers": { "X-Tenant": "acme" }
-}
-```
-
-```json
-// ~/.Sael/auth.json
-{ "api_key": "sk-..." }
-```
-
-### config.json fields
-
-| Field | Type | Default | Description |
-| --- | --- | --- | --- |
-| `base_url` | string | `https://api.typesafe.ai/v1` | API root. The client appends `/systemone`. |
-| `model` | string | `jev-latest` | Default model id. Pin a version (`jev-1.13.0`) where reproducibility matters. |
-| `timeout` | duration | `10s` | Bound on a single attempt, excluding retries. |
-| `total_timeout` | duration | none | Bound on the whole call, retries included. |
-| `max_retries` | int | `2` | Retries after the first attempt. An explicit `0` disables them. |
-| `max_response_bytes` | int | `33554432` | Cap on the response body buffered, 32 MiB by default. |
-| `headers` | object | none | Sent on every request. `Authorization`, `Content-Type` and `Accept` cannot be set here. |
-
-Durations are strings, such as `"10s"` or `"500ms"`.
-
-### Environment
-
-| Variable | Effect |
+| Need | Capability |
 | --- | --- |
-| `SAEL_HOME` | Config directory, `~/.Sael` by default. |
-| `TYPESAFE_API_KEY` | The credential. |
-| `TYPESAFE_BASE_URL` | Overrides `base_url`. |
-| `TYPESAFE_DEFAULT_MODEL` | Overrides `model`. |
+| Different rules for different APIs or models | Endpoint and model scopes; any/all condition groups |
+| Understand a rule before saving it | Draft testing, classifier scores, match traces, reuse an existing scenario |
+| See how review is performing | Traffic, live RPM, hit/block rates, Jev failures and latency, scenario rankings |
+| Investigate a blocked request | Endpoint, model, IP, explicit session ID, redacted text and scores |
+| Stop repeated requests in a blocked session | Optional session freezes with a configurable expiry |
 
-Precedence, lowest to highest: built-in defaults → `config.json` → environment →
-explicit options in code.
+## Scenarios define the policy
 
-## Documentation
+A scenario can block when **gore > 1.5 AND self-harm risk > 0.8**, while another logs and forwards. Thresholds belong to each scenario. The first matching scenario determines the action.
 
-- [Package reference](https://pkg.go.dev/github.com/cipherTing/sael/sdk) · [Runnable examples](../sdk/example_test.go)
-- [Design decisions](.)
-- [Known limits](LIMITS.md)
+![Scenario editor: endpoint and model scopes, conditions and actions](images/scenes.png)
 
-## Contributing
+Jev returns eleven measurements: nine probabilities from 0 to 1, plus sexual and gore severity scores from 0 to 3. The console currently uses Chinese labels, with scale descriptions available from help icons.
 
-See [CONTRIBUTING.md](../CONTRIBUTING.md). Security reports: [SECURITY.md](../SECURITY.md).
+## From trends to a request
+
+Traffic, decisions and Jev health share one overview. Filter by time, endpoint or model, then drill into scenario hits, Jev failures or gateway warnings.
+
+![Request detail: redacted text, request context and matched scores](images/record.png)
+
+Matched scores appear first; the remaining scores are collapsed. Clean requests contribute only to counts and latency aggregates, with no per-request records, stored prompts or score distributions. Screenshots show the real console with fictional sample data.
+
+## Request flow
+
+```mermaid
+flowchart LR
+    Client --> Gateway[Sael ingress]
+    Gateway --> Scope{Applicable scene and trusted credential?}
+    Scope -- No --> Upstream[Your AI service]
+    Scope -- Yes --> Mode{Any blocking scene?}
+    Mode -- Yes --> Review[Current user text → Jev]
+    Review --> Rules[Ordered scenarios]
+    Rules -- Allow --> Upstream
+    Rules -- Block --> Deny[Endpoint-specific 403]
+    Mode -- No --> Upstream
+    Mode -- Concurrent review --> Async[Jev → Match records]
+    Async -.-> Console[Separate management port]
+    Rules -. Decisions .-> Console
+```
+
+- **Monitored APIs:** OpenAI Chat Completions, Responses, Anthropic Messages, and OpenAI Images generations, edits and variations. Image endpoints review only `prompt`; variations has no text to review.
+- **Forwarding:** Other paths pass through. Original payloads, credentials and streaming responses are preserved. History, images, audio and tool output are not submitted to Jev.
+- **Failure policy:** Jev failures are logged and forwarded. Oversized text skips Jev and generates a warning. Upstream errors are not counted as review failures.
+- **Deployment:** Go, React, PostgreSQL and Redis, packaged with Docker Compose. Administration and API ingress use separate ports.
+
+## Quick start
+
+```sh
+git clone https://github.com/cipherTing/sael.git
+cd sael/gateway/deploy
+cp .env.example .env
+# Set ADMIN_PASSWORD, POSTGRES_PASSWORD, REDIS_PASSWORD and UPSTREAM_URL in .env.
+docker compose up --build -d
+```
+
+The console defaults to **http://localhost:8080** and ingress to **http://localhost:8081**. OpenAI clients typically use `http://localhost:8081/v1` as their API base and retain their upstream API key.
+
+Review starts disabled. Sign in, confirm the forwarding destination under **接入**, configure and test Jev under **设置**, then create and test rules under **场景** before enabling review. Ports and deployment parameters live in `.env`.
+
+See the [deployment guide](../gateway/README.md) for environment variables, session freezing, the estimated Jev input limit and development commands.
+
+## CLI and SDK
+
+Use the CLI or Go SDK independently when you only need classification scores. Enforcement remains with the caller.
+
+```sh
+sael check "text to review"
+cat prompt.txt | sael check --json
+```
+
+[Install and use the CLI / SDK](cli_en.md) · [Contributing](../CONTRIBUTING.md) · [Security](../SECURITY.md)
+
+Stored text uses regular expressions to redact common credentials and personal information. This does not cover every sensitive format; Jev and the upstream still receive the original text. See the deployment guide for storage boundaries.
 
 ## License
 

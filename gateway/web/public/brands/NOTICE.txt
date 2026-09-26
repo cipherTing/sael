@@ -1,0 +1,3 @@
+OpenAI and Anthropic SVG assets from @lobehub/icons-static-svg 1.95.1 (LobeHub), MIT licensed.
+Source: https://github.com/lobehub/lobe-icons
+Brand marks belong to their respective owners.

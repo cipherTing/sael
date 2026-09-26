@@ -1,180 +1,873 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Alert, Box, Button, Chip, Collapse, FormControl, IconButton, InputLabel,
-  MenuItem, Paper, Select, Stack, Switch, TextField, Tooltip, Typography
-} from '@mui/material'
-import AddOutlined from '@mui/icons-material/AddOutlined'
-import DeleteOutlineOutlined from '@mui/icons-material/DeleteOutlineOutlined'
-import DragIndicatorOutlined from '@mui/icons-material/DragIndicatorOutlined'
-import EastOutlined from '@mui/icons-material/EastOutlined'
-import HelpOutlineOutlined from '@mui/icons-material/HelpOutlineOutlined'
-import { DndContext, PointerSensor, KeyboardSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
-import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
-import { CSS } from '@dnd-kit/utilities'
-import { type Action, type Condition, type Match, type Policy, type PolicyResponse, type Question, type Scene } from './policy'
-import { questionMeta, questionName } from './questionMeta'
+  DndContext,
+  PointerSensor,
+  KeyboardSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import {
+  Plus,
+  GripVertical,
+  Copy,
+  Trash2,
+  FlaskConical,
+  Ban,
+  FileCheck2,
+  Search,
+  RotateCcw,
+} from "lucide-react";
+import { toast } from "sonner";
+import { Button } from "./components/ui/button";
+import { Input } from "./components/ui/input";
+import { Switch } from "./components/ui/switch";
+import {
+  Popover,
+  PopoverTrigger,
+  PopoverContent,
+} from "./components/ui/popover";
+import { Checkbox } from "./components/ui/checkbox";
+import {
+  Choice,
+  PageHeading,
+  Empty,
+  Help,
+  SceneModeBadge,
+} from "./components/common";
+import { ModelScope } from "./components/ModelScope";
+import { SceneTemplatePicker } from "./components/SceneTemplatePicker";
+import { PolicyTest } from "./components/PolicyTest";
+import { SceneAnalysis } from "./components/SceneAnalysis";
+import { endpoints } from "./analytics";
+import { questionName, questionMeta } from "./questionMeta";
+import {
+  type Condition,
+  type Policy,
+  type PolicyResponse,
+  type Question,
+  type Scene,
+} from "./policy";
+import type { Answer } from "./types";
 
-export type UpstreamConfig = { base_url: string; updated_at: string }
-type Props = { policy: PolicyResponse; upstream?: UpstreamConfig; onSave: (next: Policy) => Promise<void>; onSaveUpstream?: (next: { base_url: string }) => Promise<UpstreamConfig> }
-
-function copyPolicy(source: PolicyResponse): Policy {
-  return {
-    enabled: source.enabled, version: source.version,
-    scenes: source.scenes.map(scene => ({ ...scene, conditions: scene.conditions.map(condition => ({ ...condition })) })),
-    preview_chars: source.preview_chars, retention_days: source.retention_days
+export type UpstreamConfig = { base_url: string; updated_at: string };
+type Props = {
+  initialScene?: string;
+  initialEndpoint?: string;
+  policy: PolicyResponse;
+  onSave: (p: Policy) => Promise<void>;
+  storageKey?: string;
+  sample?: {
+    text: string;
+    scores?: Answer[];
+    endpoint: string;
+    model?: string;
+  };
+  onReload?: () => void;
+  upstream?: UpstreamConfig;
+  onSaveUpstream?: (input: { base_url: string }) => Promise<UpstreamConfig>;
+};
+const copyPolicy = (p: PolicyResponse): Policy => ({
+  enabled: p.enabled,
+  version: p.version,
+  scenes: structuredClone(p.scenes),
+  preview_chars: p.preview_chars,
+  retention_days: p.retention_days,
+  session_block_enabled: Boolean(p.session_block_enabled),
+  session_block_ttl_seconds: p.session_block_ttl_seconds || 3600,
+});
+function sceneError(scene: Scene, questions: Question[]) {
+  if (!scene.name.trim()) return "请填写场景名称";
+  if (!scene.conditions.length) return "请添加审核条件";
+  const seen = new Set<string>();
+  for (const c of scene.conditions) {
+    const q = questions.find((q) => q.key === c.question);
+    if (!q || seen.has(c.question)) return "审核项重复或无效";
+    if (!Number.isFinite(c.threshold) || c.threshold < 0 || c.threshold > q.max)
+      return `${questionName(c.question)}须在 0–${q.max} 之间`;
+    seen.add(c.question);
   }
+  return "";
 }
-
-function validCondition(condition: Condition, questions: Question[]) {
-  const question = questions.find(item => item.key === condition.question)
-  return Boolean(question && Number.isFinite(condition.threshold) && condition.threshold >= 0 && condition.threshold <= question.max)
-}
-
-function validScene(scene: Scene, questions: Question[]) {
-  return Boolean(scene.name.trim() && scene.conditions.length &&
-    scene.conditions.every(condition => validCondition(condition, questions)) &&
-    new Set(scene.conditions.map(condition => condition.question)).size === scene.conditions.length)
-}
-
-function SceneCard({ scene, index, questions, expanded, attempted, onToggle, onPatch, onDelete }: {
-  scene: Scene; index: number; questions: Question[]; expanded: boolean; attempted: boolean;
-  onToggle: () => void; onPatch: (patch: Partial<Scene>) => void; onDelete: () => void
+function SceneRow({
+  scene,
+  index,
+  selected,
+  dimmed,
+  onSelect,
+}: {
+  scene: Scene;
+  index: number;
+  selected: boolean;
+  dimmed: boolean;
+  onSelect: () => void;
 }) {
-  const { attributes, listeners, setActivatorNodeRef, setNodeRef, transform, transition, isDragging } = useSortable({ id: scene.id })
-  const style = { transform: CSS.Transform.toString(transform), transition }
-  const patchCondition = (position: number, patch: Partial<Condition>) => {
-    onPatch({ conditions: scene.conditions.map((item, i) => i === position ? { ...item, ...patch } : item) })
-  }
-  return <Paper ref={setNodeRef} style={style} variant="outlined" sx={{ borderRadius: 2, borderColor: isDragging ? 'primary.main' : 'divider', opacity: isDragging ? 0.65 : 1, bgcolor: 'background.paper' }}>
-    <Stack direction="row" spacing={1} sx={{ alignItems: 'flex-start', px: 1.25, py: 1.1 }}>
-      <IconButton ref={setActivatorNodeRef} {...attributes} {...listeners} size="small" aria-label={`拖动场景：${scene.name || index + 1}`} sx={{ touchAction: 'none', cursor: 'grab', mt: 0.25 }}><DragIndicatorOutlined fontSize="small" /></IconButton>
-      <Typography variant="body2" color="text.secondary" sx={{ width: 18, pt: 0.85, flexShrink: 0 }}>{index + 1}</Typography>
-      <Box sx={{ flex: 1, minWidth: 0 }}>
-        <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap', mb: 0.5 }}>
-          <Typography variant="subtitle2" sx={{ fontWeight: 750 }}>{scene.name || '未命名场景'}</Typography>
-          {scene.note && <Typography variant="caption" color="text.secondary" sx={{ overflowWrap: 'anywhere' }}>{scene.note}</Typography>}
-        </Stack>
-        <Stack direction="row" spacing={0.65} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap', minHeight: 24 }}>
-          {scene.conditions.map((condition, position) => <Box key={`${condition.question}-${position}`} sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.6 }}>
-            {position > 0 && <Typography variant="caption" color="text.secondary">{scene.match === 'all' ? '且' : '或'}</Typography>}
-            <Chip size="small" variant="outlined" label={`${questionName(condition.question)} > ${Number.isFinite(condition.threshold) ? condition.threshold : '…'}`} sx={{ height: 24 }} />
-          </Box>)}
-          {scene.conditions.length > 0 && <EastOutlined sx={{ fontSize: 16, color: 'text.disabled' }} />}
-          <Chip size="small" color={scene.action === 'block' ? 'error' : 'success'} label={scene.action === 'block' ? '拦截' : '记录放行'} sx={{ height: 24 }} />
-        </Stack>
-      </Box>
-      <Button size="small" aria-label={`编辑场景：${scene.name}`} onClick={onToggle}>{expanded ? '收起' : '编辑'}</Button>
-      <IconButton size="small" aria-label={`删除场景：${scene.name}`} onClick={onDelete} color="inherit"><DeleteOutlineOutlined fontSize="small" /></IconButton>
-    </Stack>
-    <Collapse in={expanded} unmountOnExit>
-      <Box sx={{ borderTop: '1px solid', borderColor: 'divider', px: { xs: 1.5, sm: 2 }, py: 1.75 }}>
-        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'minmax(180px, 1fr) minmax(220px, 2fr)' }, gap: 1.5, mb: 2 }}>
-          <TextField size="small" label="场景名称" value={scene.name} onChange={event => onPatch({ name: event.target.value })} error={attempted && !scene.name.trim()} helperText={attempted && !scene.name.trim() ? '请填写场景名称' : undefined} />
-          <TextField size="small" label="注释（选填）" value={scene.note || ''} onChange={event => onPatch({ note: event.target.value })} />
-        </Box>
-        <Stack spacing={0.85}>
-          {scene.conditions.map((condition, position) => {
-            const question = questions.find(item => item.key === condition.question)
-            const duplicate = scene.conditions.some((item, i) => i !== position && item.question === condition.question)
-            return <Stack key={position} direction="row" spacing={0.75} sx={{ alignItems: 'center', minWidth: 0 }}>
-              <FormControl size="small" error={attempted && (!question || duplicate)} sx={{ minWidth: 0, flex: 1, maxWidth: 310 }}>
-                <InputLabel>审核项</InputLabel>
-                <Select label="审核项" value={condition.question} onChange={event => patchCondition(position, { question: event.target.value })}>
-                  {questions.map(item => <MenuItem key={item.key} value={item.key} disabled={scene.conditions.some((existing, i) => i !== position && existing.question === item.key)}>{questionName(item.key)}</MenuItem>)}
-                </Select>
-              </FormControl>
-              {question && <Tooltip title={questionMeta[question.key]?.description || ''}><IconButton size="small" aria-label={`关于${questionName(question.key)}`}><HelpOutlineOutlined fontSize="small" /></IconButton></Tooltip>}
-              <Typography variant="body2" color="text.secondary" sx={{ flexShrink: 0 }}>&gt;</Typography>
-              <TextField size="small" type="number" label="阈值" value={Number.isFinite(condition.threshold) ? condition.threshold : ''} onChange={event => patchCondition(position, { threshold: event.target.value === '' ? Number.NaN : Number(event.target.value) })} error={attempted && !validCondition(condition, questions)} placeholder={question ? `0–${question.max}` : ''} slotProps={{ htmlInput: { 'aria-label': `${question ? questionName(question.key) : '审核项'}阈值`, min: 0, max: question?.max, step: 0.01 } }} sx={{ width: 118, flexShrink: 0 }} />
-              <IconButton size="small" aria-label={`删除条件 ${position + 1}`} onClick={() => onPatch({ conditions: scene.conditions.filter((_, i) => i !== position) })}><DeleteOutlineOutlined fontSize="small" /></IconButton>
-            </Stack>
-          })}
-        </Stack>
-        {attempted && scene.conditions.length === 0 && <Typography variant="caption" color="error.main" sx={{ display: 'block', mt: 0.75 }}>至少添加一个条件</Typography>}
-        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.25} sx={{ alignItems: { sm: 'center' }, mt: 1 }}>
-          <FormControl size="small" sx={{ minWidth: 170 }}><InputLabel>满足条件</InputLabel><Select label="满足条件" value={scene.match} onChange={event => onPatch({ match: event.target.value as Match })}><MenuItem value="any">任一项</MenuItem><MenuItem value="all">全部项</MenuItem></Select></FormControl>
-          <Button size="small" startIcon={<AddOutlined />} onClick={() => onPatch({ conditions: [...scene.conditions, { question: '', threshold: Number.NaN }] })}>添加条件</Button>
-        </Stack>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 2, pt: 1.5, borderTop: '1px solid', borderColor: 'divider' }}>
-          <FormControl size="small" sx={{ minWidth: 170 }}><InputLabel>处理方式</InputLabel><Select label="处理方式" value={scene.action} onChange={event => onPatch({ action: event.target.value as Action })}><MenuItem value="block">拦截</MenuItem><MenuItem value="allow">记录放行</MenuItem></Select></FormControl>
-        </Box>
-      </Box>
-    </Collapse>
-  </Paper>
+  const {
+    attributes,
+    listeners,
+    setActivatorNodeRef,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: scene.id });
+  return (
+    <div
+      ref={setNodeRef}
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+        zIndex: isDragging ? 2 : undefined,
+        opacity: isDragging ? 0.65 : undefined,
+      }}
+      className={`scene-row ${selected ? "selected" : ""} ${dimmed ? "dimmed" : ""}`}
+    >
+      <button
+        className="drag-handle"
+        ref={setActivatorNodeRef}
+        {...attributes}
+        {...listeners}
+        aria-label={`拖动场景：${scene.name}`}
+      >
+        <GripVertical size={15} />
+      </button>
+      <button
+        className="scene-row-body"
+        style={{ textAlign: "left" }}
+        onClick={onSelect}
+      >
+        <div className="scene-row-title">
+          <span>{scene.name || "未命名场景"}</span>
+          {scene.enabled === false && (
+            <span className="subtle-badge">暂停</span>
+          )}
+          <span className="scene-index">
+            {String(index + 1).padStart(2, "0")}
+          </span>
+        </div>
+        {scene.note && <div className="scene-row-note">{scene.note}</div>}
+        <div className="scene-row-meta">
+          <div className="endpoint-icons">
+            {endpoints
+              .filter(
+                (e) =>
+                  !scene.endpoints?.length || scene.endpoints.includes(e.id),
+              )
+              .map((e) => (
+                <span key={e.id} title={e.name}>
+                  <img src={e.icon} alt={e.name} />
+                </span>
+              ))}
+          </div>
+          <SceneModeBadge action={scene.action} />
+        </div>
+      </button>
+    </div>
+  );
 }
-
-export default function SettingsPage({ policy, upstream = { base_url: '', updated_at: '' }, onSave, onSaveUpstream = async next => ({ ...next, updated_at: '' }) }: Props) {
-  const [draft, setDraft] = useState<Policy>(() => copyPolicy(policy))
-  const [expanded, setExpanded] = useState<string | null>(null)
-  const [attempted, setAttempted] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState('')
-  const [upstreamURL, setUpstreamURL] = useState(upstream.base_url)
-  const [upstreamError, setUpstreamError] = useState('')
-  const [upstreamSaving, setUpstreamSaving] = useState(false)
-  useEffect(() => { setDraft(copyPolicy(policy)); setAttempted(false); setError('') }, [policy])
-  useEffect(() => { setUpstreamURL(upstream.base_url); setUpstreamError('') }, [upstream])
-  const original = useMemo(() => copyPolicy(policy), [policy])
-  const dirty = JSON.stringify(draft) !== JSON.stringify(original)
-  const upstreamDirty = upstreamURL !== upstream.base_url
-  let upstreamValid = false
-  try { const parsed = new URL(upstreamURL); upstreamValid = ['http:', 'https:'].includes(parsed.protocol) && !parsed.username && !parsed.password && !parsed.search && !parsed.hash && (!parsed.pathname || parsed.pathname === '/') } catch { /* inline validation below */ }
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }))
-
-  function patchScene(index: number, patch: Partial<Scene>) {
-    setDraft(current => ({ ...current, scenes: current.scenes.map((item, i) => i === index ? { ...item, ...patch } : item) }))
+function AddConditions({
+  questions,
+  selected,
+  onAdd,
+}: {
+  questions: Question[];
+  selected: string[];
+  onAdd: (keys: string[]) => void;
+}) {
+  const [open, setOpen] = useState(false),
+    [search, setSearch] = useState(""),
+    [chosen, setChosen] = useState<string[]>([]);
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(value) => {
+        setOpen(value);
+        if (value) {
+          setChosen([]);
+          setSearch("");
+        }
+      }}
+    >
+      <PopoverTrigger asChild>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={selected.length >= questions.length}
+        >
+          <Plus size={13} />
+          添加条件
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-64 p-2">
+        <Input
+          aria-label="搜索审核项"
+          placeholder="搜索审核项"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="mb-2"
+        />
+        <div style={{ maxHeight: 300, overflow: "auto" }}>
+          {questions
+            .filter((q) => questionName(q.key).includes(search))
+            .map((q) => (
+              <label
+                key={q.key}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 9,
+                  padding: "8px 6px",
+                  fontSize: 12,
+                  color: selected.includes(q.key) ? "#b6becc" : "#586781",
+                }}
+              >
+                <Checkbox
+                  checked={selected.includes(q.key) || chosen.includes(q.key)}
+                  disabled={selected.includes(q.key)}
+                  onCheckedChange={(checked) =>
+                    setChosen((keys) =>
+                      checked
+                        ? [...keys, q.key]
+                        : keys.filter((k) => k !== q.key),
+                    )
+                  }
+                />
+                {questionName(q.key)}
+                <span className="small muted" style={{ marginLeft: "auto" }}>
+                  0–{q.max}
+                </span>
+              </label>
+            ))}
+        </div>
+        <Button
+          className="mt-2 w-full"
+          size="sm"
+          disabled={!chosen.length}
+          onClick={() => {
+            onAdd(chosen);
+            setOpen(false);
+          }}
+        >
+          添加{chosen.length ? ` ${chosen.length} 项` : ""}
+        </Button>
+      </PopoverContent>
+    </Popover>
+  );
+}
+export default function SettingsPage({
+  policy,
+  onSave,
+  storageKey,
+  sample,
+  onReload,
+  initialScene,
+  initialEndpoint,
+}: Props) {
+  const [draft, setDraft] = useState<Policy>(() => {
+      if (storageKey) {
+        try {
+          const cached = sessionStorage.getItem(storageKey);
+          if (cached) return JSON.parse(cached) as Policy;
+        } catch {
+          /* use server snapshot */
+        }
+      }
+      return copyPolicy(policy);
+    }),
+    [selected, setSelected] = useState(
+      initialScene || policy.scenes[0]?.id || "",
+    ),
+    [filter, setFilter] = useState(initialEndpoint || ""),
+    [search, setSearch] = useState(""),
+    [attempted, setAttempted] = useState(false),
+    [error, setError] = useState(""),
+    [saving, setSaving] = useState(false),
+    [inspector, setInspector] = useState<"test" | "analysis" | null>(
+      sample ? "test" : null,
+    );
+  const dirty = JSON.stringify(draft) !== JSON.stringify(copyPolicy(policy)),
+    scene = draft.scenes.find((s) => s.id === selected) || draft.scenes[0];
+  const previousVersion = useRef(policy.version);
+  const inspectorRef = useRef<HTMLDivElement>(null);
+  const revealInspector = (value: "test" | "analysis") => {
+    setInspector(value);
+    requestAnimationFrame(() =>
+      inspectorRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      }),
+    );
+  };
+  useEffect(() => {
+    if (initialScene) setSelected(initialScene);
+  }, [initialScene]);
+  useEffect(() => {
+    if (previousVersion.current !== policy.version) {
+      previousVersion.current = policy.version;
+      setDraft(copyPolicy(policy));
+      setError("");
+    }
+  }, [policy]);
+  useEffect(() => {
+    if (!storageKey) return;
+    if (dirty) sessionStorage.setItem(storageKey, JSON.stringify(draft));
+    else sessionStorage.removeItem(storageKey);
+  }, [draft, dirty, storageKey]);
+  useEffect(() => {
+    if (!dirty) return;
+    const guard = (event: BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener("beforeunload", guard);
+    return () => window.removeEventListener("beforeunload", guard);
+  }, [dirty]);
+  useEffect(() => {
+    if (sample) setInspector("test");
+  }, [sample]);
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
+  );
+  const issues = useMemo(
+    () =>
+      new Map(draft.scenes.map((s) => [s.id, sceneError(s, policy.questions)])),
+    [draft.scenes, policy.questions],
+  );
+  function patch(patch: Partial<Scene>) {
+    if (scene)
+      setDraft((p) => ({
+        ...p,
+        scenes: p.scenes.map((s) =>
+          s.id === scene.id ? { ...s, ...patch } : s,
+        ),
+      }));
   }
-  function dragEnd(event: DragEndEvent) {
-    if (!event.over || event.active.id === event.over.id) return
-    setDraft(current => {
-      const from = current.scenes.findIndex(scene => scene.id === event.active.id)
-      const to = current.scenes.findIndex(scene => scene.id === event.over?.id)
-      return from < 0 || to < 0 ? current : { ...current, scenes: arrayMove(current.scenes, from, to) }
-    })
+  function condition(index: number, patchValue: Partial<Condition>) {
+    patch({
+      conditions: scene.conditions.map((c, i) =>
+        i === index ? { ...c, ...patchValue } : c,
+      ),
+    });
+  }
+  function add() {
+    const id = crypto.randomUUID();
+    setDraft((p) => ({
+      ...p,
+      scenes: [
+        ...p.scenes,
+        {
+          id,
+          name: "",
+          note: "",
+          enabled: true,
+          endpoints: [],
+          models: [],
+          conditions: [],
+          match: "all",
+          action: "block",
+        },
+      ],
+    }));
+    setSelected(id);
+    setAttempted(false);
+    setError("");
+  }
+  function duplicate() {
+    if (!scene) return;
+    const next = {
+      ...structuredClone(scene),
+      id: crypto.randomUUID(),
+      name: `${scene.name} 副本`,
+    };
+    setDraft((p) => ({ ...p, scenes: [...p.scenes, next] }));
+    setSelected(next.id);
+  }
+  function remove() {
+    if (!scene) return;
+    const previous = structuredClone(scene),
+      index = draft.scenes.findIndex((s) => s.id === scene.id);
+    setDraft((p) => ({
+      ...p,
+      scenes: p.scenes.filter((s) => s.id !== scene.id),
+    }));
+    setSelected(draft.scenes[index === 0 ? 1 : 0]?.id || "");
+    toast("场景已移除", {
+      action: {
+        label: "撤销",
+        onClick: () => {
+          setDraft((p) => {
+            const scenes = [...p.scenes];
+            scenes.splice(index, 0, previous);
+            return { ...p, scenes };
+          });
+          setSelected(previous.id);
+        },
+      },
+    });
+  }
+  function reorder(event: DragEndEvent) {
+    if (!event.over || event.active.id === event.over.id) return;
+    setDraft((p) => ({
+      ...p,
+      scenes: arrayMove(
+        p.scenes,
+        p.scenes.findIndex((s) => s.id === event.active.id),
+        p.scenes.findIndex((s) => s.id === event.over!.id),
+      ),
+    }));
   }
   async function save() {
-    setAttempted(true); setError('')
-    const bad = draft.scenes.find(scene => !validScene(scene, policy.questions))
-    if (bad) { setExpanded(bad.id); return }
-    if (draft.enabled && draft.scenes.length === 0) { setError('请先添加场景'); return }
-    setSaving(true)
-    try { await onSave(draft) }
-    catch (cause) { setError(cause instanceof Error ? cause.message : '保存失败') }
-    finally { setSaving(false) }
+    setAttempted(true);
+    const invalid = draft.scenes.find((s) => issues.get(s.id));
+    if (invalid) {
+      setSelected(invalid.id);
+      setError(issues.get(invalid.id)!);
+      return;
+    }
+    if (draft.enabled && !draft.scenes.length) {
+      setError("请先创建场景");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    try {
+      await onSave(draft);
+      if (storageKey) sessionStorage.removeItem(storageKey);
+      toast.success("场景已生效");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
   }
-  async function saveUpstream() {
-    setUpstreamSaving(true); setUpstreamError('')
-    if (!upstreamValid) { setUpstreamError('请输入 HTTP(S) 根地址'); setUpstreamSaving(false); return }
-    try { const saved = await onSaveUpstream({ base_url: upstreamURL.trim() }); setUpstreamURL(saved.base_url) }
-    catch (cause) { setUpstreamError(cause instanceof Error ? cause.message : '转发目标保存失败') }
-    finally { setUpstreamSaving(false) }
-  }
-
-  return <Stack spacing={1.75}>
-    <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ alignItems: { sm: 'center' }, justifyContent: 'space-between' }}>
-      <Typography variant="h5" sx={{ fontWeight: 750 }}>场景规则</Typography>
-      <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center' }}>
-        <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}><Switch checked={draft.enabled} onChange={(_, checked) => setDraft({ ...draft, enabled: checked })} slotProps={{ input: { 'aria-label': '开启审查' } }} size="small" /><Typography variant="body2">{draft.enabled ? '审查中' : '审查关闭'}</Typography></Stack>
-        <Button variant="contained" size="small" startIcon={<AddOutlined />} onClick={() => { const id = crypto.randomUUID(); setDraft(current => ({ ...current, scenes: [...current.scenes, { id, name: '', note: '', conditions: [], match: 'any', action: 'block' }] })); setExpanded(id) }}>新增场景</Button>
-      </Stack>
-    </Stack>
-    <Paper variant="outlined" sx={{ px: 1.75, py: 1.5 }}>
-      <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.25} sx={{ alignItems: { md: 'center' }, justifyContent: 'space-between' }}>
-        <Box sx={{ minWidth: 0 }}><Typography variant="subtitle2" sx={{ fontWeight: 750 }}>转发目标</Typography></Box>
-        <Stack direction="row" spacing={1} sx={{ alignItems: 'flex-start', flex: 1, maxWidth: { md: 720 } }}><TextField size="small" fullWidth label="转发目标地址" value={upstreamURL} onChange={event => setUpstreamURL(event.target.value)} error={Boolean(upstreamURL) && !upstreamValid} helperText={Boolean(upstreamURL) && !upstreamValid ? '请输入 HTTP(S) 根地址' : undefined} placeholder="https://api.example.com" /><Button variant="contained" size="small" disabled={!upstreamDirty || upstreamSaving || !upstreamValid} onClick={() => void saveUpstream()} sx={{ mt: 0.5, flexShrink: 0 }}>{upstreamSaving ? '保存中…' : '保存'}</Button></Stack>
-      </Stack>
-      {upstreamError && <Alert severity="error" sx={{ mt: 1 }}>{upstreamError}</Alert>}
-    </Paper>
-    {draft.scenes.length === 0 ? <Paper variant="outlined" sx={{ py: 5, textAlign: 'center' }}><Typography color="text.secondary">暂无场景</Typography></Paper> :
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={dragEnd}>
-        <SortableContext items={draft.scenes.map(scene => scene.id)} strategy={verticalListSortingStrategy}>
-          <Stack spacing={1}>{draft.scenes.map((scene, index) => <SceneCard key={scene.id} scene={scene} index={index} questions={policy.questions} expanded={expanded === scene.id} attempted={attempted} onToggle={() => setExpanded(expanded === scene.id ? null : scene.id)} onPatch={patch => patchScene(index, patch)} onDelete={() => setDraft(current => ({ ...current, scenes: current.scenes.filter(item => item.id !== scene.id) }))} />)}</Stack>
-        </SortableContext>
-      </DndContext>}
-    <Paper variant="outlined" sx={{ position: 'sticky', bottom: 8, zIndex: 1, px: 1.5, py: 1, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', boxShadow: '0 8px 24px rgba(25,37,58,.08)' }}>
-      <Box sx={{ flex: 1, minWidth: 150 }}>{error ? <Alert severity="error" sx={{ py: 0 }}>{error}</Alert> : <Typography variant="body2" color="text.secondary">{dirty ? '有未保存的修改' : '已保存'}</Typography>}</Box>
-      <Button size="small" disabled={!dirty || saving} onClick={() => setDraft(copyPolicy(policy))}>放弃</Button>
-      <Button size="small" variant="contained" disabled={!dirty || saving} onClick={() => void save()}>{saving ? '保存中…' : '保存并生效'}</Button>
-    </Paper>
-  </Stack>
+  const scoped = (id: string) => scene?.endpoints?.includes(id) || false;
+  return (
+    <>
+      <PageHeading title="场景">
+        <div className="review-state">
+          <Switch
+            aria-label="开启审查"
+            checked={draft.enabled}
+            onCheckedChange={(enabled) => setDraft((p) => ({ ...p, enabled }))}
+          />
+          <span>审查{draft.enabled ? "开启" : "关闭"}</span>
+        </div>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => revealInspector("test")}
+        >
+          <FlaskConical size={14} />
+          试算
+        </Button>
+        <Button size="sm" onClick={add}>
+          <Plus size={14} />
+          新建场景
+        </Button>
+      </PageHeading>
+      <div className="scene-workspace">
+        <aside className="scene-list">
+          <div className="scene-list-toolbar">
+            <div style={{ position: "relative" }}>
+              <Search
+                size={13}
+                style={{
+                  position: "absolute",
+                  left: 9,
+                  top: 11,
+                  color: "#a3adbd",
+                }}
+              />
+              <Input
+                aria-label="搜索场景"
+                placeholder="搜索场景"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                style={{ paddingLeft: 29 }}
+              />
+            </div>
+            <Choice
+              label="定位端点场景"
+              value={filter}
+              onChange={setFilter}
+              options={[
+                { value: "", label: "全部端点" },
+                ...endpoints.map((e) => ({ value: e.id, label: e.name })),
+              ]}
+            />
+          </div>
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={reorder}
+          >
+            <SortableContext
+              items={draft.scenes.map((s) => s.id)}
+              strategy={verticalListSortingStrategy}
+            >
+              <div className="scene-list-items">
+                {draft.scenes.length ? (
+                  draft.scenes.map((s, i) => (
+                    <SceneRow
+                      key={s.id}
+                      scene={s}
+                      index={i}
+                      selected={s.id === scene?.id}
+                      dimmed={Boolean(
+                        (filter &&
+                          s.endpoints?.length &&
+                          !s.endpoints.includes(filter)) ||
+                        (search &&
+                          !`${s.name} ${s.note || ""}`.includes(search)),
+                      )}
+                      onSelect={() => {
+                        setSelected(s.id);
+                        setError("");
+                      }}
+                    />
+                  ))
+                ) : (
+                  <Empty text="暂无场景" />
+                )}
+              </div>
+            </SortableContext>
+          </DndContext>
+        </aside>
+        <div className="scene-editor">
+          {scene ? (
+            <div className="panel">
+              <div className="editor-heading">
+                <strong>{scene.name || "新建场景"}</strong>
+                <SceneTemplatePicker
+                  scenes={draft.scenes.filter(
+                    (s) => s.id !== scene.id && s.name.trim(),
+                  )}
+                  onSelect={(template) =>
+                    setDraft((p) => ({
+                      ...p,
+                      scenes: p.scenes.map((s) =>
+                        s.id === scene.id
+                          ? {
+                              ...structuredClone(template),
+                              id: scene.id,
+                              name:
+                                scene.name.trim() || `${template.name} 副本`,
+                            }
+                          : s,
+                      ),
+                    }))
+                  }
+                />
+                <Switch
+                  aria-label="启用此场景"
+                  checked={scene.enabled !== false}
+                  onCheckedChange={(enabled) => patch({ enabled })}
+                />
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="复制场景"
+                  onClick={duplicate}
+                >
+                  <Copy size={14} />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="删除场景"
+                  onClick={remove}
+                >
+                  <Trash2 size={14} />
+                </Button>
+              </div>
+              <div className="editor-block">
+                <div className="fields-grid">
+                  <label className="field">
+                    <span>场景名称</span>
+                    <Input
+                      aria-label="场景名称"
+                      value={scene.name}
+                      onChange={(e) => patch({ name: e.target.value })}
+                      aria-invalid={attempted && !scene.name.trim()}
+                    />
+                    {attempted && !scene.name.trim() && (
+                      <p className="field-error">请填写场景名称</p>
+                    )}
+                  </label>
+                  <label className="field">
+                    <span>注释</span>
+                    <Input
+                      aria-label="场景注释"
+                      placeholder="选填"
+                      value={scene.note || ""}
+                      onChange={(e) => patch({ note: e.target.value })}
+                    />
+                  </label>
+                </div>
+              </div>
+              <div className="editor-block">
+                <div className="editor-block-title">
+                  <h3>适用端点</h3>
+                </div>
+                <div className="endpoint-options">
+                  <button
+                    className={`endpoint-option ${!scene.endpoints?.length ? "selected" : ""}`}
+                    onClick={() => patch({ endpoints: [] })}
+                  >
+                    全部端点
+                  </button>
+                  {endpoints.map((e) => (
+                    <button
+                      key={e.id}
+                      aria-label={`适用于 ${e.name}`}
+                      aria-pressed={scoped(e.id)}
+                      className={`endpoint-option ${scoped(e.id) ? "selected" : ""}`}
+                      onClick={() =>
+                        patch({
+                          endpoints: scoped(e.id)
+                            ? scene.endpoints!.filter((id) => id !== e.id)
+                            : [...(scene.endpoints || []), e.id],
+                        })
+                      }
+                    >
+                      <img src={e.icon} alt="" />
+                      {e.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="editor-block">
+                <ModelScope
+                  key={scene.id}
+                  models={scene.models || []}
+                  suggestions={[
+                    ...new Set(draft.scenes.flatMap((s) => s.models || [])),
+                  ]}
+                  onChange={(models) => patch({ models })}
+                />
+              </div>
+              <div className="editor-block">
+                <div className="editor-block-title">
+                  <h3>
+                    匹配条件{" "}
+                    <Help>
+                      每项分数严格超过所填阈值才满足条件。场景从上到下执行，首个匹配场景决定处理动作。
+                    </Help>
+                  </h3>
+                  <div className="segmented">
+                    <button
+                      className={scene.match === "all" ? "selected" : ""}
+                      onClick={() => patch({ match: "all" })}
+                    >
+                      满足全部
+                    </button>
+                    <button
+                      className={scene.match === "any" ? "selected" : ""}
+                      onClick={() => patch({ match: "any" })}
+                    >
+                      满足任一
+                    </button>
+                  </div>
+                </div>
+                <div className="conditions">
+                  {scene.conditions.map((c, i) => {
+                    const q = policy.questions.find(
+                        (q) => q.key === c.question,
+                      ),
+                      invalid =
+                        attempted &&
+                        (!q ||
+                          !Number.isFinite(c.threshold) ||
+                          c.threshold < 0 ||
+                          c.threshold > q.max);
+                    return (
+                      <div key={i} className="condition-row">
+                        <Choice
+                          label={`审核项 ${i + 1}`}
+                          value={c.question}
+                          onChange={(question) => condition(i, { question })}
+                          options={policy.questions
+                            .filter(
+                              (q) =>
+                                q.key === c.question ||
+                                !scene.conditions.some(
+                                  (c) => c.question === q.key,
+                                ),
+                            )
+                            .map((q) => ({
+                              value: q.key,
+                              label: questionName(q.key),
+                            }))}
+                        />
+                        <Help>{questionMeta[c.question]?.description}</Help>
+                        <span className="operator">&gt;</span>
+                        <Input
+                          aria-label={`${questionName(c.question)}阈值`}
+                          className={invalid ? "condition-error" : ""}
+                          type="number"
+                          min="0"
+                          max={q?.max}
+                          step="0.01"
+                          value={
+                            Number.isFinite(c.threshold) ? c.threshold : ""
+                          }
+                          onChange={(e) =>
+                            condition(i, {
+                              threshold:
+                                e.target.value === ""
+                                  ? NaN
+                                  : Number(e.target.value),
+                            })
+                          }
+                        />
+                        <span className="range">0–{q?.max}</span>
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
+                          aria-label={`删除条件 ${i + 1}`}
+                          onClick={() =>
+                            patch({
+                              conditions: scene.conditions.filter(
+                                (_, j) => j !== i,
+                              ),
+                            })
+                          }
+                        >
+                          <Trash2 size={12} />
+                        </Button>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div style={{ marginTop: scene.conditions.length ? 10 : 0 }}>
+                  <AddConditions
+                    questions={policy.questions}
+                    selected={scene.conditions.map((c) => c.question)}
+                    onAdd={(keys) =>
+                      patch({
+                        conditions: [
+                          ...scene.conditions,
+                          ...keys.map((question) => ({
+                            question,
+                            threshold: NaN,
+                          })),
+                        ],
+                      })
+                    }
+                  />
+                </div>
+                {attempted && issues.get(scene.id) && (
+                  <p className="field-error">{issues.get(scene.id)}</p>
+                )}
+              </div>
+              <div className="editor-block">
+                <div className="editor-block-title">
+                  <h3>审查方式</h3>
+                </div>
+                <div className="action-options">
+                  <button
+                    className={`action-option block ${scene.action === "block" ? "selected" : ""}`}
+                    onClick={() => patch({ action: "block" })}
+                  >
+                    <Ban size={16} />
+                    阻塞性审查
+                  </button>
+                  <button
+                    className={`action-option ${scene.action === "allow" ? "selected" : ""}`}
+                    onClick={() => patch({ action: "allow" })}
+                  >
+                    <FileCheck2 size={16} />
+                    非阻塞性审查
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="panel">
+              <div className="empty-state">
+                <Button variant="outline" size="sm" onClick={add}>
+                  <Plus />
+                  新建场景
+                </Button>
+              </div>
+            </div>
+          )}
+          {(dirty || error) && (
+            <div className="save-bar">
+              <span>
+                {error ? (
+                  <span role="alert" style={{ color: "#bf5665" }}>
+                    {error}
+                  </span>
+                ) : (
+                  "有未保存的修改"
+                )}
+              </span>
+              {error && onReload && (
+                <Button size="sm" variant="ghost" onClick={onReload}>
+                  载入线上策略
+                </Button>
+              )}
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={saving}
+                onClick={() => {
+                  setDraft(copyPolicy(policy));
+                  setError("");
+                }}
+              >
+                <RotateCcw size={13} />
+                放弃修改
+              </Button>
+              <Button size="sm" disabled={saving} onClick={() => void save()}>
+                {saving ? "保存中…" : "保存并生效"}
+              </Button>
+            </div>
+          )}
+          <div className="test-workspace" ref={inspectorRef}>
+            <div className="section-tabs">
+              <button
+                className={`section-tab ${inspector === "test" ? "active" : ""}`}
+                onClick={() =>
+                  setInspector((value) => (value === "test" ? null : "test"))
+                }
+              >
+                草稿试算
+              </button>
+              <button
+                className={`section-tab ${inspector === "analysis" ? "active" : ""}`}
+                onClick={() =>
+                  setInspector((value) =>
+                    value === "analysis" ? null : "analysis",
+                  )
+                }
+              >
+                场景分析
+              </button>
+            </div>
+            {inspector === "test" && (
+              <div className="panel">
+                <PolicyTest policy={draft} sample={sample} />
+              </div>
+            )}
+            {inspector === "analysis" && scene && (
+              <div className="panel">
+                <SceneAnalysis scene={scene} questions={policy.questions} />
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </>
+  );
 }

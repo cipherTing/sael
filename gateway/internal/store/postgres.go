@@ -49,7 +49,7 @@ func Open(ctx context.Context, dsn, spoolPath string) (*PG, error) {
 		pool.Close()
 		return nil, err
 	}
-	for _, name := range []string{"migrations/001_init.sql", "migrations/002_jev.sql", "migrations/003_metrics.sql", "migrations/004_connections.sql", "migrations/005_remove_upstream_errors.sql"} {
+	for _, name := range []string{"migrations/001_init.sql", "migrations/002_jev.sql", "migrations/003_metrics.sql", "migrations/004_connections.sql", "migrations/005_remove_upstream_errors.sql", "migrations/006_analytics.sql", "migrations/007_session_blocks.sql", "migrations/008_jev_input_limits.sql", "migrations/009_ingest_cursor.sql"} {
 		sql, err := migrations.ReadFile(name)
 		if err != nil {
 			pool.Close()
@@ -61,6 +61,10 @@ func Open(ctx context.Context, dsn, spoolPath string) (*PG, error) {
 		}
 	}
 	store := &PG{pool: pool, spoolPath: spoolPath}
+	if err := store.redactHistoricalEvents(ctx); err != nil {
+		pool.Close()
+		return nil, err
+	}
 	if _, err := store.Policy(ctx); err != nil {
 		pool.Close()
 		return nil, err
@@ -124,7 +128,7 @@ func (s *PG) SeedUpstream(ctx context.Context, baseURL string) error {
 // Jev returns the current saved classifier connection.
 func (s *PG) Jev(ctx context.Context) (gateway.JevConfig, error) {
 	var c gateway.JevConfig
-	err := s.pool.QueryRow(ctx, "SELECT base_url,model,api_key,timeout_ms,updated_at FROM gateway_jev WHERE id=1").Scan(&c.BaseURL, &c.Model, &c.APIKey, &c.TimeoutMS, &c.UpdatedAt)
+	err := s.pool.QueryRow(ctx, "SELECT base_url,model,api_key,timeout_ms,COALESCE(max_input_tokens,28800),updated_at FROM gateway_jev WHERE id=1").Scan(&c.BaseURL, &c.Model, &c.APIKey, &c.TimeoutMS, &c.MaxInputTokens, &c.UpdatedAt)
 	if err != nil {
 		s.jevMu.RLock()
 		defer s.jevMu.RUnlock()
@@ -144,13 +148,25 @@ func (s *PG) UpdateJev(ctx context.Context, c gateway.JevConfig) (gateway.JevCon
 	if c.TimeoutMS == 0 {
 		c.TimeoutMS = 5000
 	}
-	err := s.pool.QueryRow(ctx, "UPDATE gateway_jev SET base_url=$1, model=$2, api_key=$3, timeout_ms=$4, updated_at=now() WHERE id=1 RETURNING updated_at", c.BaseURL, c.Model, c.APIKey, c.TimeoutMS).Scan(&c.UpdatedAt)
+	if c.MaxInputTokens == 0 {
+		c.MaxInputTokens = gateway.DefaultJevInputTokens
+	}
+	err := s.pool.QueryRow(ctx, "UPDATE gateway_jev SET base_url=$1, model=$2, api_key=$3, timeout_ms=$4, max_input_tokens=$5, updated_at=now() WHERE id=1 RETURNING updated_at", c.BaseURL, c.Model, c.APIKey, c.TimeoutMS, c.MaxInputTokens).Scan(&c.UpdatedAt)
 	if err == nil {
 		s.jevMu.Lock()
 		s.cachedJev, s.hasCachedJev = c, true
 		s.jevMu.Unlock()
 	}
 	return c, err
+}
+
+// SeedJevDefaults initializes the guard once; later console edits survive restarts.
+func (s *PG) SeedJevDefaults(ctx context.Context, maxInputTokens int) error {
+	if maxInputTokens <= 0 {
+		maxInputTokens = gateway.DefaultJevInputTokens
+	}
+	_, err := s.pool.Exec(ctx, "UPDATE gateway_jev SET max_input_tokens=$1 WHERE id=1 AND max_input_tokens IS NULL", maxInputTokens)
+	return err
 }
 
 // Policy loads the current versioned policy snapshot.
@@ -223,6 +239,12 @@ func clonePolicy(p policy.Policy) policy.Policy {
 	out.Scenes = make([]policy.Scene, len(p.Scenes))
 	for i, scene := range p.Scenes {
 		out.Scenes[i] = scene
+		out.Scenes[i].Models = append([]string(nil), scene.Models...)
+		out.Scenes[i].Endpoints = append([]string(nil), scene.Endpoints...)
+		if scene.Enabled != nil {
+			value := *scene.Enabled
+			out.Scenes[i].Enabled = &value
+		}
 		out.Scenes[i].Questions = append([]string(nil), scene.Questions...)
 		out.Scenes[i].Conditions = append([]policy.Condition(nil), scene.Conditions...)
 	}
@@ -238,6 +260,7 @@ func clonePolicy(p policy.Policy) policy.Policy {
 }
 
 func (s *PG) insertEvent(ctx context.Context, event gateway.Event) error {
+	event.Redact()
 	raw, err := json.Marshal(event)
 	if err != nil {
 		return err
@@ -248,6 +271,7 @@ func (s *PG) insertEvent(ctx context.Context, event gateway.Event) error {
 
 // WriteEvent persists an event or appends it to the local spool on DB failure.
 func (s *PG) WriteEvent(ctx context.Context, event gateway.Event) error {
+	event.Redact()
 	if err := s.insertEvent(ctx, event); err == nil {
 		return nil
 	}
@@ -324,15 +348,9 @@ func (s *PG) replayEvents(ctx context.Context) error {
 	return os.Remove(s.spoolPath)
 }
 
-const incrementSQL = `INSERT INTO gateway_counts_minute(bucket,protocol,model,outcome,count,last_seen,classifier_sum_ms,classifier_samples)
-		VALUES (date_trunc('minute',$1::timestamptz),$2,$3,$4,1,$1,$5,CASE WHEN $6::boolean THEN 1 ELSE 0 END)
-		ON CONFLICT (bucket,protocol,model,outcome) DO UPDATE SET count=gateway_counts_minute.count+1,last_seen=EXCLUDED.last_seen,
-		classifier_sum_ms=gateway_counts_minute.classifier_sum_ms+EXCLUDED.classifier_sum_ms,
-		classifier_samples=gateway_counts_minute.classifier_samples+EXCLUDED.classifier_samples`
-
 // Increment adds one request outcome to its minute bucket or local spool.
 func (s *PG) Increment(ctx context.Context, count gateway.Count) error {
-	_, err := s.pool.Exec(ctx, incrementSQL, count.Time, count.Protocol, count.Model, count.Outcome, count.ClassifierMS, count.ClassifierSample)
+	err := s.increment(ctx, count)
 	if err == nil {
 		return nil
 	}
@@ -371,7 +389,7 @@ func (s *PG) replayCounts(ctx context.Context) error {
 		}
 		tag, err := tx.Exec(ctx, "INSERT INTO replayed_counts(id) VALUES ($1) ON CONFLICT DO NOTHING", count.ID)
 		if err == nil && tag.RowsAffected() == 1 {
-			_, err = tx.Exec(ctx, incrementSQL, count.Time, count.Protocol, count.Model, count.Outcome, count.ClassifierMS, count.ClassifierSample)
+			err = writeCount(ctx, tx, count)
 		}
 		if err != nil {
 			_ = tx.Rollback(ctx)
@@ -483,8 +501,15 @@ func (s *PG) Events(ctx context.Context, f gateway.EventFilter) ([]gateway.Event
 	}
 	rows, err := s.pool.Query(ctx, `SELECT body FROM audit_events WHERE time >= $1
 		AND ($2='' OR kind=$2) AND ($3='' OR action=$3)
-		AND ($4='' OR request_id ILIKE '%'||$4||'%' OR body->>'text_preview' ILIKE '%'||$4||'%' OR body->>'model' ILIKE '%'||$4||'%')
-		ORDER BY time DESC LIMIT $5 OFFSET $6`, f.Since, f.Kind, f.Action, f.Search, f.Limit, f.Offset)
+		AND ($7::timestamptz IS NULL OR time < $7) AND ($8='' OR body->>'protocol'=$8)
+        AND ($9='' OR body->>'model'=$9) AND ($10='' OR body->'decision'->>'scene_id'=$10)
+        AND ($11='' OR body->>'error_kind'=$11)
+ AND ($12='' OR body->>'client_ip'=$12) AND ($13='' OR body->>'session_id'=$13)
+        AND ($4='' OR request_id ILIKE '%'||$4||'%' OR body->>'text' ILIKE '%'||$4||'%' OR body->>'text_preview' ILIKE '%'||$4||'%' OR body->>'model' ILIKE '%'||$4||'%'
+ OR body->>'client_ip' ILIKE '%'||$4||'%' OR body->>'session_id' ILIKE '%'||$4||'%'
+ OR body->>'client_request_id' ILIKE '%'||$4||'%' OR body->'parameters'->>'conversation_id' ILIKE '%'||$4||'%'
+ OR body->'parameters'->>'previous_response_id' ILIKE '%'||$4||'%')
+		ORDER BY time DESC LIMIT $5 OFFSET $6`, f.Since, f.Kind, f.Action, f.Search, f.Limit, f.Offset, optionalTime(f.Until), f.Endpoint, f.Model, f.Scene, f.ErrorKind, f.ClientIP, f.SessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -546,6 +571,9 @@ func (s *PG) Changes(ctx context.Context) ([]gateway.PolicyChange, error) {
 
 // Prune removes events older than the configured retention period.
 func (s *PG) Prune(ctx context.Context, days int) error {
+	if _, err := s.pool.Exec(ctx, "DELETE FROM gateway_session_blocks WHERE expires_at <= now()"); err != nil {
+		return err
+	}
 	if days < 1 {
 		return nil
 	}

@@ -41,7 +41,8 @@ func (c CLI) run(ctx context.Context, currentText string, settings *gateway.JevC
 				env = append(env, item)
 			}
 		}
-		cmd.Env = append(env, "TYPESAFE_API_KEY="+settings.APIKey, "TYPESAFE_BASE_URL="+settings.BaseURL, "TYPESAFE_DEFAULT_MODEL="+settings.Model)
+		env = append(env, "TYPESAFE_API_KEY="+settings.APIKey, "TYPESAFE_BASE_URL="+settings.BaseURL, "TYPESAFE_DEFAULT_MODEL="+settings.Model)
+		cmd.Env = env
 	}
 	cmd.Stdin = strings.NewReader(currentText)
 	var out, stderr bytes.Buffer
@@ -51,7 +52,7 @@ func (c CLI) run(ctx context.Context, currentText string, settings *gateway.JevC
 	}
 	var answers []policy.Answer
 	if err := json.Unmarshal(out.Bytes(), &answers); err != nil {
-		return nil, fmt.Errorf("sael JSON: %w", err)
+		return nil, fmt.Errorf("%w: %w", gateway.ErrInvalidClassifierResponse, err)
 	}
 	return answers, nil
 }

@@ -5,6 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/cipherTing/sael/gateway/internal/protocol"
 )
 
 // Question describes an expected classifier key, type, and score range.
@@ -59,17 +64,36 @@ type Scene struct {
 	Questions  []string    `json:"questions,omitempty"` // Legacy policies are converted on load.
 	Match      Match       `json:"match"`
 	Action     Action      `json:"action"`
+	Enabled    *bool       `json:"enabled,omitempty"`
+	Endpoints  []string    `json:"endpoints,omitempty"`
+	Models     []string    `json:"models,omitempty"`
+}
+
+// Active preserves the enabled state of scenes created before per-scene switches existed.
+func (s Scene) Active() bool { return s.Enabled == nil || *s.Enabled }
+
+// AppliesTo reports whether an enabled scene includes the request endpoint.
+func (s Scene) AppliesTo(endpoint string) bool {
+	return s.Active() && (len(s.Endpoints) == 0 || slices.Contains(s.Endpoints, endpoint))
+}
+
+// AppliesToModel reports whether a scene includes the request model.
+func (s Scene) AppliesToModel(model string) bool {
+	return len(s.Models) == 0 || slices.Contains(s.Models, model)
 }
 
 // Policy is one versioned snapshot used for a whole request.
 type Policy struct {
-	Enabled         bool               `json:"enabled"`
-	Version         int64              `json:"version"`
-	Thresholds      map[string]float64 `json:"thresholds,omitempty"` // Legacy policies are converted on load.
-	Scenes          []Scene            `json:"scenes"`
-	UnmatchedAction Action             `json:"unmatched_action,omitempty"` // Legacy policies are converted on load.
-	PreviewChars    *int               `json:"preview_chars"`
-	RetentionDays   *int               `json:"retention_days"`
+	TrustedKeyIdleDays     int                `json:"trusted_key_idle_days"`
+	Enabled                bool               `json:"enabled"`
+	Version                int64              `json:"version"`
+	Thresholds             map[string]float64 `json:"thresholds,omitempty"` // Legacy policies are converted on load.
+	Scenes                 []Scene            `json:"scenes"`
+	UnmatchedAction        Action             `json:"unmatched_action,omitempty"` // Legacy policies are converted on load.
+	PreviewChars           *int               `json:"preview_chars"`
+	RetentionDays          *int               `json:"retention_days"`
+	SessionBlockEnabled    bool               `json:"session_block_enabled,omitempty"`
+	SessionBlockTTLSeconds int                `json:"session_block_ttl_seconds,omitempty"`
 }
 
 // Answer is one measurement returned by the Sael CLI.
@@ -98,6 +122,9 @@ type Decision struct {
 
 // UpgradeLegacy moves the old shared thresholds into each scene once.
 func UpgradeLegacy(p *Policy) {
+	if p.SessionBlockEnabled && p.SessionBlockTTLSeconds <= 0 {
+		p.SessionBlockTTLSeconds = 3600
+	}
 	if p.Enabled && len(p.Scenes) == 0 {
 		p.Enabled = false
 	}
@@ -117,12 +144,26 @@ func UpgradeLegacy(p *Policy) {
 }
 
 // Validate checks ranges, references, and required fields before a policy is enabled.
+func (p Policy) TrustedKeyIdle() time.Duration {
+	days := p.TrustedKeyIdleDays
+	if days <= 0 {
+		days = 30
+	}
+	return time.Duration(days) * 24 * time.Hour
+}
+
 func Validate(p Policy) error {
+	if p.TrustedKeyIdleDays < 0 || p.TrustedKeyIdleDays > 106751 {
+		return errors.New("可信密钥闲置天数必须为正整数且不超过 106751")
+	}
 	if p.PreviewChars != nil && (*p.PreviewChars < 0 || *p.PreviewChars > 10000) {
 		return errors.New("preview chars must be 0–10000")
 	}
 	if p.RetentionDays != nil && (*p.RetentionDays < 1 || *p.RetentionDays > 3650) {
 		return errors.New("retention days must be 1–3650")
+	}
+	if p.SessionBlockEnabled && (p.SessionBlockTTLSeconds < 1 || p.SessionBlockTTLSeconds > 9223372036) {
+		return errors.New("会话冻结时长必须大于 0 且不超过时间类型的范围")
 	}
 	known := map[string]Question{}
 	for _, q := range Questions {
@@ -133,6 +174,20 @@ func Validate(p Policy) error {
 	}
 	seen := map[string]bool{}
 	for _, scene := range p.Scenes {
+		models := map[string]bool{}
+		for _, model := range scene.Models {
+			if model == "" || strings.TrimSpace(model) != model || models[model] {
+				return fmt.Errorf("场景 %s 的模型为空、重复或含首尾空格", scene.Name)
+			}
+			models[model] = true
+		}
+		endpoints := map[string]bool{}
+		for _, endpoint := range scene.Endpoints {
+			if !protocol.Monitored(endpoint) || endpoints[endpoint] {
+				return fmt.Errorf("场景 %s 的端点无效或重复", scene.Name)
+			}
+			endpoints[endpoint] = true
+		}
 		if scene.ID == "" || scene.Name == "" || seen[scene.ID] {
 			return errors.New("scene requires a unique id and name")
 		}
@@ -161,36 +216,93 @@ func Validate(p Policy) error {
 	return nil
 }
 
-// Evaluate validates all CLI answers and applies ordered scene rules.
-func Evaluate(p Policy, answers []Answer) (Decision, error) {
-	if err := Validate(p); err != nil {
-		return Decision{}, err
+// ConditionTrace preserves the actual comparison used during a simulation.
+type ConditionTrace struct {
+	Question  string  `json:"question"`
+	Value     float64 `json:"value"`
+	Threshold float64 `json:"threshold"`
+	Matched   bool    `json:"matched"`
+}
+
+// SceneTrace explains why a scene was selected or skipped.
+type SceneTrace struct {
+	ID         string           `json:"id"`
+	Name       string           `json:"name"`
+	Status     string           `json:"status"`
+	Conditions []ConditionTrace `json:"conditions"`
+}
+
+// Evaluate uses the same evaluator as the operator's draft simulation.
+func Evaluate(p Policy, answers []Answer, endpoint ...string) (Decision, error) {
+	scope := ""
+	if len(endpoint) > 0 {
+		scope = endpoint[0]
 	}
+	model := ""
+	if len(endpoint) > 1 {
+		model = endpoint[1]
+	}
+	d, _, err := EvaluateDetailed(p, answers, scope, model)
+	return d, err
+}
+
+// EvaluateDetailed produces the production decision and its comparison trace in one pass.
+func EvaluateDetailed(p Policy, answers []Answer, endpoint string, model ...string) (Decision, []SceneTrace, error) {
+	if err := Validate(p); err != nil {
+		return Decision{}, nil, err
+	}
+	decision := Decision{Action: Allow, Hits: []Hit{}, AlsoMatched: []string{}}
+	traces := []SceneTrace{}
 	if !p.Enabled {
-		return Decision{Action: Allow}, nil
+		return decision, traces, nil
 	}
 	byKey, err := checkedAnswers(answers)
 	if err != nil {
-		return Decision{}, err
+		return Decision{}, nil, err
 	}
-	decision := Decision{Action: Allow, Hits: []Hit{}}
 	for i, scene := range p.Scenes {
-		hits := make([]Hit, 0, len(scene.Conditions))
+		trace := SceneTrace{ID: scene.ID, Name: scene.Name, Status: "not_matched", Conditions: []ConditionTrace{}}
+		if !scene.Active() {
+			trace.Status = "disabled"
+			traces = append(traces, trace)
+			continue
+		}
+		if endpoint != "" && !scene.AppliesTo(endpoint) {
+			trace.Status = "endpoint_skipped"
+			traces = append(traces, trace)
+			continue
+		}
+		requestModel := ""
+		if len(model) > 0 {
+			requestModel = model[0]
+		}
+		if !scene.AppliesToModel(requestModel) {
+			trace.Status = "model_skipped"
+			traces = append(traces, trace)
+			continue
+		}
+		hits := []Hit{}
 		for _, condition := range scene.Conditions {
-			if value := byKey[condition.Question].Value; value > condition.Threshold {
+			value := byKey[condition.Question].Value
+			matched := value > condition.Threshold
+			trace.Conditions = append(trace.Conditions, ConditionTrace{condition.Question, value, condition.Threshold, matched})
+			if matched {
 				hits = append(hits, Hit{condition.Question, value, condition.Threshold})
 			}
 		}
-		if (scene.Match == Any && len(hits) == 0) || (scene.Match == All && len(hits) != len(scene.Conditions)) {
-			continue
+		matched := (scene.Match == Any && len(hits) > 0) || (scene.Match == All && len(hits) == len(scene.Conditions))
+		if matched {
+			if decision.SceneID == "" {
+				decision.SceneID, decision.SceneName, decision.ScenePriority, decision.Action, decision.Hits = scene.ID, scene.Name, i+1, scene.Action, hits
+				trace.Status = "effective"
+			} else {
+				decision.AlsoMatched = append(decision.AlsoMatched, scene.ID)
+				trace.Status = "shadowed"
+			}
 		}
-		if decision.SceneID == "" {
-			decision.SceneID, decision.SceneName, decision.ScenePriority, decision.Action, decision.Hits = scene.ID, scene.Name, i+1, scene.Action, hits
-		} else {
-			decision.AlsoMatched = append(decision.AlsoMatched, scene.ID)
-		}
+		traces = append(traces, trace)
 	}
-	return decision, nil
+	return decision, traces, nil
 }
 
 // ValidateAnswers checks that one classifier response has all eleven valid scores.

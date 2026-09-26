@@ -11,10 +11,10 @@ import (
 
 func adminRequest(t *testing.T, s *Server, method, path, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	r := httptest.NewRequest(method, path, strings.NewReader(body))
+	r := authorizedRequest(method, path, strings.NewReader(body))
 	r.AddCookie(login(t, s))
 	w := httptest.NewRecorder()
-	s.ServeHTTP(w, r)
+	s.AdminHandler().ServeHTTP(w, r)
 	return w
 }
 
@@ -35,6 +35,18 @@ func TestJevConfigRequiresAllFieldsAndNeverReturnsSecret(t *testing.T) {
 	retained := adminRequest(t, s, http.MethodPut, "/admin/jev", `{"base_url":"https://api.example/v1","model":"jev-next"}`)
 	if retained.Code != 200 || strings.Contains(retained.Body.String(), "secret-key") {
 		t.Fatalf("retain status=%d body=%s", retained.Code, retained.Body.String())
+	}
+}
+
+func TestJevConfigAcceptsInputGuardSettings(t *testing.T) {
+	s, store, _ := makeServer(t, activePolicy(), &testClassifier{})
+	w := adminRequest(t, s, http.MethodPut, "/admin/jev", `{"base_url":"https://api.example/v1","model":"jev-test","api_key":"secret-key","max_input_tokens":28000}`)
+	if w.Code != http.StatusOK || store.jev.MaxInputTokens != 28000 {
+		t.Fatalf("status=%d store=%+v body=%s", w.Code, store.jev, w.Body.String())
+	}
+	w = adminRequest(t, s, http.MethodPut, "/admin/jev", `{"base_url":"https://api.example/v1","model":"jev-test","max_input_tokens":-1}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("negative input limit status=%d body=%s", w.Code, w.Body.String())
 	}
 }
 
@@ -67,7 +79,6 @@ func TestJevTextTestReturnsScoresAndSimulatedDecisionWithoutProductionEvents(t *
 }
 
 func TestJevTextTestMarksClassifierAsHealthy(t *testing.T) {
-
 	c := &testClassifier{answers: fullAnswers(nil)}
 	s, _, _ := makeServer(t, activePolicy(), c)
 	store, _ := s.Store.(*testStore)

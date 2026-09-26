@@ -74,6 +74,17 @@ func TestEnabledPolicyRequiresValidSceneConditions(t *testing.T) {
 	}
 }
 
+func TestSessionFreezeSettingsValidate(t *testing.T) {
+	p := Policy{Enabled: true, SessionBlockEnabled: true, SessionBlockTTLSeconds: 600, Scenes: []Scene{{ID: "a", Name: "场景", Match: Any, Action: Block, Conditions: []Condition{{Question: "gore", Threshold: 1}}}}}
+	if err := Validate(p); err != nil {
+		t.Fatal(err)
+	}
+	p.SessionBlockTTLSeconds = 0
+	if err := Validate(p); err == nil {
+		t.Fatal("enabled session freeze requires a positive TTL")
+	}
+}
+
 func TestLegacyPolicyCopiesGlobalThresholdsIntoScenes(t *testing.T) {
 	p := Policy{Enabled: true, Thresholds: map[string]float64{"gore": 1.5, "self_harm": 0.8}, UnmatchedAction: Block,
 		Scenes: []Scene{{ID: "old", Name: "旧场景", Questions: []string{"gore", "self_harm"}, Match: All, Action: Block}}}

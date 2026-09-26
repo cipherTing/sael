@@ -2,7 +2,6 @@
 package gateway
 
 import (
-	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
@@ -14,7 +13,16 @@ import (
 	"time"
 
 	"github.com/cipherTing/sael/gateway/internal/policy"
+	"github.com/cipherTing/sael/gateway/internal/protocol"
 )
+
+type jevConfigInput struct {
+	BaseURL        string `json:"base_url"`
+	Model          string `json:"model"`
+	APIKey         string `json:"api_key"`
+	TimeoutMS      int    `json:"timeout_ms"`
+	MaxInputTokens *int   `json:"max_input_tokens"`
+}
 
 func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/admin/login" && r.Method == http.MethodPost {
@@ -35,6 +43,20 @@ func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
 		s.logout(w, r)
 	case r.URL.Path == "/admin/session" && r.Method == http.MethodGet:
 		writeJSON(w, map[string]bool{"authenticated": true})
+	case r.URL.Path == "/admin/access" && r.Method == http.MethodGet:
+		writeJSON(w, map[string]any{"ingress_listen": s.IngressAddress, "ingress_url": s.PublicIngressURL, "endpoints": protocol.Endpoints})
+	case r.URL.Path == "/admin/analytics" && r.Method == http.MethodGet:
+		f, err := analyticsFilter(r.URL.Query())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		result, err := s.Store.Analytics(r.Context(), f)
+		if err != nil {
+			http.Error(w, "统计数据暂不可用", http.StatusServiceUnavailable)
+			return
+		}
+		writeJSON(w, result)
 	case r.URL.Path == "/admin/upstream" && r.Method == http.MethodGet:
 		config, err := s.Store.Upstream(r.Context())
 		if err != nil {
@@ -69,10 +91,10 @@ func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, settings.public())
 	case r.URL.Path == "/admin/jev" && r.Method == http.MethodPut:
-		var input JevConfig
+		var raw jevConfigInput
 		dec := json.NewDecoder(r.Body)
 		dec.DisallowUnknownFields()
-		if dec.Decode(&input) != nil {
+		if dec.Decode(&raw) != nil {
 			http.Error(w, "Jev 配置格式错误", http.StatusBadRequest)
 			return
 		}
@@ -81,7 +103,14 @@ func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Jev 配置暂不可用", http.StatusServiceUnavailable)
 			return
 		}
-		input.BaseURL, input.Model = strings.TrimSpace(input.BaseURL), strings.TrimSpace(input.Model)
+		input := JevConfig{BaseURL: strings.TrimSpace(raw.BaseURL), Model: strings.TrimSpace(raw.Model), APIKey: raw.APIKey, TimeoutMS: raw.TimeoutMS, MaxInputTokens: previous.inputLimit()}
+		if raw.MaxInputTokens != nil {
+			if *raw.MaxInputTokens <= 0 {
+				http.Error(w, "送审上限必须是正整数", http.StatusBadRequest)
+				return
+			}
+			input.MaxInputTokens = *raw.MaxInputTokens
+		}
 		if input.APIKey == "" {
 			input.APIKey = previous.APIKey
 		}
@@ -98,70 +127,8 @@ func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, saved.public())
-	case r.URL.Path == "/admin/jev/test" && r.Method == http.MethodPost:
-		var input struct {
-			Text string `json:"text"`
-		}
-		dec := json.NewDecoder(r.Body)
-		dec.DisallowUnknownFields()
-		if dec.Decode(&input) != nil || strings.TrimSpace(input.Text) == "" {
-			http.Error(w, "请输入测试文本", http.StatusBadRequest)
-			return
-		}
-		settings, err := s.Store.Jev(r.Context())
-		if err != nil {
-			http.Error(w, "Jev 配置暂不可用", http.StatusServiceUnavailable)
-			return
-		}
-		if err := settings.validate(); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		ctx, cancel := context.WithTimeout(r.Context(), settings.timeout())
-		defer cancel()
-		started := time.Now()
-		var scores []policy.Answer
-		select {
-		case s.Slots <- struct{}{}:
-			if configured, ok := s.Classifier.(configuredClassifier); ok {
-				scores, err = configured.CheckConfigured(ctx, input.Text, settings)
-			} else {
-				scores, err = s.Classifier.Check(ctx, input.Text)
-			}
-			<-s.Slots
-		case <-ctx.Done():
-			err = ctx.Err()
-		}
-		s.markClassifier(err, ctx.Err() != nil)
-		if err != nil {
-			http.Error(w, "Jev 测试失败，请检查地址、模型、密钥及服务状态", http.StatusBadGateway)
-			return
-		}
-		if policy.ValidateAnswers(scores) != nil {
-			http.Error(w, "Jev 返回的审核分数不完整或格式错误", http.StatusBadGateway)
-			return
-		}
-		p, err := s.Store.Policy(r.Context())
-		if err != nil {
-			http.Error(w, "策略暂不可用", http.StatusServiceUnavailable)
-			return
-		}
-		p.Enabled = true // A test may simulate rules while production review is off.
-		var decision *policy.Decision
-		if policy.Validate(p) == nil {
-			result, err := policy.Evaluate(p, scores)
-			if err != nil {
-				http.Error(w, "Jev 返回的审核分数不完整或格式错误", http.StatusBadGateway)
-				return
-			}
-			decision = &result
-		}
-		writeJSON(w, struct {
-			Scores       []policy.Answer  `json:"scores"`
-			Decision     *policy.Decision `json:"decision"`
-			PolicyReady  bool             `json:"policy_ready"`
-			ClassifierMS int64            `json:"classifier_ms"`
-		}{scores, decision, decision != nil, time.Since(started).Milliseconds()})
+	case (r.URL.Path == "/admin/jev/test" || r.URL.Path == "/admin/policy/test") && r.Method == http.MethodPost:
+		s.testPolicy(w, r)
 	case r.URL.Path == "/admin/policy" && r.Method == http.MethodGet:
 		p, err := s.Store.Policy(r.Context())
 		if err != nil {
@@ -219,15 +186,16 @@ func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, result)
 	case r.URL.Path == "/admin/events" && r.Method == http.MethodGet:
 		q := r.URL.Query()
-		hours, _ := strconv.Atoi(q.Get("hours"))
-		if hours < 1 || hours > 720 {
-			hours = 24
+		f, err := analyticsFilter(q)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
 		}
 		offset, _ := strconv.Atoi(q.Get("offset"))
 		if offset < 0 {
 			offset = 0
 		}
-		items, err := s.Store.Events(r.Context(), EventFilter{Since: time.Now().Add(-time.Duration(hours) * time.Hour), Kind: q.Get("kind"), Action: q.Get("action"), Search: q.Get("search"), Limit: 50, Offset: offset})
+		items, err := s.Store.Events(r.Context(), EventFilter{Since: f.Since, Until: f.Until, Endpoint: f.Endpoint, Model: f.Model, Scene: q.Get("scene"), ErrorKind: q.Get("error_kind"), Kind: q.Get("kind"), Action: q.Get("action"), Search: q.Get("search"), ClientIP: q.Get("client_ip"), SessionID: q.Get("session_id"), Limit: 50, Offset: offset})
 		if err != nil {
 			http.Error(w, "events unavailable", http.StatusServiceUnavailable)
 			return
@@ -265,9 +233,16 @@ func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func overviewRange(query url.Values, now time.Time) (time.Time, time.Time, error) {
+func overviewRange(query url.Values, now time.Time) (startTime, endTime time.Time, err error) {
 	startText, endText := strings.TrimSpace(query.Get("start")), strings.TrimSpace(query.Get("end"))
 	if startText == "" && endText == "" {
+		if raw := query.Get("minutes"); raw != "" {
+			minutes, err := strconv.Atoi(raw)
+			if err != nil || minutes < 1 || minutes > 527040 {
+				return time.Time{}, time.Time{}, errors.New("时间范围无效")
+			}
+			return now.Add(-time.Duration(minutes) * time.Minute), now, nil
+		}
 		hours, _ := strconv.Atoi(query.Get("hours"))
 		if hours < 1 || hours > 720 {
 			hours = 24
@@ -300,16 +275,64 @@ func overviewRange(query url.Values, now time.Time) (time.Time, time.Time, error
 	return since, until, nil
 }
 
+func analyticsFilter(q url.Values) (AnalyticsFilter, error) {
+	since, until, err := overviewRange(q, time.Now().UTC())
+	if err != nil {
+		return AnalyticsFilter{}, err
+	}
+	endpoint := q.Get("endpoint")
+	if endpoint != "" && !protocol.Monitored(endpoint) {
+		return AnalyticsFilter{}, errors.New("端点无效")
+	}
+	window := until.Sub(since)
+	since = since.Truncate(time.Minute)
+	if until != until.Truncate(time.Minute) {
+		until = until.Truncate(time.Minute).Add(time.Minute)
+	}
+	if q.Get("start") == "" && q.Get("end") == "" {
+		since = until.Add(-window)
+	}
+	granularity := q.Get("granularity")
+	switch granularity {
+	case "", "1m", "5m", "1h", "1d":
+	default:
+		return AnalyticsFilter{}, errors.New("统计粒度无效")
+	}
+	zone := q.Get("timezone")
+	if zone == "" {
+		zone = "UTC"
+	}
+	if _, err := time.LoadLocation(zone); err != nil {
+		return AnalyticsFilter{}, errors.New("统计时区无效")
+	}
+	f := AnalyticsFilter{Since: since, Until: until, Endpoint: endpoint, Model: q.Get("model"), Granularity: granularity, Timezone: zone}
+	return f, nil
+}
+
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	if !sameOrigin(r) {
 		http.Error(w, "invalid origin", http.StatusForbidden)
+		return
+	}
+	if s.Security == nil {
+		http.Error(w, "登录保护暂不可用", 503)
+		return
+	}
+	retry, err := s.Security.LoginAttempt(r.Context(), s.clientIP(r))
+	if err != nil {
+		http.Error(w, "登录保护暂不可用", 503)
+		return
+	}
+	if retry > 0 {
+		w.Header().Set("Retry-After", strconv.FormatInt(int64((retry+time.Second-1)/time.Second), 10))
+		http.Error(w, "登录尝试过于频繁，请稍后重试", 429)
 		return
 	}
 	var input struct {
 		Password string `json:"password"`
 	}
 	if json.NewDecoder(r.Body).Decode(&input) != nil {
-		http.Error(w, "invalid JSON", 400)
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
 	got, want := sha256.Sum256([]byte(input.Password)), sha256.Sum256([]byte(s.AdminPassword))
