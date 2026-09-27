@@ -5,15 +5,11 @@ import { request } from "../api";
 import type { UpstreamConfig } from "../SettingsPage";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
-import {
-  CopyButton,
-  ErrorState,
-  PageHeading,
-  Panel,
-} from "../components/common";
+import { CopyButton, Panel } from "../components/common";
+import { notifyError, notifyRetry } from "../notifications";
 
 type Access = { ingress_url: string };
-export default function AccessPage() {
+export default function AccessSettings() {
   const access = useQuery({
       queryKey: ["access"],
       queryFn: () => request<Access>("/admin/access"),
@@ -23,14 +19,17 @@ export default function AccessPage() {
       queryFn: () => request<UpstreamConfig>("/admin/upstream"),
     });
   const [url, setURL] = useState(""),
-    [error, setError] = useState(""),
     [saving, setSaving] = useState(false);
   useEffect(() => {
     if (upstream.data) setURL(upstream.data.base_url);
   }, [upstream.data]);
+  useEffect(() => {
+    if (access.error) notifyRetry(access.error, () => void access.refetch());
+    if (upstream.error)
+      notifyRetry(upstream.error, () => void upstream.refetch());
+  }, [access.error, access.refetch, upstream.error, upstream.refetch]);
   const ingress = access.data?.ingress_url || "";
   async function save() {
-    setError("");
     let normalized: string;
     try {
       const parsed = new URL(url.trim());
@@ -45,7 +44,7 @@ export default function AccessPage() {
         throw new Error();
       normalized = parsed.origin;
     } catch {
-      setError("请填写不带路径的 HTTP(S) 地址");
+      notifyError(new Error("请填写不带路径的 HTTP(S) 地址"));
       return;
     }
     setSaving(true);
@@ -57,17 +56,13 @@ export default function AccessPage() {
       setURL(saved.base_url);
       await upstream.refetch();
     } catch (error) {
-      setError(error instanceof Error ? error.message : String(error));
+      notifyError(error);
     } finally {
       setSaving(false);
     }
   }
   return (
     <>
-      <PageHeading title="接入" />
-      {(access.isError || upstream.isError) && (
-        <ErrorState error={access.error || upstream.error} />
-      )}
       <div className="access-grid">
         <Panel title="进网入口" extra={<Network size={15} color="#99a5b8" />}>
           <div className="panel-body">
@@ -106,11 +101,6 @@ export default function AccessPage() {
           </form>
         </Panel>
       </div>
-      {error && (
-        <div style={{ marginBottom: 16 }}>
-          <ErrorState error={error} />
-        </div>
-      )}
     </>
   );
 }

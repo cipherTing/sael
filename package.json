@@ -1,0 +1,11 @@
+{
+  "name": "sael",
+  "private": true,
+  "scripts": {
+    "docker:up": "cd gateway/deploy && docker compose up -d --wait",
+    "docker:rebuild": "cd gateway/deploy && docker compose up -d --build --wait gateway",
+    "docker:ps": "cd gateway/deploy && docker compose ps",
+    "docker:logs": "cd gateway/deploy && docker compose logs -f gateway",
+    "docker:down": "cd gateway/deploy && docker compose down"
+  }
+}

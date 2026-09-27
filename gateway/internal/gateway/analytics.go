@@ -21,6 +21,7 @@ type AnalyticsFilter struct {
 	Granularity, Timezone string
 }
 
+// StepSeconds returns the selected bucket width in seconds.
 func (f AnalyticsFilter) StepSeconds() int64 {
 	if seconds := map[string]int64{"1m": 60, "5m": 300, "1h": 3600, "1d": 86400}[f.Granularity]; seconds != 0 {
 		return seconds
@@ -30,11 +31,12 @@ func (f AnalyticsFilter) StepSeconds() int64 {
 
 // TrafficPoint contains aggregate request outcomes for a time bucket.
 type TrafficPoint struct {
-	Time     time.Time `json:"time"`
-	Endpoint string    `json:"endpoint"`
-	Model    string    `json:"model"`
-	Outcome  string    `json:"outcome"`
-	Count    int64     `json:"count"`
+	ClassifierCalls int64     `json:"classifier_calls"`
+	Time            time.Time `json:"time"`
+	Endpoint        string    `json:"endpoint"`
+	Model           string    `json:"model"`
+	Outcome         string    `json:"outcome"`
+	Count           int64     `json:"count"`
 }
 
 // DistributionPoint contains one non-cumulative histogram bucket.

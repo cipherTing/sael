@@ -30,6 +30,8 @@
 | 调规则之前想知道会影响什么 | 草稿试算、分类分数、逐场景匹配过程、从已有场景创建 |
 | 想看审查是否健康、哪些规则经常命中 | 请求趋势、实时 RPM、命中率、拦截率、Jev 失败率与耗时、场景排行 |
 | 需要定位一次拦截 | 请求端点、模型、IP、显式会话 ID、去敏文本、命中条件与分数 |
+| 重复违规文本造成重复送审 | 按场景条件和提示词复用判定，缓存命中直接执行当前动作 |
+| 想定位问题请求使用了哪个密钥 | 完整密钥加密存储，可信列表和请求详情显示掩码密钥 |
 | 同一会话反复触发拦截 | 可选会话冻结，设置时长，到期自动恢复 |
 
 ## 规则由场景定义
@@ -56,21 +58,24 @@ flowchart LR
     Gateway --> Scope{场景适用且密钥可信?}
     Scope -- 否 --> Upstream[你的 AI 服务]
     Scope -- 是 --> Mode{包含阻塞场景?}
-    Mode -- 是 --> Review[当前用户文本 → Jev]
-    Review --> Rules[按优先级匹配场景]
+    Mode -- 是 --> Review[查询场景判定缓存]
+    Review -- 命中 --> Rules[按当前顺序匹配场景]
+    Review -- 缺失 --> Jev[Jev → 场景判定]
+    Jev --> Rules
     Rules -- 放行 --> Upstream
     Rules -- 拦截 --> Deny[按端点格式返回 403]
     Mode -- 否 --> Upstream
-    Mode -- 并行审查 --> Async[Jev → 命中记录]
+    Mode -- 并行审查 --> Async[场景缓存 / Jev → 命中记录]
     Async -.-> Console[独立端口的运维控制台]
     Rules -. 命中与决策 .-> Console
 ```
 
-- **监控端点**：OpenAI Chat Completions、Responses、Anthropic Messages，以及 OpenAI Images 的 generations、edits、variations。生图只审 `prompt`；variations 没有文本，跳过文本审查。
+- **监控端点**：OpenAI Chat Completions、Responses、Anthropic Messages，以及 OpenAI Images 的 generations、edits。生成和编辑统一为 Images，只审 `prompt`；variations 直接透传。
 - **可信密钥**：受监控业务请求首次成功后才启用该密钥的审查，首次请求不补审；默认闲置 30 天清除，可在设置中调整。
 - **转发边界**：其他路径直接转发；保留原请求正文、认证信息和流式响应。历史对话、图片、音频与工具返回值不送给 Jev。
 - **异常处理**：Jev 失败时记录并放行；输入超限时跳过 Jev、记录警告并放行。上游服务的错误不计为审核故障。
 - **部署方式**：Go 网关、React 控制台、PostgreSQL 和 Redis，Docker Compose 启动。管理页面和业务进网使用不同端口。
+- **分类执行**：网关启动并复用一个常驻 CLI 进程，由 CLI 调用 Jev；并发请求使用各自配置，网关退出时 CLI 一同关闭。
 
 ## 快速启动
 
@@ -78,13 +83,24 @@ flowchart LR
 git clone https://github.com/cipherTing/sael.git
 cd sael/gateway/deploy
 cp .env.example .env
-# 在 .env 中填写管理员、数据库、Redis 密码和出站根地址 UPSTREAM_URL
+# 在 .env 中填写密码、出站地址，并用 openssl rand -base64 32 生成 CREDENTIAL_ENCRYPTION_KEY
 docker compose up --build -d
 ```
 
+也可以在仓库根目录用 npm 管理容器（`.env` 仍放在 `gateway/deploy`）：
+
+```sh
+cp gateway/deploy/.env.example gateway/deploy/.env
+# 编辑 gateway/deploy/.env
+npm run docker:up          # 启动并等待服务就绪
+npm run docker:rebuild     # 重建并更新网关容器
+```
+
+`docker:ps`、`docker:logs` 和 `docker:down` 分别用于查看状态、跟踪网关日志和停止服务；`docker:down` 保留数据卷。
+
 默认管理地址 **http://localhost:8080**，客户端进网地址 **http://localhost:8081**。客户端的 API 根地址通常填写 `http://localhost:8081/v1`，凭据继续使用上游原有密钥。
 
-首次启动审查关闭。登录后，在 **接入**确认出站地址，在 **设置**配置并测试 Jev，再到 **场景**添加规则、试算并开启审查。端口、绑定地址与部署参数都在 `.env` 中维护。
+首次启动审查关闭。登录后，在 **设置 → 接入**确认出站地址，在 **设置 → Jev 分类器**配置并测试连接，再到 **场景**添加规则和试算，最后在 **设置 → 审查**开启。端口、绑定地址与部署参数都在 `.env` 中维护。
 
 完整步骤见 [网关部署文档](gateway/README.md)。
 

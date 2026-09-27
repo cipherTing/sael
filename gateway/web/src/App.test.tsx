@@ -32,7 +32,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   window.history.pushState({}, "", "/");
 });
-it("logs in and exposes the five task-oriented pages", async () => {
+it("logs in and exposes four pages with access inside settings", async () => {
   let authenticated = false;
   vi.stubGlobal(
     "fetch",
@@ -60,7 +60,7 @@ it("logs in and exposes the five task-oriented pages", async () => {
   });
   fireEvent.click(screen.getByRole("button", { name: "登录" }));
   await screen.findByRole("heading", { name: "总览" }, { timeout: 10000 });
-  for (const label of ["总览", "场景", "记录", "接入", "设置"])
+  for (const label of ["总览", "场景", "记录", "设置"])
     expect(screen.getByRole("link", { name: label })).toBeTruthy();
 });
 it("preserves endpoint, error and exact time filters on the next records page", async () => {
@@ -112,7 +112,7 @@ it("preserves endpoint, error and exact time filters on the next records page", 
   );
 });
 it("opens Jev settings directly without navigating a policy tab", async () => {
-  window.history.pushState({}, "", "/settings");
+  window.history.pushState({}, "", "/settings?tab=jev");
   vi.stubGlobal(
     "fetch",
     vi.fn(async (path: string) => {
@@ -188,16 +188,40 @@ it("returns to login when logging out after the server session expires", async (
   fireEvent.click(await screen.findByRole("button", { name: "退出登录" }));
   expect(await screen.findByLabelText("管理员密码")).toBeTruthy();
 });
+it("returns to the login home when an authenticated request expires", async () => {
+  let analyticsCalls = 0;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (path: string) => {
+      if (path === "/admin/session")
+        return Response.json({ authenticated: true });
+      if (path === "/admin/policy") return Response.json(policy);
+      if (path.startsWith("/admin/analytics")) {
+        analyticsCalls++;
+        return new Response("expired", { status: 401 });
+      }
+      return Response.json({});
+    }),
+  );
+  render(
+    <BrowserRouter>
+      <App />
+    </BrowserRouter>,
+  );
+  expect(await screen.findByLabelText("管理员密码")).toBeTruthy();
+  expect(await screen.findByText("登录已失效，请重新登录")).toBeTruthy();
+  expect(analyticsCalls).toBeGreaterThan(0);
+});
 it("saves configurable trusted-key inactivity without losing the scenes", async () => {
-  window.history.pushState({}, "", "/settings");
+  window.history.pushState({}, "", "/settings?tab=keys");
   let saved: any;
   vi.stubGlobal(
     "fetch",
     vi.fn(async (path: string, init?: RequestInit) => {
       if (path === "/admin/policy") {
-        if (init?.method === "PUT") {
+        if (init?.method === "PATCH") {
           saved = JSON.parse(String(init.body));
-          return Response.json({ ...saved, version: 2 });
+          return Response.json({ ...policy, ...saved, version: 2 });
         }
         return Response.json({ ...policy, trusted_key_idle_days: 30 });
       }
@@ -208,6 +232,8 @@ it("saves configurable trusted-key inactivity without losing the scenes", async 
           timeout_ms: 5000,
           max_input_tokens: 28800,
         });
+      if (path.startsWith("/admin/trusted-keys"))
+        return Response.json({ items: [], total: 0 });
       if (path === "/admin/runtime")
         return Response.json({ classifier: "not_checked" });
       return Response.json({ authenticated: true });
@@ -223,7 +249,8 @@ it("saves configurable trusted-key inactivity without losing the scenes", async 
   fireEvent.change(days, { target: { value: "7" } });
   fireEvent.click(screen.getByRole("button", { name: "保存可信密钥设置" }));
   await waitFor(() => expect(saved?.trusted_key_idle_days).toBe(7));
-  expect(saved.scenes).toEqual(policy.scenes);
+  expect(saved.scenes).toBeUndefined();
+  expect(saved.enabled).toBeUndefined();
 });
 it("disables login for the Retry-After duration", async () => {
   vi.stubGlobal(
@@ -248,4 +275,31 @@ it("disables login for the Retry-After duration", async () => {
   fireEvent.click(screen.getByRole("button", { name: "登录" }));
   const button = await screen.findByRole("button", { name: /60 秒后重试/ });
   expect((button as HTMLButtonElement).disabled).toBe(true);
+});
+
+it("redirects the former access page into settings with persistent tabs", async () => {
+  window.history.pushState({}, "", "/access");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (path: string) => {
+      if (path === "/admin/policy") return Response.json(policy);
+      if (path === "/admin/access")
+        return Response.json({ ingress_url: "http://localhost:8091" });
+      if (path === "/admin/upstream")
+        return Response.json({ base_url: "https://relay.example" });
+      return Response.json({ authenticated: true });
+    }),
+  );
+  render(
+    <BrowserRouter>
+      <App />
+    </BrowserRouter>,
+  );
+  expect(await screen.findByText("http://localhost:8091")).toBeTruthy();
+  expect(window.location.pathname + window.location.search).toBe(
+    "/settings?tab=access",
+  );
+  for (const name of ["审查", "Jev 分类器", "接入", "可信密钥", "审核缓存"])
+    expect(screen.getByRole("tab", { name })).toBeTruthy();
+  expect(screen.queryByRole("link", { name: "接入" })).toBeNull();
 });

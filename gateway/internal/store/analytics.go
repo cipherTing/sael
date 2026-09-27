@@ -44,9 +44,10 @@ func writeCount(ctx context.Context, tx pgx.Tx, c gateway.Count) error {
 	return writeAggregate(ctx, tx, a, nil)
 }
 
+const endpointGroupSQL = `CASE WHEN protocol IN ('openai_images_generations','openai_images_edits') THEN 'openai_images' ELSE protocol END`
 const analyticsWhere = ` bucket >= $1 AND bucket < $2
- AND protocol IN ('openai_chat','openai_responses','anthropic','openai_images_generations','openai_images_edits','openai_images_variations')
- AND ($3='' OR protocol=$3) AND ($4='' OR model=$4) `
+ AND protocol IN ('openai_chat','openai_responses','anthropic','openai_images_generations','openai_images_edits','openai_images')
+ AND ($3='' OR ` + endpointGroupSQL + `=$3) AND ($4='' OR model=$4) `
 const analyticsBucket = `CASE
  WHEN $5::bigint=86400 THEN date_trunc('day',bucket,$6::text)
  WHEN $5::bigint=3600 THEN date_trunc('hour',bucket,$6::text)
@@ -62,7 +63,7 @@ func (s *PG) Analytics(ctx context.Context, f gateway.AnalyticsFilter) (gateway.
 	}
 	args := []any{f.Since, f.Until, f.Endpoint, f.Model, out.StepSeconds, zone}
 	traffic := func(since, until time.Time) ([]gateway.TrafficPoint, error) {
-		rows, err := s.pool.Query(ctx, `SELECT `+analyticsBucket+`,protocol,model,outcome,sum(count) FROM gateway_counts_minute WHERE `+analyticsWhere+` GROUP BY 1,2,3,4 ORDER BY 1`, since, until, f.Endpoint, f.Model, out.StepSeconds, zone)
+		rows, err := s.pool.Query(ctx, `SELECT `+analyticsBucket+`,`+endpointGroupSQL+`,model,outcome,sum(count),sum(classifier_samples) FROM gateway_counts_minute WHERE `+analyticsWhere+` GROUP BY 1,2,3,4 ORDER BY 1`, since, until, f.Endpoint, f.Model, out.StepSeconds, zone)
 		if err != nil {
 			return nil, err
 		}
@@ -70,7 +71,7 @@ func (s *PG) Analytics(ctx context.Context, f gateway.AnalyticsFilter) (gateway.
 		points := []gateway.TrafficPoint{}
 		for rows.Next() {
 			var p gateway.TrafficPoint
-			if err := rows.Scan(&p.Time, &p.Endpoint, &p.Model, &p.Outcome, &p.Count); err != nil {
+			if err := rows.Scan(&p.Time, &p.Endpoint, &p.Model, &p.Outcome, &p.Count, &p.ClassifierCalls); err != nil {
 				return nil, err
 			}
 			points = append(points, p)
@@ -84,7 +85,7 @@ func (s *PG) Analytics(ctx context.Context, f gateway.AnalyticsFilter) (gateway.
 	if out.Previous, err = traffic(f.Since.Add(-f.Until.Sub(f.Since)), f.Since); err != nil {
 		return out, err
 	}
-	rows, err := s.pool.Query(ctx, `SELECT `+analyticsBucket+`,protocol,model,metric,upper_bound,sum(count) FROM gateway_measurements_minute WHERE `+analyticsWhere+` GROUP BY 1,2,3,4,5 ORDER BY 1,4,5`, args...)
+	rows, err := s.pool.Query(ctx, `SELECT `+analyticsBucket+`,`+endpointGroupSQL+`,model,metric,upper_bound,sum(count) FROM gateway_measurements_minute WHERE `+analyticsWhere+` GROUP BY 1,2,3,4,5 ORDER BY 1,4,5`, args...)
 	if err != nil {
 		return out, err
 	}
@@ -101,7 +102,7 @@ func (s *PG) Analytics(ctx context.Context, f gateway.AnalyticsFilter) (gateway.
 	if err != nil {
 		return out, err
 	}
-	rows, err = s.pool.Query(ctx, `SELECT `+analyticsBucket+`,protocol,scene_id,max(scene_name),action,winner_id,max(winner_name),sum(count) FROM gateway_scene_matches_minute WHERE `+analyticsWhere+` GROUP BY 1,2,3,5,6 ORDER BY 1`, args...)
+	rows, err = s.pool.Query(ctx, `SELECT `+analyticsBucket+`,`+endpointGroupSQL+`,scene_id,max(scene_name),action,winner_id,max(winner_name),sum(count) FROM gateway_scene_matches_minute WHERE `+analyticsWhere+` GROUP BY 1,2,3,5,6 ORDER BY 1`, args...)
 	if err != nil {
 		return out, err
 	}
@@ -118,7 +119,7 @@ func (s *PG) Analytics(ctx context.Context, f gateway.AnalyticsFilter) (gateway.
 	if err != nil {
 		return out, err
 	}
-	rows, err = s.pool.Query(ctx, `SELECT `+analyticsBucket+`,protocol,kind,sum(count) FROM gateway_jev_errors_minute WHERE `+analyticsWhere+` GROUP BY 1,2,3 ORDER BY 1`, args...)
+	rows, err = s.pool.Query(ctx, `SELECT `+analyticsBucket+`,`+endpointGroupSQL+`,kind,sum(count) FROM gateway_jev_errors_minute WHERE `+analyticsWhere+` GROUP BY 1,2,3 ORDER BY 1`, args...)
 	if err != nil {
 		return out, err
 	}
@@ -135,7 +136,7 @@ func (s *PG) Analytics(ctx context.Context, f gateway.AnalyticsFilter) (gateway.
 	if err != nil {
 		return out, err
 	}
-	rows, err = s.pool.Query(ctx, `SELECT DISTINCT model FROM gateway_counts_minute WHERE bucket >= $1 AND bucket < $2 AND ($3='' OR protocol=$3) AND model<>'' AND protocol IN ('openai_chat','openai_responses','anthropic','openai_images_generations','openai_images_edits','openai_images_variations') ORDER BY model`, f.Since, f.Until, f.Endpoint)
+	rows, err = s.pool.Query(ctx, `SELECT DISTINCT model FROM gateway_counts_minute WHERE bucket >= $1 AND bucket < $2 AND ($3='' OR `+endpointGroupSQL+`=$3) AND model<>'' AND protocol IN ('openai_chat','openai_responses','anthropic','openai_images_generations','openai_images_edits','openai_images') ORDER BY model`, f.Since, f.Until, f.Endpoint)
 	if err != nil {
 		return out, err
 	}

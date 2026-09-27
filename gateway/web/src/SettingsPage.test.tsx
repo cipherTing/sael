@@ -6,6 +6,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
+import { toast } from "sonner";
 import SettingsPage from "./SettingsPage";
 import type { PolicyResponse } from "./policy";
 const policy: PolicyResponse = {
@@ -34,6 +35,7 @@ const policy: PolicyResponse = {
 afterEach(() => {
   cleanup();
   sessionStorage.clear();
+  vi.restoreAllMocks();
 });
 it("saves original-scale thresholds independently inside a scene", async () => {
   const save = vi.fn().mockResolvedValue(undefined);
@@ -59,20 +61,23 @@ it("saves original-scale thresholds independently inside a scene", async () => {
 });
 it("focuses the invalid scene instead of submitting an empty policy", () => {
   const save = vi.fn();
+  const errorToast = vi.spyOn(toast, "error").mockImplementation(() => "toast");
   render(<SettingsPage policy={policy} onSave={save} />);
   fireEvent.click(screen.getByRole("button", { name: "新建场景" }));
   fireEvent.click(screen.getByRole("button", { name: "保存并生效" }));
-  expect(screen.getAllByText("请填写场景名称").length).toBeGreaterThan(0);
+  expect(errorToast.mock.calls[0][0]).toBe("请填写场景名称");
   expect(save).not.toHaveBeenCalled();
 });
 it("retains edits when saving fails", async () => {
   const save = vi.fn().mockRejectedValue(new Error("连接中断"));
+  const errorToast = vi.spyOn(toast, "error").mockImplementation(() => "toast");
   render(<SettingsPage policy={policy} onSave={save} />);
   fireEvent.change(screen.getByRole("spinbutton", { name: "血腥程度阈值" }), {
     target: { value: "2.2" },
   });
   fireEvent.click(screen.getByRole("button", { name: "保存并生效" }));
-  expect((await screen.findByRole("alert")).textContent).toContain("连接中断");
+  await waitFor(() => expect(errorToast.mock.calls[0][0]).toBe("连接中断"));
+  expect(screen.queryByRole("alert")).toBeNull();
   expect(
     (
       screen.getByRole("spinbutton", {

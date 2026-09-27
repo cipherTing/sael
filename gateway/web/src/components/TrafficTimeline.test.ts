@@ -67,7 +67,5 @@ it("keeps request counts and full rotated dates on their own complete chart", ()
     "Responses",
     "Messages",
     "Images",
-    "Image Edits",
-    "Image Variations",
   ]);
 });

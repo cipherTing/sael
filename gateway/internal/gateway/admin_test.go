@@ -51,6 +51,54 @@ func login(t *testing.T, s *Server) *http.Cookie {
 	return nil
 }
 
+func TestAdminLoginExpiresAfterThirtyDays(t *testing.T) {
+	s, _, _ := makeServer(t, activePolicy(), &testClassifier{})
+	before := time.Now()
+	cookie := login(t, s)
+	want := 30 * 24 * time.Hour
+	if got := cookie.Expires.Sub(before); got < want-time.Second || got > want+time.Second {
+		t.Fatalf("cookie lifetime %s, want %s", got, want)
+	}
+}
+
+func TestAdminSessionSurvivesServerReplacementAndLogoutRevokesIt(t *testing.T) {
+	first, store, _ := makeServer(t, activePolicy(), &testClassifier{})
+	cookie := login(t, first)
+	second := New(store, &testClassifier{}, "secret")
+	defer second.Close()
+	request := func(server *Server, method, path string) int {
+		t.Helper()
+		r := authorizedRequest(method, path, http.NoBody)
+		r.AddCookie(cookie)
+		w := httptest.NewRecorder()
+		server.AdminHandler().ServeHTTP(w, r)
+		return w.Code
+	}
+	if status := request(second, http.MethodGet, "/admin/session"); status != http.StatusOK {
+		t.Fatalf("session lost after replacing gateway: %d", status)
+	}
+	if status := request(second, http.MethodPost, "/admin/logout"); status != http.StatusOK {
+		t.Fatalf("logout: %d", status)
+	}
+	if status := request(first, http.MethodGet, "/admin/session"); status != http.StatusUnauthorized {
+		t.Fatalf("logged-out session stayed valid: %d", status)
+	}
+}
+
+func TestAdminSessionIsRevokedWhenPasswordChanges(t *testing.T) {
+	first, store, _ := makeServer(t, activePolicy(), &testClassifier{})
+	cookie := login(t, first)
+	rotated := New(store, &testClassifier{}, "changed-password")
+	defer rotated.Close()
+	r := authorizedRequest(http.MethodGet, "/admin/session", http.NoBody)
+	r.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	rotated.AdminHandler().ServeHTTP(w, r)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("old session remained valid after password change: %d", w.Code)
+	}
+}
+
 func TestRuntimeShowsClassifierFailure(t *testing.T) {
 	s, _, _ := makeServer(t, activePolicy(), &testClassifier{err: errors.New("unavailable")})
 	w := httptest.NewRecorder()
@@ -142,5 +190,27 @@ func TestCannotEnableReviewUntilJevConnectionIsSaved(t *testing.T) {
 	w = adminRequest(t, s, http.MethodPut, "/admin/policy", string(input))
 	if w.Code != 200 || !store.policy.Enabled {
 		t.Fatalf("configured status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestPolicyPatchPreservesUnrelatedSettingsAndRejectsStaleEdits(t *testing.T) {
+	s, st, _ := makeServer(t, activePolicy(), &testClassifier{})
+	st.jev = JevConfig{BaseURL: "https://jev.example/v1", Model: "jev", APIKey: "test"}
+	st.policy.TrustedKeyIdleDays = 45
+	w := adminRequest(t, s, http.MethodPatch, "/admin/policy", `{"version":2,"enabled":false}`)
+	if w.Code != 200 || st.policy.Enabled || st.policy.TrustedKeyIdleDays != 45 || len(st.policy.Scenes) != 1 {
+		t.Fatalf("patch changed unrelated fields: %d %s", w.Code, w.Body.String())
+	}
+	w = adminRequest(t, s, http.MethodPatch, "/admin/policy", `{"version":2,"scenes":[]}`)
+	if w.Code != 409 || len(st.policy.Scenes) != 1 {
+		t.Fatal("stale scene draft overwrote latest policy", w.Code)
+	}
+	w = adminRequest(t, s, http.MethodPatch, "/admin/policy", `{"version":null,"scenes":[]}`)
+	if w.Code != 400 || len(st.policy.Scenes) != 1 {
+		t.Fatal("null version bypassed draft conflict check")
+	}
+	w = adminRequest(t, s, http.MethodPatch, "/admin/policy", `{"version":3,"trusted_key_idle_days":60}`)
+	if w.Code != 200 || st.policy.Enabled || st.policy.TrustedKeyIdleDays != 60 {
+		t.Fatal("settings patch replaced global state", w.Code)
 	}
 }

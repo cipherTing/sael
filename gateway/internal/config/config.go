@@ -14,29 +14,35 @@ import (
 
 // Config contains the deployment settings needed to start the gateway.
 type Config struct {
-	MaxRequestBodySize     int64
-	MaxHeaderBytes         int
-	ReadHeaderTimeout      time.Duration
-	IdleTimeout            time.Duration
-	AsyncReviewConcurrency int
-	TrustedProxies         []netip.Prefix
-	DatabaseURL            string
-	RedisURL               string
-	Upstream               *url.URL
-	AdminPassword          string
-	CLIPath                string
-	Listen                 string
-	AdminListen            string
-	PublicIngressURL       string
-	WebDir                 string
-	SpoolPath              string
-	Timeout                time.Duration
-	JevMaxInputTokens      int
+	MaxRequestBodySize      int64
+	MaxHeaderBytes          int
+	ReadHeaderTimeout       time.Duration
+	IdleTimeout             time.Duration
+	AsyncReviewConcurrency  int
+	TrustedProxies          []netip.Prefix
+	DatabaseURL             string
+	RedisURL                string
+	Upstream                *url.URL
+	AdminPassword           string
+	CredentialEncryptionKey string
+	ReviewCacheRedisURL     string
+	Listen                  string
+	AdminListen             string
+	PublicIngressURL        string
+	WebDir                  string
+	CLIPath                 string
+	SpoolPath               string
+	Timeout                 time.Duration
+	JevMaxInputTokens       int
 }
 
 // Load reads and validates a gateway configuration.
 func Load(getenv func(string) string) (Config, error) {
-	c := Config{DatabaseURL: getenv("DATABASE_URL"), AdminPassword: getenv("ADMIN_PASSWORD"), CLIPath: getenv("SAEL_CLI_PATH"), Listen: getenv("LISTEN_ADDR"), WebDir: getenv("WEB_DIR"), SpoolPath: getenv("SPOOL_PATH"), Timeout: 5 * time.Second, JevMaxInputTokens: 28800}
+	c := Config{DatabaseURL: getenv("DATABASE_URL"), AdminPassword: getenv("ADMIN_PASSWORD"), CredentialEncryptionKey: getenv("CREDENTIAL_ENCRYPTION_KEY"), ReviewCacheRedisURL: getenv("REVIEW_CACHE_REDIS_URL"), Listen: getenv("LISTEN_ADDR"), WebDir: getenv("WEB_DIR"), SpoolPath: getenv("SPOOL_PATH"), Timeout: 5 * time.Second, JevMaxInputTokens: 28800}
+	c.CLIPath = getenv("SAEL_CLI_PATH")
+	if c.CLIPath == "" {
+		c.CLIPath = "sael"
+	}
 	if c.DatabaseURL == "" && getenv("POSTGRES_PASSWORD") != "" {
 		value := func(key, fallback string) string {
 			if v := getenv(key); v != "" {
@@ -66,6 +72,19 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 	if c.RedisURL == "" {
 		return c, errors.New("REDIS_URL or REDIS_PASSWORD is required")
+	}
+
+	if c.ReviewCacheRedisURL == "" && getenv("REVIEW_CACHE_REDIS_PASSWORD") != "" {
+		host := getenv("REVIEW_CACHE_REDIS_HOST")
+		if host == "" {
+			host = "review-cache"
+		}
+		port := getenv("REVIEW_CACHE_REDIS_PORT")
+		if port == "" {
+			port = "6379"
+		}
+		u := url.URL{Scheme: "redis", Host: net.JoinHostPort(host, port), User: url.UserPassword("", getenv("REVIEW_CACHE_REDIS_PASSWORD")), Path: "/0"}
+		c.ReviewCacheRedisURL = u.String()
 	}
 
 	for _, raw := range strings.Split(getenv("TRUSTED_PROXY_CIDRS"), ",") {

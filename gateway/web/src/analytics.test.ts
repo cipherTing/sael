@@ -187,3 +187,26 @@ describe("dashboard metric definitions", () => {
     });
   });
 });
+
+it("excludes reused decisions from the Jev failure rate denominator", () => {
+  const result = summarize([
+    {
+      time: "2026-09-27T00:00:00Z",
+      endpoint: "openai_chat",
+      model: "m",
+      outcome: "blocked",
+      count: 99,
+      classifier_calls: 0,
+    },
+    {
+      time: "2026-09-27T00:00:00Z",
+      endpoint: "openai_chat",
+      model: "m",
+      outcome: "unreviewed",
+      count: 1,
+      classifier_calls: 1,
+    },
+  ]);
+  expect(result.failureRate).toBe(100);
+  expect(result.hits).toBe(99);
+});

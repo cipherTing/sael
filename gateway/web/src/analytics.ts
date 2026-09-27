@@ -1,4 +1,5 @@
 export type TrafficPoint = {
+  classifier_calls?: number;
   time: string;
   endpoint: string;
   model: string;
@@ -42,6 +43,7 @@ export type Analytics = {
   models: string[];
 };
 export type Summary = {
+  classifierCalls: number;
   total: number;
   checked: number;
   hits: number;
@@ -91,31 +93,13 @@ export const endpoints = [
     color: "#c28a5e",
   },
   {
-    id: "openai_images_generations",
-    name: "Images Generations",
+    id: "openai_images",
+    name: "Images",
     short: "Images",
     provider: "OpenAI",
     path: "/v1/images/generations",
     icon: "/brands/openai.svg",
     color: "#4f9d75",
-  },
-  {
-    id: "openai_images_edits",
-    name: "Images Edits",
-    short: "Image Edits",
-    provider: "OpenAI",
-    path: "/v1/images/edits",
-    icon: "/brands/openai.svg",
-    color: "#3f8d9e",
-  },
-  {
-    id: "openai_images_variations",
-    name: "Images Variations",
-    short: "Image Variations",
-    provider: "OpenAI",
-    path: "/v1/images/variations",
-    icon: "/brands/openai.svg",
-    color: "#6f8cba",
   },
 ];
 export const errorNames: Record<string, string> = {
@@ -138,7 +122,11 @@ export function summarize(points: TrafficPoint[]): Summary {
     failures = counts.unreviewed || 0;
   const hits = blocked + allowed,
     checked = clean + hits;
+  const classifierCalls = points.some((p) => p.classifier_calls !== undefined)
+    ? points.reduce((n, p) => n + (p.classifier_calls || 0), 0)
+    : checked + failures;
   return {
+    classifierCalls,
     total: points.reduce((n, p) => n + p.count, 0),
     checked,
     hits,
@@ -150,7 +138,7 @@ export function summarize(points: TrafficPoint[]): Summary {
     frozen: counts.session_blocked || 0,
     hitRate: ratio(hits, checked),
     blockRate: ratio(blocked, checked),
-    failureRate: ratio(failures, checked + failures),
+    failureRate: ratio(failures, classifierCalls),
   };
 }
 export function quantile(
@@ -309,4 +297,10 @@ export function rpm(value: number) {
   return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 2 }).format(
     value,
   );
+}
+
+export function endpointGroup(value: string): string {
+  return ["openai_images_generations", "openai_images_edits"].includes(value)
+    ? "openai_images"
+    : value;
 }

@@ -2,8 +2,10 @@
 package gateway
 
 import (
+	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -29,7 +31,12 @@ func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
 		s.login(w, r)
 		return
 	}
-	if !s.authenticated(r) {
+	authenticated, err := s.authenticated(r)
+	if err != nil {
+		http.Error(w, "登录状态暂不可用", http.StatusServiceUnavailable)
+		return
+	}
+	if !authenticated {
 		http.Error(w, "administrator login required", http.StatusUnauthorized)
 		return
 	}
@@ -38,6 +45,9 @@ func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
+	if s.adminFeatures(w, r) {
+		return
+	}
 	switch {
 	case r.URL.Path == "/admin/logout" && r.Method == http.MethodPost:
 		s.logout(w, r)
@@ -139,12 +149,10 @@ func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
 			policy.Policy
 			Questions []policy.Question `json:"questions"`
 		}{p, policy.Questions})
-	case r.URL.Path == "/admin/policy" && r.Method == http.MethodPut:
-		var next policy.Policy
-		dec := json.NewDecoder(r.Body)
-		dec.DisallowUnknownFields()
-		if dec.Decode(&next) != nil {
-			http.Error(w, "invalid policy JSON", http.StatusBadRequest)
+	case r.URL.Path == "/admin/policy" && (r.Method == http.MethodPut || r.Method == http.MethodPatch):
+		next, decodeErr := s.policyInput(r)
+		if decodeErr != nil {
+			http.Error(w, decodeErr.Error(), http.StatusBadRequest)
 			return
 		}
 		if err := policy.Validate(next); err != nil {
@@ -195,7 +203,7 @@ func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
 		if offset < 0 {
 			offset = 0
 		}
-		items, err := s.Store.Events(r.Context(), EventFilter{Since: f.Since, Until: f.Until, Endpoint: f.Endpoint, Model: f.Model, Scene: q.Get("scene"), ErrorKind: q.Get("error_kind"), Kind: q.Get("kind"), Action: q.Get("action"), Search: q.Get("search"), ClientIP: q.Get("client_ip"), SessionID: q.Get("session_id"), Limit: 50, Offset: offset})
+		items, err := s.Store.Events(r.Context(), EventFilter{Since: f.Since, Until: f.Until, Endpoint: f.Endpoint, Model: f.Model, Scene: q.Get("scene"), ErrorKind: q.Get("error_kind"), Kind: q.Get("kind"), Action: q.Get("action"), Search: q.Get("search"), CredentialID: q.Get("credential_id"), ClientIP: q.Get("client_ip"), SessionID: q.Get("session_id"), Limit: 50, Offset: offset})
 		if err != nil {
 			http.Error(w, "events unavailable", http.StatusServiceUnavailable)
 			return
@@ -309,23 +317,25 @@ func analyticsFilter(q url.Values) (AnalyticsFilter, error) {
 	return f, nil
 }
 
+const adminSessionTTL = 30 * 24 * time.Hour
+
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	if !sameOrigin(r) {
 		http.Error(w, "invalid origin", http.StatusForbidden)
 		return
 	}
 	if s.Security == nil {
-		http.Error(w, "登录保护暂不可用", 503)
+		http.Error(w, "登录保护暂不可用", http.StatusServiceUnavailable)
 		return
 	}
 	retry, err := s.Security.LoginAttempt(r.Context(), s.clientIP(r))
 	if err != nil {
-		http.Error(w, "登录保护暂不可用", 503)
+		http.Error(w, "登录保护暂不可用", http.StatusServiceUnavailable)
 		return
 	}
 	if retry > 0 {
 		w.Header().Set("Retry-After", strconv.FormatInt(int64((retry+time.Second-1)/time.Second), 10))
-		http.Error(w, "登录尝试过于频繁，请稍后重试", 429)
+		http.Error(w, "登录尝试过于频繁，请稍后重试", http.StatusTooManyRequests)
 		return
 	}
 	var input struct {
@@ -341,39 +351,43 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token := newID()
-	s.sessionMu.Lock()
-	s.sessions[token] = time.Now().Add(12 * time.Hour)
-	s.sessionMu.Unlock()
+	if err := s.Security.PutAdminSession(r.Context(), s.adminSessionID(token), adminSessionTTL); err != nil {
+		http.Error(w, "登录状态暂不可用", http.StatusServiceUnavailable)
+		return
+	}
 	// #nosec G124 -- Local HTTP is bound to loopback; HTTPS requests receive Secure cookies.
-	http.SetCookie(w, &http.Cookie{Name: "sael_session", Value: token, Path: "/admin", HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: r.TLS != nil || strings.HasPrefix(r.Header.Get("Origin"), "https://"), Expires: time.Now().Add(12 * time.Hour)})
+	http.SetCookie(w, &http.Cookie{Name: "sael_session", Value: token, Path: "/admin", HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: r.TLS != nil || strings.HasPrefix(r.Header.Get("Origin"), "https://"), Expires: time.Now().Add(adminSessionTTL), MaxAge: int(adminSessionTTL.Seconds())})
 	writeJSON(w, map[string]bool{"authenticated": true})
 }
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	cookie, _ := r.Cookie("sael_session")
 	if cookie != nil {
-		s.sessionMu.Lock()
-		delete(s.sessions, cookie.Value)
-		s.sessionMu.Unlock()
+		if err := s.Security.DeleteAdminSession(r.Context(), s.adminSessionID(cookie.Value)); err != nil {
+			http.Error(w, "退出登录暂不可用", http.StatusServiceUnavailable)
+			return
+		}
 	}
 	// #nosec G124 -- Matches the session cookie in local HTTP and HTTPS deployments.
 	http.SetCookie(w, &http.Cookie{Name: "sael_session", Path: "/admin", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: r.TLS != nil || strings.HasPrefix(r.Header.Get("Origin"), "https://")})
 	writeJSON(w, map[string]bool{"authenticated": false})
 }
 
-func (s *Server) authenticated(r *http.Request) bool {
+func (s *Server) authenticated(r *http.Request) (bool, error) {
 	cookie, err := r.Cookie("sael_session")
 	if err != nil {
-		return false
+		return false, nil //nolint:nilerr // A missing cookie means an unauthenticated request, not a storage failure.
 	}
-	s.sessionMu.Lock()
-	expires, ok := s.sessions[cookie.Value]
-	if ok && time.Now().After(expires) {
-		delete(s.sessions, cookie.Value)
-		ok = false
+	if s.Security == nil {
+		return false, errSecurityUnavailable
 	}
-	s.sessionMu.Unlock()
-	return ok
+	return s.Security.AdminSessionActive(r.Context(), s.adminSessionID(cookie.Value))
+}
+
+func (s *Server) adminSessionID(token string) string {
+	mac := hmac.New(sha256.New, []byte(s.AdminPassword))
+	_, _ = mac.Write([]byte(token))
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
 func sameOrigin(r *http.Request) bool {

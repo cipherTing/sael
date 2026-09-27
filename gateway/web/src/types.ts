@@ -20,6 +20,11 @@ export type RequestParameters = {
   conversation_id?: string;
 };
 export type Event = {
+  credential_id?: string;
+  masked_key?: string;
+  review_source?: "jev" | "cache";
+  endpoint_group?: string;
+  image_operation?: "generation" | "edit";
   client_ip?: string;
   session_id?: string;
   client_request_id?: string;
@@ -49,7 +54,7 @@ export type Event = {
   text_preview: string;
   scores?: Answer[];
   policy_version: number;
-  classifier_ms: number;
+  classifier_ms?: number;
   error_kind?: string;
   input_tokens_estimated?: number;
   jev_input_limit?: number;

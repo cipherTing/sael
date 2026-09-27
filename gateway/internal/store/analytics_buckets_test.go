@@ -35,7 +35,7 @@ func TestAnalyticsBucketsKeepClockBoundariesAndQueryRange(t *testing.T) {
 		}
 	}
 	server := gateway.New(s, nil, "test-password")
-	server.Security = adminTestSecurity{}
+	server.Security = &adminTestSecurity{}
 	defer server.Close()
 	login := httptest.NewRecorder()
 	server.AdminHandler().ServeHTTP(login, httptest.NewRequest("POST", "/admin/login", strings.NewReader(`{"password":"test-password"}`)))

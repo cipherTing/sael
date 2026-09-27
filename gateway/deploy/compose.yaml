@@ -28,6 +28,18 @@ services:
       timeout: 3s
       retries: 10
 
+  review-cache:
+    image: redis:7-alpine
+    restart: unless-stopped
+    environment:
+      REVIEW_CACHE_REDIS_PASSWORD: ${REVIEW_CACHE_REDIS_PASSWORD:?set REVIEW_CACHE_REDIS_PASSWORD}
+    command: ["sh", "-c", 'exec redis-server --save "" --appendonly no --maxmemory 1073741824 --maxmemory-policy allkeys-lru --requirepass "$$REVIEW_CACHE_REDIS_PASSWORD"']
+    healthcheck:
+      test: ["CMD-SHELL", 'REDISCLI_AUTH="$$REVIEW_CACHE_REDIS_PASSWORD" redis-cli ping | grep -q PONG']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   gateway:
     stop_grace_period: ${STOP_GRACE_PERIOD:-30s}
     build:
@@ -39,10 +51,17 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      review-cache:
+        condition: service_started
     ports:
       - "${ADMIN_BIND_IP:-127.0.0.1}:${ADMIN_PORT:-8080}:8080"
       - "${INGRESS_BIND_IP:-127.0.0.1}:${INGRESS_PORT:-8081}:8081"
     environment:
+      CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:?set CREDENTIAL_ENCRYPTION_KEY}
+      REVIEW_CACHE_REDIS_URL: ${REVIEW_CACHE_REDIS_URL:-}
+      REVIEW_CACHE_REDIS_HOST: ${REVIEW_CACHE_REDIS_HOST:-review-cache}
+      REVIEW_CACHE_REDIS_PORT: ${REVIEW_CACHE_REDIS_PORT:-6379}
+      REVIEW_CACHE_REDIS_PASSWORD: ${REVIEW_CACHE_REDIS_PASSWORD:?set REVIEW_CACHE_REDIS_PASSWORD}
       REDIS_URL: ${REDIS_URL:-}
       REDIS_HOST: ${REDIS_HOST:-redis}
       REDIS_PORT: ${REDIS_PORT:-6379}
@@ -61,6 +80,7 @@ services:
       INGRESS_PUBLIC_URL: ${INGRESS_PUBLIC_URL:-http://localhost:${INGRESS_PORT:-8081}}
       TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-}
       CLASSIFIER_TIMEOUT: ${CLASSIFIER_TIMEOUT:-5s}
+      SAEL_CLI_PATH: ${SAEL_CLI_PATH:-/usr/local/bin/sael}
       MAX_REQUEST_BODY_SIZE: ${MAX_REQUEST_BODY_SIZE:-268435456}
       MAX_HEADER_BYTES: ${MAX_HEADER_BYTES:-65536}
       READ_HEADER_TIMEOUT: ${READ_HEADER_TIMEOUT:-10s}

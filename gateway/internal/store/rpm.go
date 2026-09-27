@@ -10,6 +10,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/cipherTing/sael/gateway/internal/gateway"
+	"github.com/cipherTing/sael/gateway/internal/protocol"
 )
 
 const rpmPrefix = "sael:rpm:"
@@ -58,7 +59,7 @@ func (s *RedisStore) recentRPM(ctx context.Context, now time.Time, endpoint, mod
 			if err := json.Unmarshal([]byte(field), &scope); err != nil {
 				return 0, err
 			}
-			if (endpoint == "" || scope[0] == endpoint) && (model == "" || scope[1] == model) {
+			if (endpoint == "" || protocol.Group(scope[0]) == endpoint) && (model == "" || scope[1] == model) {
 				n, err := strconv.ParseInt(value, 10, 64)
 				if err != nil {
 					return 0, err

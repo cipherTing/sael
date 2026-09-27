@@ -149,3 +149,23 @@ it("shows request context and keeps below-threshold scores collapsed", async () 
     ).toBe(true),
   );
 });
+
+it("shows the masked caller key in both list and cache detail without fake scores", async () => {
+  const item = {
+    ...event,
+    credential_id: "credential-one",
+    masked_key: "sk-a********9876",
+    review_source: "cache" as const,
+    scores: undefined,
+    classifier_ms: undefined,
+  };
+  vi.mocked(request).mockImplementation(async (path) =>
+    path === "/admin/events/event-1" ? item : [item],
+  );
+  mount();
+  expect(await screen.findByText("sk-a********9876")).toBeTruthy();
+  fireEvent.click(screen.getByRole("row", { name: "查看请求 request-1" }));
+  await screen.findByText("current user text");
+  expect(screen.getAllByText("sk-a********9876").length).toBe(2);
+  expect(screen.getAllByText("缓存命中").length).toBeGreaterThan(0);
+});

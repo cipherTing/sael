@@ -1,54 +1,286 @@
-//go:build !windows
-
 package classifier
 
 import (
+	"bytes"
 	"context"
-	"os"
-	"path/filepath"
+	"encoding/json"
+	"errors"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/cipherTing/sael/gateway/internal/gateway"
+	"github.com/cipherTing/sael/gateway/internal/policy"
+	"github.com/cipherTing/sael/gateway/internal/testcli"
 )
 
-func TestCLIReadsJSONAndSendsTextOnStdin(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "sael")
-	script := "#!/bin/sh\nread line\n[ \"$line\" = \"current text\" ] || exit 3\n[ \"$1\" = check ] && [ \"$2\" = --json ] || exit 4\nprintf '[{\"question\":\"cyber_abuse\",\"type\":\"noul\",\"value\":0.9}]'\n"
-	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
+func TestCLIUsesSavedConnectionAndPreservesMeasurements(t *testing.T) {
+	calls := 0
+	extraAnswer := false
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var body struct {
+			State, Model string
+			Questions    map[string]json.RawMessage
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if r.URL.Path != "/v1/systemone" || body.State != "current user prompt" || body.Model != "saved-model" || len(body.Questions) != 11 || r.Header.Get("Authorization") != "Bearer saved-key" {
+			t.Error("changed classifier request")
+		}
+		answers := map[string]any{}
+		for _, q := range policy.Questions {
+			if q.Type == "score" {
+				answers[q.Key] = map[string]any{"type": "score", "score": 1.5}
+			} else {
+				answers[q.Key] = map[string]any{"type": "noul", "noul": .2}
+			}
+		}
+		if extraAnswer {
+			answers["unexpected"] = map[string]any{"type": "noul", "noul": .2}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"answers": answers})
+	}))
+	defer upstream.Close()
+	c := startCLI(t)
+	for i := 0; i < 2; i++ {
+		a, err := c.CheckConfigured(context.Background(), "current user prompt", gateway.JevConfig{BaseURL: upstream.URL + "/v1", APIKey: "saved-key", Model: "saved-model"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := policy.ValidateAnswers(a); err != nil {
+			t.Fatal(err)
+		}
+		for _, v := range a {
+			if v.Type == "score" && v.Value != 1.5 {
+				t.Fatal("rounded fractional score")
+			}
+		}
 	}
-	got, err := (CLI{Path: path}).Check(context.Background(), "current text")
-	if err != nil {
-		t.Fatal(err)
+	if calls != 2 {
+		t.Fatal("unexpected retries")
 	}
-	if len(got) != 1 || got[0].Question != "cyber_abuse" || got[0].Value != 0.9 {
-		t.Fatalf("got %+v", got)
+	extraAnswer = true
+	if _, err := c.CheckConfigured(context.Background(), "current user prompt", gateway.JevConfig{BaseURL: upstream.URL + "/v1", APIKey: "saved-key", Model: "saved-model"}); !errors.Is(err, gateway.ErrInvalidClassifierResponse) {
+		t.Fatal("unexpected answer silently ignored")
+	}
+}
+func TestCLIPropagatesCancellationAndInvalidAnswer(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"answers":{}}`)) }))
+	defer upstream.Close()
+	c := startCLI(t)
+	cfg := gateway.JevConfig{BaseURL: upstream.URL, APIKey: "key", Model: "model"}
+	if _, err := c.CheckConfigured(context.Background(), "text", cfg); !errors.Is(err, gateway.ErrInvalidClassifierResponse) {
+		t.Fatal("missing answers not classified", err)
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	if _, err := c.CheckConfigured(ctx, "text", cfg); err == nil {
+		t.Fatal("expired request sent")
 	}
 }
 
-func TestCLITimeoutStopsProcess(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "sael")
-	if err := os.WriteFile(path, []byte("#!/bin/sh\nsleep 5\n"), 0o700); err != nil {
+func cliTestResponse(w http.ResponseWriter) {
+	answers := map[string]any{}
+	for _, q := range policy.Questions {
+		if q.Type == "score" {
+			answers[q.Key] = map[string]any{"type": "score", "score": 1.5}
+		} else {
+			answers[q.Key] = map[string]any{"type": "noul", "noul": .2}
+		}
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{"answers": answers})
+}
+func TestCLIConcurrentRequestsKeepTheirConfigurationSnapshots(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { close(entered); <-release; cliTestResponse(w) }))
+	defer first.Close()
+	defer unblock()
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer second-key" {
+			t.Error("credential crossed configuration snapshots")
+		}
+		cliTestResponse(w)
+	}))
+	defer second.Close()
+	c := startCLI(t)
+	defer c.Close()
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := c.CheckConfigured(context.Background(), "first", gateway.JevConfig{BaseURL: first.URL, APIKey: "first-key", Model: "one"})
+		firstDone <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("first request did not start")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if _, err := c.CheckConfigured(ctx, "second", gateway.JevConfig{BaseURL: second.URL, APIKey: "second-key", Model: "two"}); err != nil {
+		t.Fatal("slow request serialized a new configuration", err)
+	}
+	unblock()
+	if err := <-firstDone; err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+}
+func TestCLIReusesConnectionsAndBoundsRetryWaitByCallerDeadline(t *testing.T) {
+	var connections, calls atomic.Int64
+	var failing atomic.Bool
+	upstream := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		_, _ = io.Copy(io.Discard, r.Body)
+		if failing.Load() {
+			w.WriteHeader(503)
+			return
+		}
+		cliTestResponse(w)
+	}))
+	upstream.Config.ConnState = func(_ net.Conn, s http.ConnState) {
+		if s == http.StateNew {
+			connections.Add(1)
+		}
+	}
+	upstream.Start()
+	defer upstream.Close()
+	c := startCLI(t)
+	defer c.Close()
+	cfg := gateway.JevConfig{BaseURL: upstream.URL, APIKey: "key", Model: "model"}
+	for range 20 {
+		if _, err := c.CheckConfigured(context.Background(), "prompt", cfg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if connections.Load() != 1 {
+		t.Fatalf("lost pooling: %d connections", connections.Load())
+	}
+	failing.Store(true)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	if _, err := (CLI{Path: path}).Check(ctx, "text"); err == nil || time.Since(start) > time.Second {
-		t.Fatalf("timeout not respected: %v", err)
+	if _, err := c.CheckConfigured(ctx, "prompt", cfg); err == nil {
+		t.Fatal("503 unexpectedly succeeded")
+	}
+	if time.Since(start) > 250*time.Millisecond || calls.Load() != 21 {
+		t.Fatal("retry wait escaped the request deadline")
+	}
+}
+func BenchmarkPersistentCLI(b *testing.B) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.Copy(io.Discard, r.Body); cliTestResponse(w) }))
+	defer upstream.Close()
+	c := startCLI(b)
+	defer c.Close()
+	cfg := gateway.JevConfig{BaseURL: upstream.URL, APIKey: "benchmark-only", Model: "mock"}
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			if _, err := c.CheckConfigured(context.Background(), "ordinary prompt", cfg); err != nil {
+				b.Error(err)
+			}
+		}
+	})
+}
+
+func startCLI(t testing.TB) *CLI {
+	t.Helper()
+	c, err := NewCLI(context.Background(), testcli.Binary(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(c.Close)
+	return c
+}
+
+func TestCLICancellationOnlyStopsTheCanceledRequest(t *testing.T) {
+	entered, canceled := make(chan struct{}), make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		if string(raw) != "" && bytes.Contains(raw, []byte(`"state":"slow"`)) {
+			close(entered)
+			<-r.Context().Done()
+			close(canceled)
+			return
+		}
+		cliTestResponse(w)
+	}))
+	defer upstream.Close()
+	c := startCLI(t)
+	defer c.Close()
+	cfg := gateway.JevConfig{BaseURL: upstream.URL, APIKey: "key", Model: "model"}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	finished := make(chan error, 1)
+	go func() { _, err := c.CheckConfigured(ctx, "slow", cfg); finished <- err }()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("request not sent through CLI")
+	}
+	cancel()
+	if err := <-finished; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation lost: %v", err)
+	}
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("Jev request continued after gateway canceled")
+	}
+	if _, err := c.CheckConfigured(context.Background(), "next", cfg); err != nil {
+		t.Fatal("canceling one call stopped the shared CLI", err)
+	}
+	c.Close()
+	select {
+	case <-c.Done():
+	case <-time.After(time.Second):
+		t.Fatal("CLI process survived gateway close")
+	}
+	if c.cmd.ProcessState == nil || !c.cmd.ProcessState.Success() {
+		t.Fatal("CLI was killed instead of exiting with owner EOF")
 	}
 }
 
-func TestCLIUsesSavedJevSettingsInsteadOfProcessEnvironment(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "sael")
-	script := "#!/bin/sh\n[ \"$TYPESAFE_API_KEY\" = saved-key ] || exit 3\n[ \"$TYPESAFE_BASE_URL\" = https://saved.example/v1 ] || exit 4\n[ \"$TYPESAFE_DEFAULT_MODEL\" = jev-saved ] || exit 5\nprintf '[{\"question\":\"cyber_abuse\",\"type\":\"noul\",\"value\":0.9}]'\n"
-	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
+func TestCLIProcessFailureIsReportedWithoutDirectSDKFallback(t *testing.T) {
+	c := startCLI(t)
+	if err := c.cmd.Process.Kill(); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("TYPESAFE_API_KEY", "wrong-process-key")
-	_, err := (CLI{Path: path}).CheckConfigured(context.Background(), "text", gateway.JevConfig{BaseURL: "https://saved.example/v1", Model: "jev-saved", APIKey: "saved-key"})
-	if err != nil {
-		t.Fatal(err)
+	select {
+	case <-c.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("process failure was not observed")
+	}
+	var calls atomic.Int64
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { calls.Add(1); cliTestResponse(w) }))
+	defer upstream.Close()
+	_, err := c.CheckConfigured(context.Background(), "prompt", gateway.JevConfig{BaseURL: upstream.URL, APIKey: "key", Model: "m"})
+	if err == nil || calls.Load() != 0 {
+		t.Fatal("request bypassed the failed CLI")
+	}
+}
+
+func TestCLIResponseReadTimeoutKeepsItsErrorCategory(t *testing.T) {
+	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		_, _ = io.WriteString(w, `{"answers":`)
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	defer peer.Close()
+	c := &CLI{client: peer.Client(), address: strings.TrimPrefix(peer.URL, "http://"), done: make(chan struct{})}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err := c.CheckConfigured(ctx, "prompt", gateway.JevConfig{BaseURL: "http://example.test", APIKey: "key", Model: "m"})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("IPC response timeout was reclassified: %v", err)
 	}
 }

@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { notifyError } from "../notifications";
 import type { Policy } from "../policy";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Switch } from "./ui/switch";
-import { Help, Panel, ErrorState } from "./common";
+import { Help, Panel } from "./common";
 
 export function SessionFreezeSettings({
   policy,
@@ -17,8 +18,7 @@ export function SessionFreezeSettings({
   const [minutes, setMinutes] = useState(
     (policy.session_block_ttl_seconds || 3600) / 60,
   );
-  const [busy, setBusy] = useState(false),
-    [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
   useEffect(() => {
     setEnabled(Boolean(policy.session_block_enabled));
     setMinutes((policy.session_block_ttl_seconds || 3600) / 60);
@@ -31,7 +31,6 @@ export function SessionFreezeSettings({
     seconds !== (policy.session_block_ttl_seconds || 3600);
   async function save() {
     setBusy(true);
-    setError("");
     try {
       await onSave({
         ...policy,
@@ -40,7 +39,7 @@ export function SessionFreezeSettings({
       });
       toast.success("会话策略已保存");
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      notifyError(e);
     } finally {
       setBusy(false);
     }
@@ -85,11 +84,6 @@ export function SessionFreezeSettings({
             {busy ? "保存中…" : "保存会话策略"}
           </Button>
         </div>
-        {error && (
-          <div className="panel-body">
-            <ErrorState error={error} />
-          </div>
-        )}
       </Panel>
     </div>
   );

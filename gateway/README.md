@@ -7,10 +7,13 @@
 ```sh
 cd gateway/deploy
 cp .env.example .env
-# 编辑 .env：填写 ADMIN_PASSWORD、POSTGRES_PASSWORD、REDIS_PASSWORD 和 UPSTREAM_URL
+# 编辑 .env：填写密码和 UPSTREAM_URL
+# 用 openssl rand -base64 32 生成 CREDENTIAL_ENCRYPTION_KEY 并保存到 .env
 docker compose up --build -d
 docker compose ps
 ```
+
+也可在仓库根目录运行 `npm run docker:up` 启动，或用 `npm run docker:rebuild` 重建网关。其他命令见[根目录快速启动](../README.md#快速启动)。
 
 首次构建需要下载 Node.js、Go、Alpine、PostgreSQL 和 Redis 镜像。历史数据保存在 PostgreSQL 卷；Redis 卷保存待入库统计、异常记录和会话冻结；Redis 不可用时写入独立的本地暂存卷。
 
@@ -31,6 +34,10 @@ docker compose ps
 | `ADMIN_PASSWORD` | 必填 | 控制台登录密码 |
 | `POSTGRES_PASSWORD` | 必填 | 内置数据库密码；网关自动编码连接串中的特殊字符 |
 | `REDIS_PASSWORD` | 必填 | 内置 Redis 密码 |
+| `CREDENTIAL_ENCRYPTION_KEY` | 必填 | Base64 编码的 32 字节凭据加密主密钥，所有实例共用 |
+| `REVIEW_CACHE_REDIS_PASSWORD` | 必填 | 独立审核缓存 Redis 密码 |
+| `REVIEW_CACHE_REDIS_HOST` / `REVIEW_CACHE_REDIS_PORT` | `review-cache` / `6379` | 审核缓存实例地址 |
+| `REVIEW_CACHE_REDIS_URL` | 空 | 可选完整审核缓存连接串，覆盖对应连接字段 |
 | `REDIS_HOST` / `REDIS_PORT` | `redis` / `6379` | Redis 连接地址 |
 | `REDIS_URL` | 空 | 可选外部 Redis 连接串，覆盖 Redis 连接字段 |
 | `ADMIN_BIND_IP` / `INGRESS_BIND_IP` | `127.0.0.1` | 两个宿主机监听地址 |
@@ -45,6 +52,7 @@ docker compose ps
 | `STOP_GRACE_PERIOD` | `30s` | Docker 停止宽限期；网关等待后台审查最多 10 秒后取消剩余任务 |
 | `ASYNC_REVIEW_CONCURRENCY` | `256` | 每实例非阻塞审查的在途任务上限；满时跳过本次审查并累计进网、输出限频运行告警，不排队阻塞转发 |
 | `CLASSIFIER_TIMEOUT` | `5s` | 分类器默认超时；已保存的 Jev 设置优先 |
+| `SAEL_CLI_PATH` | 容器内 `/usr/local/bin/sael`；本机 `sael` | 与网关同版本的常驻 CLI 可执行文件 |
 | `POSTGRES_USER` / `POSTGRES_DB` | `sael` / `sael` | 内置数据库用户和库名 |
 | `DB_HOST` / `DB_PORT` / `DB_SSLMODE` | `db` / `5432` / `disable` | 网关的数据库连接参数 |
 | `DATABASE_URL` | 空 | 可选完整连接串；填写后覆盖上面的连接参数 |
@@ -59,16 +67,18 @@ Redis 不可用时，去敏后的批次先写本地暂存并刷盘，恢复后�
 
 持久性边界：进程强杀可能丢失尚在内存队列的批次；Compose 的 Redis AOF 使用 `everysec`，Redis 主机崩溃可能再丢失最近约一秒数据。Redis 和本地磁盘同时不可写时，后台保留当前批次并重试，队列满后请求会等待。备份或恢复时应协调 PostgreSQL、Redis 与暂存卷。
 
-[性能结果与复现方法](../docs/gateway-performance.md)。网关默认使用进程内 SDK；显式设置 `SAEL_CLI_PATH` 可继续使用旧 CLI 接入，该方式不属于 5,000 RPS 的验收配置。
+[性能结果与复现方法](../docs/gateway-performance.md)。网关启动一个 `sael serve` 子进程，所有实际送审复用这个 CLI；缓存完整命中时跳过 CLI。CLI 内部复用 Jev 客户端与连接池，配置快照和总截止时间随每次请求传入。
+
+通信使用仅绑定 `127.0.0.1` 的随机内部端口和临时认证令牌，不需要额外端口映射。请求可并发，取消会传递到对应 Jev 请求。网关退出或被强杀后，CLI 因父进程管道关闭而退出；CLI 意外退出时，网关停止并交由 Compose 重启。启动找不到 CLI 或握手失败会明确报错，不退回进程内调用。
 
 ### 接入流程
 
 1. 使用 `ADMIN_PASSWORD` 登录。
-2. **接入**：保存出站根地址。不含 `/v1`、其他路径或认证信息；网关保留客户端路径、查询参数、原始正文和上游凭据。
-3. **设置**：保存 Jev 地址、模型、API Key、超时和送审上限。可以测试尚未保存的连接；留空密钥表示保留已有值。
+2. **设置 → 接入**：保存出站根地址。不含 `/v1`、其他路径或认证信息；网关保留客户端路径、查询参数、原始正文和上游凭据。
+3. **设置 → Jev 分类器**：保存 Jev 地址、模型、API Key、超时和送审上限。可以测试尚未保存的连接；留空密钥表示保留已有值。
 4. **场景**：添加条件，填写原始分数阈值，选择端点、模型、满足任一/全部以及阻塞性／非阻塞性审查。拖拽排序，或从已有场景创建副本。
 5. 用文本试算草稿，检查分数和匹配过程；试算不请求出站服务、不生成生产统计。
-6. 保存并开启审查。首次启动默认关闭；未匹配场景的请求放行，不保存逐条事件。
+6. 保存场景，在 **设置 → 审查** 开启全局审查。首次启动默认关闭；未匹配场景的请求放行，不保存逐条事件。
 
 客户端继续使用上游原有密钥，将 API 根地址换成网关的进网地址。例如 OpenAI 客户端通常使用 `http://localhost:8081/v1`。
 
@@ -81,15 +91,14 @@ Redis 不可用时，去敏后的批次先写本地暂存并刷盘，恢复后�
 | Chat Completions | `/v1/chat/completions` | 最后的当前用户输入 |
 | Responses | `/v1/responses` | 当前 `input` 文本 |
 | Messages | `/v1/messages` | 最后的当前用户输入 |
-| Images Generations | `/v1/images/generations` | JSON `prompt` |
-| Images Edits | `/v1/images/edits` | multipart 或 JSON 的 `prompt` |
-| Images Variations | `/v1/images/variations` | 无文本，跳过文本审查 |
+| Images：生成 | `/v1/images/generations` | JSON `prompt` |
+| Images：编辑 | `/v1/images/edits` | multipart 或 JSON 的 `prompt` |
 
 图片、mask、音频、历史消息、工具结果全部忽略。multipart 原始字节和 boundary 原样转发，不重组文件。审查范围由启用场景中的端点和模型决定；没有适用场景的请求直接转发，不调用 Jev、不生成逐条记录。
 
 ### 登录与可信密钥
 
-控制台登录按真实来源 IP 每分钟最多尝试 3 次，Redis 统一计数。超限返回 `429` 和 `Retry-After`，首次冷却 60 秒；重复触发按 120、240、480、900 秒退避，最高 15 分钟。冷却期间的请求不延长截止时间；一个小时没有尝试后重置退避。Redis 不可用时暂停登录。反向代理后部署时，设置准确的 `TRUSTED_PROXY_CIDRS`。
+控制台登录按真实来源 IP 每分钟最多尝试 3 次，Redis 统一计数。超限返回 `429` 和 `Retry-After`，首次冷却 60 秒；重复触发按 120、240、480、900 秒退避，最高 15 分钟。冷却期间的请求不延长截止时间；一个小时没有尝试后重置退避。登录会话有效期为 30 天，保存在 Redis，网关重启后仍有效；退出登录或更改管理员密码会使旧会话失效。Redis 不可用时暂停登录。反向代理后部署时，设置准确的 `TRUSTED_PROXY_CIDRS`。
 
 调用密钥第一次进入网关时直接透传，不读取审查正文、不调用 Jev。只有受监控 POST 端点返回 2xx 且响应类型为 JSON 或 SSE 时才自动建立信任；该首次请求及信任建立前已进入的请求不补审。公共路径和 HTML 页面不会建立信任。这个判断使用上游 HTTP 响应状态，不扫描响应正文。
 
@@ -119,7 +128,7 @@ Redis 不可用时，去敏后的批次先写本地暂存并刷盘，恢复后�
 
 ### 会话冻结
 
-在 **设置 → 会话冻结** 开启，默认关闭，默认时长 **60 分钟**。命中拦截场景后，后续同会话请求在调用 Jev 前直接拒绝；到期释放，冻结期间重试不会续期。
+在 **设置 → 审查 → 会话冻结** 开启，默认关闭，默认时长 **60 分钟**。命中拦截场景后，后续同会话请求在调用 Jev 前直接拒绝；到期释放，冻结期间重试不会续期。
 
 - 冻结键由**调用凭据 + 显式会话 ID** 计算 SHA-256，同名会话在不同凭据之间隔离。冻结表只保存哈希和到期时间，重启后仍有效。
 - 凭据优先读取 `X-Api-Key`，否则读取 Bearer；会话优先读取 `session-id`、`session_id`、`X-Session-Id`、`X-Claude-Code-Session-Id`，Messages 还支持 `metadata.user_id` 中显式嵌入的 Claude Code 会话 ID。
@@ -140,7 +149,7 @@ Jev 没有公开分词器。Sael 使用本地 `cl100k_base` **估算**输入 Tok
 | 正常未命中 | 放行 | 仅计数和耗时聚合，不存分类分数 |
 | 上游服务返回错误 | 转发原响应 | 不记录为审核故障 |
 
-控制台的连接测试和场景文本试算使用相同的输入预检。网关不另外限制请求体大小，也不增加分类并发排队限制。
+控制台的连接测试和场景文本试算使用相同的输入预检。请求体与 HTTP 超时按部署参数控制；非阻塞审查任务满时不排队等待。
 
 ## 总览与记录
 
@@ -177,14 +186,38 @@ npm run build
 npm run dev
 ```
 
-本地 Go 进程需配置数据库、`REDIS_URL` 和 `ADMIN_PASSWORD`。Vite 将 `/admin` 代理到 `127.0.0.1:8080`，后端端口不同时用 `SAEL_ADMIN_URL=http://127.0.0.1:8090 npm run dev`。
+本地 Go 进程需配置数据库、`REDIS_URL`、`REVIEW_CACHE_REDIS_URL`、`CREDENTIAL_ENCRYPTION_KEY` 和 `ADMIN_PASSWORD`。先在 `cli/` 执行 `go build -o sael ./cmd/sael`，再设置 `SAEL_CLI_PATH` 为该二进制的绝对路径；也可将它加入 `PATH`。Vite 将 `/admin` 代理到 `127.0.0.1:8080`，后端端口不同时用 `SAEL_ADMIN_URL=http://127.0.0.1:8090 npm run dev`。
 
-数据库集成测试会清空相关表和 Redis 测试数据库，必须使用**独立测试库**；未设置连接串时，这些测试会跳过：
+数据库集成测试会清空相关表和 Redis 测试数据库，必须使用**独立测试库**及两个独立 Redis 实例；未设置数据库连接串时，这些测试会跳过：
 
 ```sh
 TEST_DATABASE_URL='postgres://user:password@localhost:5432/sael_test?sslmode=disable' \
 TEST_REDIS_URL='redis://localhost:6379/15' \
+TEST_REVIEW_CACHE_URL='redis://localhost:6380/0' \
   go test -race ./... -count=1
 ```
 
 从仓库根目录执行 `make test` 可测试三个 Go 模块；需要 GNU Make 4。设计背景见 [网关重构设计](../docs/gateway-redesign.md)。
+
+
+## 审核复用与密钥存储
+
+**设置 → 审核缓存** 管理有效期和容量。默认 7 天、1 GiB；专用 Redis 使用 `allkeys-lru`，达到上限后淘汰旧判定，重启允许冷启动。容量指 Redis 的 `maxmemory`，部署时需为进程本身留出额外内存。网关会检查审核缓存和主 Redis 是否为不同实例，防止改动主 Redis 的淘汰策略。
+
+缓存键由 Jev 配置、审核定义、场景条件和实际送审文本的哈希组成，值仅为命中或未命中。只有至少命中一个适用场景的提示词才写入缓存；正常提示词不入库。调整场景顺序或动作后立即按当前配置执行，修改条件则重新判定。缓存故障回到正常送审；非阻塞场景在后台查询缓存，不等待再转发。
+
+命中不延长有效期；修改有效期对后续写入生效。缓存命中生成本次请求的独立记录，详情标记“缓存命中”，不复制首次请求的 IP、会话或密钥，不生成虚构分数和耗时。Jev 调用次数、失败率与耗时分布只计真实送审。
+
+总览的“缓存命中”显示复用次数和命中率，跟随时间、端点、模型筛选；命中率以缓存查询请求数为分母。设置页另显示保留期内的复用统计、判定条目和实时容量。
+
+客户端完整 API Key 使用 AES-256-GCM 加密存入 PostgreSQL；可信状态只在主 Redis 保存指纹和活动时间。管理接口先解密，再只返回掩码值。**记录列表、详情和设置中的可信密钥列表**都显示密钥；可以按同一凭据筛选记录。闲置清除移除信任，已有审核记录仍保留密钥关联。
+
+### 从旧版本升级
+
+1. 保留现有 `.env` 和数据卷，补上 `REVIEW_CACHE_REDIS_PASSWORD` 与 `CREDENTIAL_ENCRYPTION_KEY`。
+2. 主密钥只生成一次：`openssl rand -base64 32`。所有网关副本使用同一个值，将它与数据库备份一起妥善保存；丢失后无法还原已加密密钥。
+3. 执行 `docker compose up --build -d`。数据库迁移可重复执行；缺失或错误的主密钥会阻止网关启动。
+4. 旧可信指纹在后续请求中自动补齐密文。旧审核记录从未保存过的密钥显示“—”，无法反推恢复。
+5. 旧 Images 生成／编辑场景统一为 Images，历史统计查询时合并。只匹配 Variations 的旧场景停用，需重新选择端点。
+
+设置保存按字段更新，并校验版本；过期场景草稿不能覆盖另一页面刚修改的设置。`/access` 旧链接跳转至 `/settings?tab=access`。

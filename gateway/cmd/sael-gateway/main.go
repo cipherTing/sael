@@ -39,6 +39,14 @@ func run() error {
 		return err
 	}
 	defer db.Close()
+	if err := db.InitCredentials(ctx, cfg.CredentialEncryptionKey); err != nil {
+		return err
+	}
+	reviewCache, err := store.OpenReviewCache(ctx, db, cfg.ReviewCacheRedisURL, cfg.RedisURL)
+	if err != nil {
+		return err
+	}
+	defer reviewCache.Close()
 	if cfg.Upstream != nil {
 		if err := db.SeedUpstream(ctx, cfg.Upstream.String()); err != nil {
 			return err
@@ -52,13 +60,13 @@ func run() error {
 		return err
 	}
 	defer runtimeStore.Close()
-	direct := classifier.NewSDK()
-	defer direct.Close()
-	var detector gateway.Classifier = direct
-	if cfg.CLIPath != "" {
-		detector = classifier.CLI{Path: cfg.CLIPath}
+	process, err := classifier.NewCLI(ctx, cfg.CLIPath)
+	if err != nil {
+		return err
 	}
-	api := gateway.New(runtimeStore, detector, cfg.AdminPassword)
+	defer process.Close()
+	api := gateway.New(runtimeStore, process, cfg.AdminPassword)
+	api.ReviewCache = reviewCache
 	defer api.Close()
 	api.Timeout = cfg.Timeout
 	api.MaxBodyBytes = cfg.MaxRequestBodySize
@@ -96,6 +104,9 @@ func run() error {
 						if err := db.Prune(work, days); err != nil {
 							slog.Error("event pruning failed", "error", err)
 						} else {
+							if err := runtimeStore.PruneCredentials(work); err != nil {
+								slog.Warn("credential cleanup failed", "error", err)
+							}
 							lastPrune = time.Now()
 						}
 					}
@@ -105,10 +116,10 @@ func run() error {
 		}
 	}()
 	slog.Info("gateway listening", "admin", cfg.AdminListen, "ingress", cfg.Listen)
-	return serve(ctx, servers)
+	return serve(ctx, servers, process.Done())
 }
 
-func serve(ctx context.Context, servers []*http.Server) error {
+func serve(ctx context.Context, servers []*http.Server, classifierDone <-chan struct{}) error {
 	listeners := make([]net.Listener, 0, len(servers))
 	for _, server := range servers {
 		listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", server.Addr)
@@ -127,6 +138,8 @@ func serve(ctx context.Context, servers []*http.Server) error {
 	var result error
 	select {
 	case <-ctx.Done():
+	case <-classifierDone:
+		result = errors.New("classifier CLI exited; stopping gateway")
 	case result = <-errorsCh:
 	}
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

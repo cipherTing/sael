@@ -2,14 +2,56 @@ package store
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/cipherTing/sael/gateway/internal/gateway"
 	"github.com/redis/go-redis/v9"
+
+	"github.com/cipherTing/sael/gateway/internal/gateway"
 )
+
+func TestRedisAdminSessionSurvivesServerReplacementAndExpires(t *testing.T) {
+	p, r := redisFixture(t)
+	ctx := context.Background()
+	s := &RedisStore{PG: p, redis: r}
+	first := gateway.New(s, nil, "secret")
+	second := gateway.New(s, nil, "secret")
+	defer first.Close()
+	defer second.Close()
+	login := httptest.NewRecorder()
+	first.AdminHandler().ServeHTTP(login, httptest.NewRequest(http.MethodPost, "/admin/login", strings.NewReader(`{"password":"secret"}`)))
+	if login.Code != http.StatusOK {
+		t.Fatalf("login: %d %s", login.Code, login.Body.String())
+	}
+	cookie := login.Result().Cookies()[0]
+	keys, err := r.Keys(ctx, "sael:admin_session:*").Result()
+	if err != nil || len(keys) != 1 || strings.Contains(keys[0], cookie.Value) {
+		t.Fatalf("session key leaked cookie or was not saved: count=%d err=%v", len(keys), err)
+	}
+	if ttl := r.TTL(ctx, keys[0]).Val(); ttl < 30*24*time.Hour-2*time.Second || ttl > 30*24*time.Hour {
+		t.Fatalf("Redis session TTL = %s", ttl)
+	}
+	check := func(server *gateway.Server) int {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/admin/session", http.NoBody)
+		req.AddCookie(cookie)
+		w := httptest.NewRecorder()
+		server.AdminHandler().ServeHTTP(w, req)
+		return w.Code
+	}
+	if status := check(second); status != http.StatusOK {
+		t.Fatalf("session lost across server instances: %d", status)
+	}
+	if err := r.Del(ctx, keys[0]).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if status := check(first); status != http.StatusUnauthorized {
+		t.Fatalf("expired session remained valid: %d", status)
+	}
+}
 
 func TestRedisLoginLimitSharedAcrossInstancesAndBacksOff(t *testing.T) {
 	p, r := redisFixture(t)
@@ -89,9 +131,26 @@ func TestTrustedKeyIdleExpiryRenewsAndHonorsChangedPolicy(t *testing.T) {
 }
 
 // These database-only HTTP tests stub admission, which is exercised above with real Redis.
-type adminTestSecurity struct{ gateway.SecurityStore }
+type adminTestSecurity struct {
+	gateway.SecurityStore
+	sessions map[string]time.Time
+}
 
-func (adminTestSecurity) LoginAttempt(context.Context, string) (time.Duration, error) { return 0, nil }
+func (*adminTestSecurity) LoginAttempt(context.Context, string) (time.Duration, error) { return 0, nil }
+func (s *adminTestSecurity) PutAdminSession(_ context.Context, id string, ttl time.Duration) error {
+	if s.sessions == nil {
+		s.sessions = make(map[string]time.Time)
+	}
+	s.sessions[id] = time.Now().Add(ttl)
+	return nil
+}
+func (s *adminTestSecurity) AdminSessionActive(_ context.Context, id string) (bool, error) {
+	return time.Now().Before(s.sessions[id]), nil
+}
+func (s *adminTestSecurity) DeleteAdminSession(_ context.Context, id string) error {
+	delete(s.sessions, id)
+	return nil
+}
 
 func TestCleanupRemovesIdleKeysWithoutNewClientTraffic(t *testing.T) {
 	p, r := redisFixture(t)

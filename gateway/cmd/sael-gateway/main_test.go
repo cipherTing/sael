@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestWebHandlerServesAppRoutesAndKeepsAdminAPI(t *testing.T) {
@@ -26,6 +28,26 @@ func TestWebHandlerServesAppRoutesAndKeepsAdminAPI(t *testing.T) {
 	h.ServeHTTP(w, httptest.NewRequest("GET", "/admin/policy", http.NoBody))
 	if w.Code != 401 {
 		t.Fatalf("admin routed to UI: %d", w.Code)
+	}
+}
+
+func TestCLIExitStopsTheGatewayAndReportsFailure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	exited := make(chan struct{})
+	close(exited)
+	start := time.Now()
+	err := serve(ctx, []*http.Server{{Addr: "127.0.0.1:0", ReadHeaderTimeout: time.Second}}, exited)
+	if err == nil || time.Since(start) > 500*time.Millisecond {
+		t.Fatal("gateway ignored the classifier process exit")
+	}
+}
+
+func TestNormalShutdownDoesNotReportCLIExitAsFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := serve(ctx, nil, make(chan struct{})); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -57,24 +57,25 @@ type Condition struct {
 
 // Scene combines score conditions into one ordered action rule.
 type Scene struct {
-	ID         string      `json:"id"`
-	Name       string      `json:"name"`
-	Note       string      `json:"note,omitempty"`
-	Conditions []Condition `json:"conditions"`
-	Questions  []string    `json:"questions,omitempty"` // Legacy policies are converted on load.
-	Match      Match       `json:"match"`
-	Action     Action      `json:"action"`
-	Enabled    *bool       `json:"enabled,omitempty"`
-	Endpoints  []string    `json:"endpoints,omitempty"`
-	Models     []string    `json:"models,omitempty"`
+	NeedsEndpointSelection bool        `json:"needs_endpoint_selection,omitempty"`
+	ID                     string      `json:"id"`
+	Name                   string      `json:"name"`
+	Note                   string      `json:"note,omitempty"`
+	Conditions             []Condition `json:"conditions"`
+	Questions              []string    `json:"questions,omitempty"` // Legacy policies are converted on load.
+	Match                  Match       `json:"match"`
+	Action                 Action      `json:"action"`
+	Enabled                *bool       `json:"enabled,omitempty"`
+	Endpoints              []string    `json:"endpoints,omitempty"`
+	Models                 []string    `json:"models,omitempty"`
 }
 
 // Active preserves the enabled state of scenes created before per-scene switches existed.
-func (s Scene) Active() bool { return s.Enabled == nil || *s.Enabled }
+func (s Scene) Active() bool { return !s.NeedsEndpointSelection && (s.Enabled == nil || *s.Enabled) }
 
 // AppliesTo reports whether an enabled scene includes the request endpoint.
 func (s Scene) AppliesTo(endpoint string) bool {
-	return s.Active() && (len(s.Endpoints) == 0 || slices.Contains(s.Endpoints, endpoint))
+	return s.Active() && (len(s.Endpoints) == 0 || slices.Contains(s.Endpoints, protocol.Group(endpoint)))
 }
 
 // AppliesToModel reports whether a scene includes the request model.
@@ -138,12 +139,32 @@ func UpgradeLegacy(p *Policy) {
 			}
 		}
 		scene.Questions = nil
+		if len(scene.Endpoints) > 0 {
+			normalized := []string{}
+			for _, endpoint := range scene.Endpoints {
+				if endpoint == "openai_images_variations" {
+					continue
+				}
+				group := protocol.Group(endpoint)
+				if !slices.Contains(normalized, group) {
+					normalized = append(normalized, group)
+				}
+			}
+			if len(normalized) == 0 {
+				off := false
+				scene.Enabled = &off
+				scene.Endpoints = []string{"openai_images"}
+				scene.NeedsEndpointSelection = true
+			} else {
+				scene.Endpoints = normalized
+			}
+		}
 	}
 	p.Thresholds = nil
 	p.UnmatchedAction = ""
 }
 
-// Validate checks ranges, references, and required fields before a policy is enabled.
+// TrustedKeyIdle returns the configured trust lifetime, defaulting to thirty days.
 func (p Policy) TrustedKeyIdle() time.Duration {
 	days := p.TrustedKeyIdleDays
 	if days <= 0 {
@@ -152,6 +173,7 @@ func (p Policy) TrustedKeyIdle() time.Duration {
 	return time.Duration(days) * 24 * time.Hour
 }
 
+// Validate checks ranges, references, and required fields before a policy is enabled.
 func Validate(p Policy) error {
 	if p.TrustedKeyIdleDays < 0 || p.TrustedKeyIdleDays > 106751 {
 		return errors.New("可信密钥闲置天数必须为正整数且不超过 106751")
@@ -174,6 +196,9 @@ func Validate(p Policy) error {
 	}
 	seen := map[string]bool{}
 	for _, scene := range p.Scenes {
+		if scene.NeedsEndpointSelection && (scene.Enabled == nil || *scene.Enabled) {
+			return fmt.Errorf("场景 %s 需要重新选择端点", scene.Name)
+		}
 		models := map[string]bool{}
 		for _, model := range scene.Models {
 			if model == "" || strings.TrimSpace(model) != model || models[model] {

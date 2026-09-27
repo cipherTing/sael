@@ -49,6 +49,7 @@ import { SceneTemplatePicker } from "./components/SceneTemplatePicker";
 import { PolicyTest } from "./components/PolicyTest";
 import { SceneAnalysis } from "./components/SceneAnalysis";
 import { endpoints } from "./analytics";
+import { notifyError } from "./notifications";
 import { questionName, questionMeta } from "./questionMeta";
 import {
   type Condition,
@@ -86,6 +87,7 @@ const copyPolicy = (p: PolicyResponse): Policy => ({
   session_block_ttl_seconds: p.session_block_ttl_seconds || 3600,
 });
 function sceneError(scene: Scene, questions: Question[]) {
+  if (scene.needs_endpoint_selection) return "请重新选择适用端点";
   if (!scene.name.trim()) return "请填写场景名称";
   if (!scene.conditions.length) return "请添加审核条件";
   const seen = new Set<string>();
@@ -156,15 +158,16 @@ function SceneRow({
         </div>
         {scene.note && <div className="scene-row-note">{scene.note}</div>}
         <div className="scene-row-meta">
-          <div className="endpoint-icons">
+          <div className="scene-endpoint-labels">
             {endpoints
               .filter(
                 (e) =>
                   !scene.endpoints?.length || scene.endpoints.includes(e.id),
               )
               .map((e) => (
-                <span key={e.id} title={e.name}>
-                  <img src={e.icon} alt={e.name} />
+                <span className="scene-endpoint-label" key={e.id}>
+                  <img src={e.icon} alt="" />
+                  <span>{e.name}</span>
                 </span>
               ))}
           </div>
@@ -289,7 +292,6 @@ export default function SettingsPage({
     [filter, setFilter] = useState(initialEndpoint || ""),
     [search, setSearch] = useState(""),
     [attempted, setAttempted] = useState(false),
-    [error, setError] = useState(""),
     [saving, setSaving] = useState(false),
     [inspector, setInspector] = useState<"test" | "analysis" | null>(
       sample ? "test" : null,
@@ -314,7 +316,6 @@ export default function SettingsPage({
     if (previousVersion.current !== policy.version) {
       previousVersion.current = policy.version;
       setDraft(copyPolicy(policy));
-      setError("");
     }
   }, [policy]);
   useEffect(() => {
@@ -379,7 +380,6 @@ export default function SettingsPage({
     }));
     setSelected(id);
     setAttempted(false);
-    setError("");
   }
   function duplicate() {
     if (!scene) return;
@@ -430,21 +430,24 @@ export default function SettingsPage({
     const invalid = draft.scenes.find((s) => issues.get(s.id));
     if (invalid) {
       setSelected(invalid.id);
-      setError(issues.get(invalid.id)!);
+      notifyError(new Error(issues.get(invalid.id)!));
       return;
     }
     if (draft.enabled && !draft.scenes.length) {
-      setError("请先创建场景");
+      notifyError(new Error("请先创建场景"));
       return;
     }
     setSaving(true);
-    setError("");
     try {
       await onSave(draft);
       if (storageKey) sessionStorage.removeItem(storageKey);
       toast.success("场景已生效");
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      notifyError(e, {
+        action: onReload
+          ? { label: "载入线上策略", onClick: onReload }
+          : undefined,
+      });
     } finally {
       setSaving(false);
     }
@@ -453,14 +456,6 @@ export default function SettingsPage({
   return (
     <>
       <PageHeading title="场景">
-        <div className="review-state">
-          <Switch
-            aria-label="开启审查"
-            checked={draft.enabled}
-            onCheckedChange={(enabled) => setDraft((p) => ({ ...p, enabled }))}
-          />
-          <span>审查{draft.enabled ? "开启" : "关闭"}</span>
-        </div>
         <Button
           size="sm"
           variant="outline"
@@ -531,7 +526,6 @@ export default function SettingsPage({
                       )}
                       onSelect={() => {
                         setSelected(s.id);
-                        setError("");
                       }}
                     />
                   ))
@@ -599,9 +593,6 @@ export default function SettingsPage({
                       onChange={(e) => patch({ name: e.target.value })}
                       aria-invalid={attempted && !scene.name.trim()}
                     />
-                    {attempted && !scene.name.trim() && (
-                      <p className="field-error">请填写场景名称</p>
-                    )}
                   </label>
                   <label className="field">
                     <span>注释</span>
@@ -621,7 +612,9 @@ export default function SettingsPage({
                 <div className="endpoint-options">
                   <button
                     className={`endpoint-option ${!scene.endpoints?.length ? "selected" : ""}`}
-                    onClick={() => patch({ endpoints: [] })}
+                    onClick={() =>
+                      patch({ endpoints: [], needs_endpoint_selection: false })
+                    }
                   >
                     全部端点
                   </button>
@@ -633,6 +626,7 @@ export default function SettingsPage({
                       className={`endpoint-option ${scoped(e.id) ? "selected" : ""}`}
                       onClick={() =>
                         patch({
+                          needs_endpoint_selection: false,
                           endpoints: scoped(e.id)
                             ? scene.endpoints!.filter((id) => id !== e.id)
                             : [...(scene.endpoints || []), e.id],
@@ -765,9 +759,6 @@ export default function SettingsPage({
                     }
                   />
                 </div>
-                {attempted && issues.get(scene.id) && (
-                  <p className="field-error">{issues.get(scene.id)}</p>
-                )}
               </div>
               <div className="editor-block">
                 <div className="editor-block-title">
@@ -801,29 +792,15 @@ export default function SettingsPage({
               </div>
             </div>
           )}
-          {(dirty || error) && (
+          {dirty && (
             <div className="save-bar">
-              <span>
-                {error ? (
-                  <span role="alert" style={{ color: "#bf5665" }}>
-                    {error}
-                  </span>
-                ) : (
-                  "有未保存的修改"
-                )}
-              </span>
-              {error && onReload && (
-                <Button size="sm" variant="ghost" onClick={onReload}>
-                  载入线上策略
-                </Button>
-              )}
+              <span>有未保存的修改</span>
               <Button
                 variant="ghost"
                 size="sm"
                 disabled={saving}
                 onClick={() => {
                   setDraft(copyPolicy(policy));
-                  setError("");
                 }}
               >
                 <RotateCcw size={13} />

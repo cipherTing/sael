@@ -43,6 +43,11 @@ type configuredClassifier interface {
 
 // Event records one hit or classifier failure with its policy version.
 type Event struct {
+	ReviewSource    string              `json:"review_source,omitempty"`
+	CredentialID    string              `json:"credential_id,omitempty"`
+	MaskedKey       string              `json:"masked_key,omitempty"`
+	EndpointGroup   string              `json:"endpoint_group,omitempty"`
+	ImageOperation  string              `json:"image_operation,omitempty"`
 	ClientIP        string              `json:"client_ip,omitempty"`
 	UserAgent       string              `json:"user_agent,omitempty"`
 	SessionID       string              `json:"session_id,omitempty"`
@@ -63,7 +68,7 @@ type Event struct {
 	Scores          []policy.Answer     `json:"scores,omitempty"`
 	Decision        policy.Decision     `json:"decision"`
 	PolicyVersion   int64               `json:"policy_version"`
-	ClassifierMS    int64               `json:"classifier_ms"`
+	ClassifierMS    int64               `json:"classifier_ms,omitempty"`
 	InputChars      int                 `json:"input_chars,omitempty"`
 	InputTokens     int                 `json:"input_tokens_estimated,omitempty"`
 	JevInputLimit   int                 `json:"jev_input_limit,omitempty"`
@@ -72,6 +77,8 @@ type Event struct {
 
 // Count classifies one incoming request for minute aggregation.
 type Count struct {
+	CacheLookup      bool            `json:"cache_lookup,omitempty"`
+	CacheHit         bool            `json:"cache_hit,omitempty"`
 	ID               string          `json:"id"`
 	Time             time.Time       `json:"time"`
 	Protocol         string          `json:"protocol"`
@@ -123,7 +130,7 @@ type EventFilter struct {
 	Until                             time.Time
 	Kind, Action, Search              string
 	Endpoint, Model, Scene, ErrorKind string
-	ClientIP, SessionID               string
+	ClientIP, SessionID, CredentialID string
 	Limit, Offset                     int
 }
 
@@ -172,6 +179,7 @@ func (b *relayBuffers) Put(v []byte) { b.Pool.Put((*[32 * 1024]byte)(v)) }
 
 // Server handles supported AI requests and authenticated admin routes.
 type Server struct {
+	ReviewCache            ReviewCache
 	Security               SecurityStore
 	MaxBodyBytes           int64
 	reviewMu               sync.Mutex
@@ -192,8 +200,6 @@ type Server struct {
 	IngressAddress         string
 	TrustedProxies         []netip.Prefix
 	PublicIngressURL       string
-	sessionMu              sync.Mutex
-	sessions               map[string]time.Time
 	statusMu               sync.Mutex
 	classifierState        string
 	lastCheckedAt          time.Time
@@ -208,7 +214,7 @@ func New(store Store, classifier Classifier, adminPassword string) *Server {
 	transport.MaxIdleConnsPerHost = 1024
 	ctx, cancel := context.WithCancel(context.Background())
 	security, _ := store.(SecurityStore)
-	return &Server{transport: transport, Store: store, Security: security, MaxBodyBytes: 256 << 20, AsyncReviewConcurrency: 256, reviewContext: ctx, reviewCancel: cancel, Classifier: classifier, AdminPassword: adminPassword, Timeout: 5 * time.Second, sessions: make(map[string]time.Time)}
+	return &Server{transport: transport, Store: store, Security: security, MaxBodyBytes: 256 << 20, AsyncReviewConcurrency: 256, reviewContext: ctx, reviewCancel: cancel, Classifier: classifier, AdminPassword: adminPassword, Timeout: 5 * time.Second}
 }
 
 // Close releases idle outbound connections owned by this gateway.
@@ -266,12 +272,12 @@ func (s *Server) AdminHandler() http.Handler {
 func (s *Server) forward(w http.ResponseWriter, r *http.Request) {
 	p, err := s.Store.Policy(r.Context())
 	if err != nil {
-		http.Error(w, "policy unavailable", 503)
+		http.Error(w, "policy unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	r, state, err := s.prepareForward(r, p.TrustedKeyIdle())
 	if err != nil {
-		http.Error(w, "credential state unavailable", 503)
+		http.Error(w, "credential state unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	config := state.config
@@ -316,7 +322,7 @@ func (s *Server) proxyRequest(w http.ResponseWriter, r *http.Request) {
 		count.Outcome = "gateway_error"
 		s.observeIngress(r.Context(), count)
 		s.recordCount(count)
-		http.Error(w, "policy unavailable", 503)
+		http.Error(w, "policy unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	if !p.Enabled {
@@ -333,7 +339,7 @@ func (s *Server) proxyRequest(w http.ResponseWriter, r *http.Request) {
 		count.Outcome = "gateway_error"
 		s.observeIngress(r.Context(), count)
 		s.recordCount(count)
-		http.Error(w, "credential state unavailable", 503)
+		http.Error(w, "credential state unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	if !state.trusted {
@@ -354,7 +360,7 @@ func (s *Server) proxyRequest(w http.ResponseWriter, r *http.Request) {
 		count.Outcome = "invalid_json"
 		s.observeIngress(r.Context(), count)
 		s.recordCount(count)
-		http.Error(w, "invalid JSON request", 400)
+		http.Error(w, "invalid JSON request", http.StatusBadRequest)
 		return
 	}
 	count.Model = model
@@ -368,7 +374,7 @@ func (s *Server) proxyRequest(w http.ResponseWriter, r *http.Request) {
 		count.Outcome = "invalid_json"
 		s.observeIngress(r.Context(), count)
 		s.recordCount(count)
-		http.Error(w, "invalid JSON request", 400)
+		http.Error(w, "invalid JSON request", http.StatusBadRequest)
 		return
 	}
 	meta.SessionID = requestSession(r, meta.SessionID)
@@ -425,10 +431,13 @@ func (s *Server) proxyRequest(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) baseEvent(r *http.Request, requestID string, meta protocol.Request, p policy.Policy) Event {
 	event := Event{ID: newID(), Time: time.Now().UTC(), RequestID: requestID,
-		Protocol: meta.Protocol, Endpoint: r.URL.Path, Model: meta.Model, Stream: meta.Stream,
+		Protocol: meta.Protocol, EndpointGroup: protocol.Group(meta.Protocol), ImageOperation: protocol.ImageOperation(meta.Protocol), Endpoint: r.URL.Path, Model: meta.Model, Stream: meta.Stream,
 		HasNonText: meta.HasNonText, PolicyVersion: p.Version, Text: meta.Text,
 		Parameters: meta.Parameters, ClientIP: s.clientIP(r), UserAgent: privacy.RedactText(r.UserAgent()),
 		SessionID: meta.SessionID, ClientRequestID: requestHeader(r, "X-Client-Request-Id", "X-Request-Id")}
+	if state, ok := r.Context().Value(forwardStateKey{}).(*forwardState); ok {
+		event.CredentialID = state.key
+	}
 	if event.SessionID == "" {
 		event.SessionID = meta.SessionID
 	}

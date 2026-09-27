@@ -38,6 +38,7 @@ asking, so that judgement is left to the caller.`,
 
 	root.AddCommand(newCheckCmd())
 	root.AddCommand(newSetupCmd())
+	root.AddCommand(newServeCmd())
 
 	return root
 }

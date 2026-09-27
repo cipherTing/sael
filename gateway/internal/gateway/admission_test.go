@@ -3,7 +3,6 @@ package gateway
 import (
 	"context"
 	"errors"
-	"github.com/cipherTing/sael/gateway/internal/policy"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/cipherTing/sael/gateway/internal/policy"
 )
 
 type securityTestStore struct {

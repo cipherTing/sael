@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/cipherTing/sael/gateway/internal/gateway"
 	"github.com/cipherTing/sael/gateway/internal/policy"
@@ -43,6 +44,7 @@ type ingestItem struct {
 // RedisStore serves configuration from memory and durably batches telemetry in Redis.
 // PostgreSQL remains authoritative for configuration and historical aggregates.
 type RedisStore struct {
+	credentialWrites singleflight.Group
 	*PG
 	redis        *redis.Client
 	snapshot     atomic.Pointer[configSnapshot]

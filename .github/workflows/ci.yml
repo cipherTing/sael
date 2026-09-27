@@ -110,6 +110,15 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
+      review-cache:
+        image: redis:7-alpine
+        ports:
+          - 6380:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -121,6 +130,7 @@ jobs:
         env:
           TEST_DATABASE_URL: postgres://postgres:test@127.0.0.1:5432/sael_test?sslmode=disable
           TEST_REDIS_URL: redis://127.0.0.1:6379/15
+          TEST_REVIEW_CACHE_URL: redis://127.0.0.1:6380/0
         run: go test -race -count=1 ./internal/store
 
   # The checks here are invoked through make, which is the single source of truth

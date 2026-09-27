@@ -62,6 +62,12 @@ func (a aggregate) add(c gateway.Count) {
 		k.Upper = upper
 		a.merge(aggregateRow{aggregateKey: k, Count: 1})
 	}
+	if c.CacheLookup {
+		measurement("cache_lookup", 0)
+	}
+	if c.CacheHit {
+		measurement("cache_hit", 0)
+	}
 	if c.ClassifierSample {
 		measurement("review_ms", durationBand(c.ClassifierMS))
 		measurement("jev_ms", durationBand(c.JevMS))

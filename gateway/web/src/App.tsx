@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import {
   Link,
   NavLink,
@@ -6,6 +6,7 @@ import {
   Route,
   Routes,
   useLocation,
+  useNavigate,
   useSearchParams,
 } from "react-router";
 import {
@@ -21,13 +22,13 @@ import {
   ListFilter,
   LogOut,
   Menu,
-  Network,
   Settings2,
   Shield,
   Workflow,
 } from "lucide-react";
-import { request, APIError } from "./api";
-import type { Policy, PolicyResponse } from "./policy";
+import { request, APIError, AUTH_EXPIRED_EVENT } from "./api";
+import type { Policy, PolicyPatch, PolicyResponse } from "./policy";
+import { endpointGroup } from "./analytics";
 import type { Event } from "./types";
 import type {
   JevConfig,
@@ -44,29 +45,27 @@ import {
   SheetTitle,
   SheetDescription,
 } from "./components/ui/sheet";
-import { ErrorState, Loading } from "./components/common";
+import { Loading } from "./components/common";
 import { Toaster } from "./components/ui/sonner";
 import { toast } from "sonner";
-import { TrustedKeySettings } from "./components/TrustedKeySettings";
-import { SessionFreezeSettings } from "./components/SessionFreezeSettings";
+import { notifyError, notifyRetry } from "./notifications";
+
 import { PageBoundary } from "./components/PageBoundary";
 const DashboardPage = lazy(() => import("./pages/DashboardPage"));
 const RecordsPage = lazy(() => import("./pages/RecordsPage"));
 const ScenesPage = lazy(() => import("./SettingsPage"));
-const AccessPage = lazy(() => import("./pages/AccessPage"));
+const SettingsConsole = lazy(() => import("./pages/SettingsConsole"));
 const JevSettingsPage = lazy(() => import("./JevSettingsPage"));
 const navigation = [
   { path: "/", name: "总览", icon: LayoutDashboard },
   { path: "/scenes", name: "场景", icon: Workflow },
   { path: "/events", name: "记录", icon: ListFilter },
-  { path: "/access", name: "接入", icon: Network },
   { path: "/settings", name: "设置", icon: Settings2 },
 ];
 
 function Login({ onLogin }: { onLogin: () => void }) {
   const [password, setPassword] = useState(""),
-    [busy, setBusy] = useState(false),
-    [error, setError] = useState("");
+    [busy, setBusy] = useState(false);
   const [retryUntil, setRetryUntil] = useState(0),
     [remaining, setRemaining] = useState(0);
   useEffect(() => {
@@ -81,7 +80,6 @@ function Login({ onLogin }: { onLogin: () => void }) {
     event.preventDefault();
     if (busy || retryUntil > Date.now()) return;
     setBusy(true);
-    setError("");
     try {
       await request("/admin/login", {
         method: "POST",
@@ -94,12 +92,8 @@ function Login({ onLogin }: { onLogin: () => void }) {
         setRemaining(seconds);
         setRetryUntil(Date.now() + seconds * 1000);
       }
-      setError(
-        e instanceof APIError && e.status === 401
-          ? "密码不正确"
-          : e instanceof Error
-            ? e.message
-            : String(e),
+      notifyError(
+        e instanceof APIError && e.status === 401 ? new Error("密码不正确") : e,
       );
     } finally {
       setBusy(false);
@@ -127,7 +121,6 @@ function Login({ onLogin }: { onLogin: () => void }) {
             required
           />
         </label>
-        {error && <ErrorState error={error} />}
         <Button disabled={busy || remaining > 0} type="submit">
           {remaining > 0 ? `${remaining} 秒后重试` : busy ? "登录中…" : "登录"}
         </Button>
@@ -157,15 +150,20 @@ function SceneRoute({
         ? {
             text: sampleQuery.data.text || sampleQuery.data.text_preview,
             scores: sampleQuery.data.scores,
-            endpoint: sampleQuery.data.protocol,
+            endpoint:
+              sampleQuery.data.endpoint_group ||
+              endpointGroup(sampleQuery.data.protocol),
             model: sampleQuery.data.model,
           }
         : undefined,
     [sampleQuery.data],
   );
+  useEffect(() => {
+    if (sampleQuery.error)
+      notifyRetry(sampleQuery.error, () => void sampleQuery.refetch());
+  }, [sampleQuery.error, sampleQuery.refetch]);
   return (
     <>
-      {sampleQuery.isError && <ErrorState error={sampleQuery.error} />}
       <ScenesPage
         policy={policy}
         onSave={onSave}
@@ -178,13 +176,7 @@ function SceneRoute({
     </>
   );
 }
-function JevRoute({
-  policy,
-  onSavePolicy,
-}: {
-  policy: PolicyResponse;
-  onSavePolicy: (p: Policy) => Promise<void>;
-}) {
+function JevRoute() {
   const client = useQueryClient(),
     settings = useQuery({
       queryKey: ["jev"],
@@ -194,6 +186,11 @@ function JevRoute({
       queryKey: ["runtime"],
       queryFn: () => request<JevRuntime>("/admin/runtime"),
     });
+  useEffect(() => {
+    if (settings.error)
+      notifyRetry(settings.error, () => void settings.refetch());
+    if (runtime.error) notifyRetry(runtime.error, () => void runtime.refetch());
+  }, [settings.error, settings.refetch, runtime.error, runtime.refetch]);
   async function save(input: JevInput) {
     const value = await request<JevConfig>("/admin/jev", {
       method: "PUT",
@@ -212,10 +209,15 @@ function JevRoute({
   }
   if (settings.isError)
     return (
-      <ErrorState
-        error={settings.error}
-        retry={() => void settings.refetch()}
-      />
+      <div className="empty-state">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => void settings.refetch()}
+        >
+          重新加载
+        </Button>
+      </div>
     );
   return settings.data ? (
     <>
@@ -225,22 +227,6 @@ function JevRoute({
         onSave={save}
         onTest={test}
       />
-      <div className="settings-policies-grid">
-        <TrustedKeySettings
-          policy={policy}
-          onSave={async (next) => {
-            const { questions, ...value } = next as PolicyResponse;
-            await onSavePolicy(value);
-          }}
-        />
-        <SessionFreezeSettings
-          policy={policy}
-          onSave={async (next) => {
-            const { questions, ...value } = next as PolicyResponse;
-            await onSavePolicy(value);
-          }}
-        />
-      </div>
     </>
   ) : (
     <Loading />
@@ -249,6 +235,8 @@ function JevRoute({
 function Console() {
   const client = useQueryClient(),
     location = useLocation(),
+    navigate = useNavigate(),
+    authExpiryHandled = useRef(false),
     [menu, setMenu] = useState(false);
   const session = useQuery({
     queryKey: ["session"],
@@ -263,6 +251,33 @@ function Console() {
     enabled: authenticated,
     staleTime: Infinity,
   });
+  useEffect(() => {
+    const onExpired = () => {
+      if (!authenticated || authExpiryHandled.current) return;
+      authExpiryHandled.current = true;
+      client.removeQueries({
+        predicate: (query) => query.queryKey[0] !== "session",
+      });
+      client.setQueryData(["session"], { authenticated: false });
+      toast.error("登录已失效，请重新登录", { id: "auth-expired" });
+      navigate("/", { replace: true });
+    };
+    window.addEventListener(AUTH_EXPIRED_EVENT, onExpired);
+    return () => window.removeEventListener(AUTH_EXPIRED_EVENT, onExpired);
+  }, [authenticated, client, navigate]);
+  useEffect(() => {
+    if (authenticated) authExpiryHandled.current = false;
+  }, [authenticated]);
+  useEffect(() => {
+    if (
+      session.error &&
+      !(session.error instanceof APIError && session.error.status === 401)
+    )
+      notifyRetry(session.error, () => void session.refetch());
+  }, [session.error, session.refetch]);
+  useEffect(() => {
+    if (policy.error) notifyRetry(policy.error, () => void policy.refetch());
+  }, [policy.error, policy.refetch]);
   if (session.isPending) return <Loading />;
   if (!authenticated) {
     if (
@@ -271,10 +286,13 @@ function Console() {
     )
       return (
         <div className="login-page">
-          <ErrorState
-            error={session.error}
-            retry={() => void session.refetch()}
-          />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void session.refetch()}
+          >
+            重新连接
+          </Button>
         </div>
       );
     return (
@@ -285,9 +303,9 @@ function Console() {
       />
     );
   }
-  async function savePolicy(next: Policy) {
+  async function savePolicy(next: PolicyPatch) {
     const value = await request<Policy>("/admin/policy", {
-      method: "PUT",
+      method: "PATCH",
       body: JSON.stringify(next),
     });
     client.setQueryData(["policy"], {
@@ -301,7 +319,7 @@ function Console() {
       await request("/admin/logout", { method: "POST" });
     } catch (error) {
       if (!(error instanceof APIError && error.status === 401)) {
-        toast.error("退出失败，请重试");
+        notifyError(error);
         return;
       }
     }
@@ -374,17 +392,22 @@ function Console() {
           </div>
           <div className="topbar-actions">
             <Activity size={14} color="#9aa8c0" />
-            <Link className="small muted" to="/access">
+            <Link className="small muted" to="/settings?tab=access">
               接入配置
             </Link>
           </div>
         </header>
         <main className="content">
           {policy.isError ? (
-            <ErrorState
-              error={policy.error}
-              retry={() => void policy.refetch()}
-            />
+            <div className="empty-state">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void policy.refetch()}
+              >
+                重新加载
+              </Button>
+            </div>
           ) : !policy.data ? (
             <Loading />
           ) : (
@@ -400,7 +423,12 @@ function Console() {
                     element={
                       <SceneRoute
                         policy={policy.data}
-                        onSave={savePolicy}
+                        onSave={(next) =>
+                          savePolicy({
+                            version: next.version,
+                            scenes: next.scenes,
+                          })
+                        }
                         onReload={() => void policy.refetch()}
                       />
                     }
@@ -409,13 +437,17 @@ function Console() {
                     path="/events"
                     element={<RecordsPage scenes={policy.data.scenes} />}
                   />
-                  <Route path="/access" element={<AccessPage />} />
+                  <Route
+                    path="/access"
+                    element={<Navigate to="/settings?tab=access" replace />}
+                  />
                   <Route
                     path="/settings"
                     element={
-                      <JevRoute
+                      <SettingsConsole
                         policy={policy.data}
-                        onSavePolicy={savePolicy}
+                        onSave={savePolicy}
+                        jev={<JevRoute />}
                       />
                     }
                   />
@@ -435,7 +467,6 @@ function Console() {
           {nav}
         </SheetContent>
       </Sheet>
-      <Toaster theme="light" position="bottom-right" richColors />
     </div>
   );
 }
@@ -455,6 +486,7 @@ export default function App() {
   return (
     <QueryClientProvider client={client}>
       <Console />
+      <Toaster theme="light" position="bottom-right" richColors />
     </QueryClientProvider>
   );
 }

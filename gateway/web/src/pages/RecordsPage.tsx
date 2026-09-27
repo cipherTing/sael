@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -14,10 +14,10 @@ import {
   ArrowRight,
   Columns3,
   FlaskConical,
-  RefreshCw,
   Search,
   X,
 } from "lucide-react";
+import { RefreshButton } from "../components/RefreshButton";
 import { request } from "../api";
 import type { Event } from "../types";
 import type { Scene } from "../policy";
@@ -51,10 +51,10 @@ import {
   CopyButton,
   Empty,
   EndpointLabel,
-  ErrorState,
   Loading,
   PageHeading,
 } from "../components/common";
+import { notifyRetry } from "../notifications";
 
 export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
   const [params, setParams] = useSearchParams(),
@@ -83,6 +83,10 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
       request<Event>(`/admin/events/${encodeURIComponent(selected)}`),
     enabled: Boolean(selected),
   });
+  useEffect(() => {
+    if (result.error) notifyRetry(result.error, () => void result.refetch());
+    if (detail.error) notifyRetry(detail.error, () => void detail.refetch());
+  }, [result.error, result.refetch, detail.error, detail.refetch]);
   function filter(key: string, value: string) {
     const next = new URLSearchParams(params);
     next.delete("offset");
@@ -120,6 +124,15 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
                 <EndpointLabel id={row.original.protocol} />
                 <small>{row.original.model || "—"}</small>
               </div>
+            ),
+          },
+          {
+            id: "credential",
+            header: "调用密钥",
+            cell: ({ row }) => (
+              <code className="record-key">
+                {row.original.masked_key || "—"}
+              </code>
             ),
           },
           {
@@ -197,9 +210,12 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
             header: "审查耗时",
             cell: ({ row }) => (
               <span className="tabular">
-                {row.original.kind === "warning"
-                  ? "—"
-                  : duration(row.original.classifier_ms)}
+                {row.original.review_source === "cache"
+                  ? "缓存命中"
+                  : row.original.kind === "warning" ||
+                      row.original.classifier_ms === undefined
+                    ? "—"
+                    : duration(row.original.classifier_ms)}
               </span>
             ),
           },
@@ -234,14 +250,11 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
             setParams(next);
           }}
         />
-        <Button
-          variant="outline"
-          size="icon-sm"
-          aria-label="刷新记录"
-          onClick={() => void result.refetch()}
-        >
-          <RefreshCw size={14} />
-        </Button>
+        <RefreshButton
+          label="刷新记录"
+          busy={result.isFetching}
+          onRefresh={() => result.refetch()}
+        />
       </PageHeading>
       <div className="section-tabs">
         <button
@@ -280,6 +293,19 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
         </div>
       )}
       <div className="panel">
+        {params.get("credential_id") && (
+          <div className="record-credential-filter">
+            <span>已筛选调用密钥</span>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => filter("credential_id", "")}
+            >
+              清除
+              <X size={12} />
+            </Button>
+          </div>
+        )}
         <div className="records-toolbar">
           <form
             style={{ display: "flex", gap: 6, flex: "1 1 250px" }}
@@ -401,10 +427,13 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
         </div>
         {result.isError ? (
           <div className="panel-body">
-            <ErrorState
-              error={result.error}
-              retry={() => void result.refetch()}
-            />
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void result.refetch()}
+            >
+              重新加载
+            </Button>
           </div>
         ) : result.isPending ? (
           <Loading />
@@ -528,7 +557,13 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
           </SheetHeader>
           {detail.isError ? (
             <div className="panel-body">
-              <ErrorState error={detail.error} />
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void detail.refetch()}
+              >
+                重新加载
+              </Button>
             </div>
           ) : !current ? (
             <Loading />
@@ -590,15 +625,48 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
                   </dd>
                 </div>
                 <div>
+                  <dt>调用密钥</dt>
+                  <dd>
+                    {current.credential_id ? (
+                      <button
+                        className="detail-link"
+                        onClick={() =>
+                          filter("credential_id", current.credential_id!)
+                        }
+                      >
+                        <code>{current.masked_key || "—"}</code>
+                        <Search size={12} />
+                      </button>
+                    ) : (
+                      "—"
+                    )}
+                  </dd>
+                </div>
+                {(current.image_operation ||
+                  current.protocol.startsWith("openai_images_")) && (
+                  <div>
+                    <dt>图片操作</dt>
+                    <dd>
+                      {current.image_operation === "edit" ||
+                      current.protocol === "openai_images_edits"
+                        ? "编辑"
+                        : "生成"}
+                    </dd>
+                  </div>
+                )}
+                <div>
                   <dt>生效场景</dt>
                   <dd>{current.decision.scene_name || "—"}</dd>
                 </div>
                 <div>
                   <dt>审查耗时</dt>
                   <dd>
-                    {current.kind === "warning"
-                      ? "—"
-                      : duration(current.classifier_ms)}
+                    {current.review_source === "cache"
+                      ? "缓存命中"
+                      : current.kind === "warning" ||
+                          current.classifier_ms === undefined
+                        ? "—"
+                        : duration(current.classifier_ms)}
                   </dd>
                 </div>
               </dl>

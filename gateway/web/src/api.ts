@@ -8,6 +8,7 @@ export class APIError extends Error {
     this.name = "APIError";
   }
 }
+export const AUTH_EXPIRED_EVENT = "sael:auth-expired";
 export async function request<T>(
   path: string,
   init: RequestInit = {},
@@ -36,8 +37,16 @@ export async function request<T>(
       );
     }
 
-    if (response.status === 401)
+    if (response.status === 401) {
+      const normalizedPath = path.split("?", 1)[0];
+      if (
+        normalizedPath !== "/admin/login" &&
+        normalizedPath !== "/admin/session"
+      )
+        if (typeof window !== "undefined")
+          window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
       throw new APIError(401, "需要重新登录运维平台");
+    }
     if (response.status === 409)
       throw new APIError(409, "策略已发生变化，请核对本地改动或载入线上策略");
     throw new APIError(

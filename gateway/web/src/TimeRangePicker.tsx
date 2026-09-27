@@ -17,6 +17,7 @@ import {
   PopoverTrigger,
 } from "./components/ui/popover";
 import { Calendar } from "./components/ui/calendar";
+import { notifyError } from "./notifications";
 
 export type TimeRangeValue = {
   key: string;
@@ -126,12 +127,10 @@ export function TimeRangePicker({
     ),
     [end, setEnd] = useState(value.endDate || dateText(new Date())),
     [startTime, setStartTime] = useState("00:00"),
-    [endTime, setEndTime] = useState("23:59"),
-    [error, setError] = useState("");
+    [endTime, setEndTime] = useState("23:59");
   function choose(v: TimeRangeValue) {
     onChange(v);
     setOpen(false);
-    setError("");
   }
   function apply() {
     const from = new Date(`${start}T${startTime}`),
@@ -141,11 +140,11 @@ export function TimeRangePicker({
       !Number.isFinite(to.getTime()) ||
       to <= from
     ) {
-      setError("请选择有效的开始和结束时间");
+      notifyError(new Error("请选择有效的开始和结束时间"));
       return;
     }
     if (to.getTime() - from.getTime() > 366 * 86400000) {
-      setError("时间范围不能超过 366 天");
+      notifyError(new Error("时间范围不能超过 366 天"));
       return;
     }
     choose({
@@ -174,7 +173,6 @@ export function TimeRangePicker({
           setEndTime(format(to, "HH:mm"));
         }
         setOpen(next);
-        setError("");
       }}
     >
       <PopoverTrigger asChild>
@@ -270,11 +268,6 @@ export function TimeRangePicker({
             </label>
             <Button onClick={apply}>应用</Button>
           </div>
-          {error && (
-            <p className="field-error" role="alert">
-              {error}
-            </p>
-          )}
         </div>
       </PopoverContent>
     </Popover>

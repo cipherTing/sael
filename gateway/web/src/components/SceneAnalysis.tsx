@@ -1,12 +1,14 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Chart, barChart, chartColors } from "./Chart";
-import { Choice, Empty, ErrorState, Loading, Help } from "./common";
+import { Choice, Empty, Loading, Help } from "./common";
 import { endpoints, sceneStats, count, type Analytics } from "../analytics";
 import { request } from "../api";
 import type { Scene, Question } from "../policy";
 import { questionName } from "../questionMeta";
 import type { EChartsOption } from "echarts";
+import { Button } from "./ui/button";
+import { notifyRetry } from "../notifications";
 
 export function SceneAnalysis({
   scene,
@@ -29,8 +31,17 @@ export function SceneAnalysis({
         `/admin/analytics?minutes=${minutes}&endpoint=${endpoint}`,
       ),
   });
+  useEffect(() => {
+    if (q.error) notifyRetry(q.error, () => void q.refetch());
+  }, [q.error, q.refetch]);
   if (q.isError)
-    return <ErrorState error={q.error} retry={() => void q.refetch()} />;
+    return (
+      <div className="empty-state">
+        <Button variant="outline" size="sm" onClick={() => void q.refetch()}>
+          重新加载
+        </Button>
+      </div>
+    );
   if (!q.data) return <Loading />;
   const data = q.data,
     stats = sceneStats({

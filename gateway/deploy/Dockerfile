@@ -16,8 +16,8 @@ RUN cd gateway && CGO_ENABLED=0 go build -trimpath -o /out/sael-gateway ./cmd/sa
 
 FROM alpine:3.22
 RUN apk add --no-cache ca-certificates && addgroup -S sael && adduser -S -G sael sael && mkdir -p /var/lib/sael /opt/sael/web && chown -R sael:sael /var/lib/sael
-COPY --from=go-build /out/sael /usr/local/bin/sael
 COPY --from=go-build /out/sael-gateway /usr/local/bin/sael-gateway
+COPY --from=go-build /out/sael /usr/local/bin/sael
 COPY --from=web /src/gateway/web/dist/ /opt/sael/web/
 USER sael
 ENV WEB_DIR=/opt/sael/web SPOOL_PATH=/var/lib/sael/spool.jsonl ADMIN_LISTEN_ADDR=:8080 INGRESS_LISTEN_ADDR=:8081

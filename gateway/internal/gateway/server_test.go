@@ -36,6 +36,7 @@ type testStore struct {
 	overviewSince time.Time
 	overviewUntil time.Time
 	blocked       map[string]time.Time
+	adminSessions map[string]time.Time
 }
 
 func (s *testStore) Jev(context.Context) (JevConfig, error)           { return s.jev, nil }
@@ -96,6 +97,20 @@ func (s *testStore) SessionBlockActive(_ context.Context, key string, now time.T
 
 // Existing rule tests start with an already trusted caller. Admission tests use an empty trust store.
 func (s *testStore) LoginAttempt(context.Context, string) (time.Duration, error) { return 0, nil }
+func (s *testStore) PutAdminSession(_ context.Context, token string, ttl time.Duration) error {
+	if s.adminSessions == nil {
+		s.adminSessions = make(map[string]time.Time)
+	}
+	s.adminSessions[token] = time.Now().Add(ttl)
+	return nil
+}
+func (s *testStore) AdminSessionActive(_ context.Context, token string) (bool, error) {
+	return time.Now().Before(s.adminSessions[token]), nil
+}
+func (s *testStore) DeleteAdminSession(_ context.Context, token string) error {
+	delete(s.adminSessions, token)
+	return nil
+}
 func (s *testStore) TrustedKey(_ context.Context, key string, _ time.Duration) (bool, error) {
 	return key != "", nil
 }

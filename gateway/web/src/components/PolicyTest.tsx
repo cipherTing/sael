@@ -8,7 +8,8 @@ import type { Answer } from "../types";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Textarea } from "./ui/textarea";
-import { Choice, EndpointLabel, ErrorState } from "./common";
+import { Choice, EndpointLabel } from "./common";
+import { notifyError } from "../notifications";
 
 export type Simulation = {
   scores: Answer[];
@@ -59,7 +60,6 @@ export function PolicyTest({
     [model, setModel] = useState(sample?.model || ""),
     [result, setResult] = useState<Simulation | null>(null),
     [scores, setScores] = useState<Answer[] | undefined>(sample?.scores),
-    [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
   const serial = useRef(0),
     current = useRef({ policy, endpoint, model, text });
@@ -80,7 +80,6 @@ export function PolicyTest({
       id = ++serial.current;
     const timer = setTimeout(() => {
       setBusy(true);
-      setError("");
       request<Simulation>("/admin/policy/test", {
         method: "POST",
         body: JSON.stringify({
@@ -96,7 +95,7 @@ export function PolicyTest({
         })
         .catch((error) => {
           if (!controller.signal.aborted && id === serial.current)
-            setError(error.message);
+            notifyError(error);
         })
         .finally(() => {
           if (id === serial.current) setBusy(false);
@@ -110,7 +109,6 @@ export function PolicyTest({
   async function classify() {
     const id = ++serial.current;
     setBusy(true);
-    setError("");
     setResult(null);
     try {
       const value = await request<Simulation>("/admin/policy/test", {
@@ -123,7 +121,7 @@ export function PolicyTest({
       }
     } catch (error) {
       if (id === serial.current)
-        setError(error instanceof Error ? error.message : String(error));
+        notifyError(error);
     } finally {
       if (id === serial.current) setBusy(false);
     }
@@ -180,14 +178,12 @@ export function PolicyTest({
               setScores(undefined);
               setText("");
               setResult(null);
-              setError("");
               setBusy(false);
             }}
           >
             <RotateCcw />
           </Button>
         </div>
-        {error && <ErrorState error={error} />}
       </div>
       <div className="test-result">
         {result ? (

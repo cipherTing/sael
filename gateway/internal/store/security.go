@@ -32,16 +32,37 @@ redis.call('PEXPIRE',KEYS[1],3600000)
 return 0
 `)
 
+// LoginAttempt records an attempt and returns any required cooldown.
 func (s *RedisStore) LoginAttempt(ctx context.Context, ip string) (time.Duration, error) {
 	sum := sha256.Sum256([]byte(ip))
 	ms, err := loginAttemptScript.Run(ctx, s.redis, []string{"sael:login:" + hex.EncodeToString(sum[:])}).Int64()
 	return time.Duration(ms) * time.Millisecond, err
 }
 
+func adminSessionKey(id string) string { return "sael:admin_session:" + id }
+
+// PutAdminSession stores an opaque session identifier with a fixed expiry.
+func (s *RedisStore) PutAdminSession(ctx context.Context, token string, ttl time.Duration) error {
+	return s.redis.Set(ctx, adminSessionKey(token), "1", ttl).Err()
+}
+
+// AdminSessionActive checks session validity without extending its lifetime.
+func (s *RedisStore) AdminSessionActive(ctx context.Context, token string) (bool, error) {
+	n, err := s.redis.Exists(ctx, adminSessionKey(token)).Result()
+	return n == 1, err
+}
+
+// DeleteAdminSession revokes a session immediately across instances.
+func (s *RedisStore) DeleteAdminSession(ctx context.Context, token string) error {
+	return s.redis.Del(ctx, adminSessionKey(token)).Err()
+}
+
 const trustedKeys = "sael:trusted_keys"
 
 // Only successful credentials have entries. Unknown-key floods cannot grow this set.
 // Scores are last activity times, so changing the idle policy takes effect immediately.
+//
+//nolint:dupword // Consecutive Lua end tokens close nested blocks.
 var trustedKeyScript = redis.NewScript(`
 local clock=redis.call('TIME')
 local now=tonumber(clock[1])*1000+math.floor(tonumber(clock[2])/1000)
@@ -59,17 +80,23 @@ end
 return 0
 `)
 
+// TrustedKey validates trust and refreshes activity atomically.
 func (s *RedisStore) TrustedKey(ctx context.Context, key string, idle time.Duration) (bool, error) {
 	n, err := trustedKeyScript.Run(ctx, s.redis, []string{trustedKeys}, key, idle.Milliseconds(), "touch").Int64()
 	return n == 1, err
 }
+
+// RememberKey records a credential whose upstream request succeeded.
 func (s *RedisStore) RememberKey(ctx context.Context, key string, idle time.Duration) error {
 	return trustedKeyScript.Run(ctx, s.redis, []string{trustedKeys}, key, idle.Milliseconds(), "learn").Err()
 }
+
+// ForgetKey revokes a credential rejected by its upstream.
 func (s *RedisStore) ForgetKey(ctx context.Context, key string) error {
 	return s.redis.ZRem(ctx, trustedKeys, key).Err()
 }
 
+// PruneTrustedKeys expires inactive credentials using Redis server time.
 func (s *RedisStore) PruneTrustedKeys(ctx context.Context, idle time.Duration) error {
 	return trustedKeyScript.Run(ctx, s.redis, []string{trustedKeys}, "", idle.Milliseconds(), "prune").Err()
 }

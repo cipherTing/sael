@@ -41,7 +41,7 @@ func TestAnalyticsKeepsOnlyHitScoresAndFiltersEndpoints(t *testing.T) {
 		}
 	}
 	server := gateway.New(s, nil, "test-password")
-	server.Security = adminTestSecurity{}
+	server.Security = &adminTestSecurity{}
 	defer server.Close()
 	login := httptest.NewRecorder()
 	server.AdminHandler().ServeHTTP(login, httptest.NewRequest("POST", "/admin/login", strings.NewReader(`{"password":"test-password"}`)))
@@ -113,7 +113,7 @@ func TestEventsRespectEndTimeEndpointAndScene(t *testing.T) {
 		}
 	}
 	server := gateway.New(s, nil, "test-password")
-	server.Security = adminTestSecurity{}
+	server.Security = &adminTestSecurity{}
 	defer server.Close()
 	login := httptest.NewRecorder()
 	server.AdminHandler().ServeHTTP(login, httptest.NewRequest("POST", "/admin/login", strings.NewReader(`{"password":"test-password"}`)))
@@ -197,5 +197,27 @@ func TestUpgradeRedactsHistoricalTextWithoutChangingAuditDecision(t *testing.T) 
 	}
 	if err = s.redactHistoricalEvents(ctx); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestImagesHistoryGroupsBothOperationsAndFiltersRecords(t *testing.T) {
+	p, _ := redisFixture(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Minute)
+	for i, protocol := range []string{"openai_images_generations", "openai_images_edits", "openai_images_variations"} {
+		if err := p.increment(ctx, gateway.Count{Time: now, Protocol: protocol, Model: "image", Outcome: "blocked"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := p.WriteEvent(ctx, gateway.Event{ID: protocol, RequestID: protocol, Time: now, Protocol: protocol, Kind: "hit", CredentialID: "", Decision: policy.Decision{Action: policy.Block}}); err != nil {
+			t.Fatal(i, err)
+		}
+	}
+	a, err := p.Analytics(ctx, gateway.AnalyticsFilter{Since: now, Until: now.Add(time.Minute), Endpoint: "openai_images", Granularity: "1m", Timezone: "UTC"})
+	if err != nil || len(a.Traffic) != 1 || a.Traffic[0].Count != 2 || a.Traffic[0].Endpoint != "openai_images" {
+		t.Fatalf("images history %+v %v", a.Traffic, err)
+	}
+	rows, err := p.Events(ctx, gateway.EventFilter{Since: now, Endpoint: "openai_images"})
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("images records %d %v", len(rows), err)
 	}
 }

@@ -1,4 +1,5 @@
 import { Component, type ReactNode } from "react";
+import { toast } from "sonner";
 import { Button } from "./ui/button";
 
 export class PageBoundary extends Component<
@@ -9,11 +10,13 @@ export class PageBoundary extends Component<
   static getDerivedStateFromError() {
     return { failed: true };
   }
+  componentDidCatch() {
+    toast.error("页面加载失败", { id: "page-load-failed" });
+  }
   render() {
     if (this.state.failed)
       return (
-        <div className="empty-state" role="alert">
-          <span>页面加载失败</span>
+        <div className="empty-state">
           <Button
             size="sm"
             variant="outline"

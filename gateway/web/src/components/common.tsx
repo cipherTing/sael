@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { CircleHelp, Loader2, RotateCcw, Copy, Check } from "lucide-react";
+import { CircleHelp, Loader2, Copy, Check } from "lucide-react";
 import { useState } from "react";
 import { Button } from "./ui/button";
 import {
@@ -15,7 +15,7 @@ import {
   SelectContent,
   SelectItem,
 } from "./ui/select";
-import { endpoints } from "../analytics";
+import { endpoints, endpointGroup } from "../analytics";
 
 export function Help({ children }: { children: ReactNode }) {
   return (
@@ -79,25 +79,6 @@ export function Loading() {
     </div>
   );
 }
-export function ErrorState({
-  error,
-  retry,
-}: {
-  error: unknown;
-  retry?: () => void;
-}) {
-  return (
-    <div role="alert" className="error-state">
-      <span>{error instanceof Error ? error.message : String(error)}</span>
-      {retry && (
-        <Button variant="outline" size="sm" onClick={retry}>
-          <RotateCcw />
-          重试
-        </Button>
-      )}
-    </div>
-  );
-}
 export function EndpointLabel({
   id,
   compact = false,
@@ -105,7 +86,7 @@ export function EndpointLabel({
   id: string;
   compact?: boolean;
 }) {
-  const e = endpoints.find((x) => x.id === id);
+  const e = endpoints.find((x) => x.id === endpointGroup(id));
   return (
     <span className="endpoint-label">
       {e && <img src={e.icon} width="18" height="18" alt={e.provider} />}

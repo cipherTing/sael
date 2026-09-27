@@ -104,3 +104,15 @@ func TestLegacyPolicyWithOnlyUnmatchedActionStopsReview(t *testing.T) {
 		t.Fatal("a legacy policy without scenes cannot review after unmatched handling is removed")
 	}
 }
+
+func TestImagesGroupAppliesToBothOperationsAndLegacyVariationCannotBecomeAll(t *testing.T) {
+	scene := Scene{ID: "images", Name: "images", Endpoints: []string{"openai_images"}, Action: Block, Match: Any, Conditions: []Condition{{Question: "gore", Threshold: 1.5}}}
+	if !scene.AppliesTo("openai_images_generations") || !scene.AppliesTo("openai_images_edits") || scene.AppliesTo("openai_chat") || scene.AppliesTo("openai_images_variations") {
+		t.Fatal("Images group not scoped correctly")
+	}
+	p := Policy{Scenes: []Scene{{ID: "legacy", Name: "legacy", Endpoints: []string{"openai_images_variations"}}}}
+	UpgradeLegacy(&p)
+	if p.Scenes[0].Active() || len(p.Scenes[0].Endpoints) == 0 {
+		t.Fatal("removed endpoint became all endpoints")
+	}
+}

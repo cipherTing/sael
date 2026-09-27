@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowUpRight, RefreshCw, X, ExternalLink } from "lucide-react";
+import { ArrowUpRight, X, ExternalLink } from "lucide-react";
 import type { EChartsOption } from "echarts";
 import { TrafficTimeline } from "../components/TrafficTimeline";
+import { RefreshButton } from "../components/RefreshButton";
 import { request } from "../api";
 import {
   endpoints,
@@ -30,13 +31,13 @@ import {
   Choice,
   EndpointLabel,
   Empty,
-  ErrorState,
   Help,
   Loading,
   PageHeading,
   Panel,
 } from "../components/common";
 import { Chart, barChart, chartColors } from "../components/Chart";
+import { notifyRetry } from "../notifications";
 
 function Outcome({
   data,
@@ -208,6 +209,9 @@ export default function DashboardPage({ enabled }: { enabled: boolean }) {
       request<Analytics>(`/admin/analytics?${requestRange(query)}`),
     refetchInterval: 30_000,
   });
+  useEffect(() => {
+    if (result.error) notifyRetry(result.error, () => void result.refetch());
+  }, [result.error, result.refetch]);
   const data = result.data,
     endpoint = params.get("endpoint") || "",
     model = params.get("model") || "";
@@ -234,6 +238,14 @@ export default function DashboardPage({ enabled }: { enabled: boolean }) {
   const latency = data
     ? data.distributions.filter((p) => p.metric === "review_ms")
     : [];
+  const cache = (data?.distributions || []).reduce(
+    (totals, point) => {
+      if (point.metric === "cache_hit") totals.hits += point.count;
+      if (point.metric === "cache_lookup") totals.lookups += point.count;
+      return totals;
+    },
+    { hits: 0, lookups: 0 },
+  );
   const scenes = data ? sceneStats(data) : [];
   const errorGroups = data
     ? Object.entries(
@@ -301,20 +313,22 @@ export default function DashboardPage({ enabled }: { enabled: boolean }) {
             { value: "1d", label: "1 天" },
           ]}
         />
-        <Button
-          variant="outline"
-          size="icon-sm"
-          aria-label="刷新统计"
-          onClick={() => void result.refetch()}
-        >
-          <RefreshCw
-            size={14}
-            className={result.isFetching ? "animate-spin" : ""}
-          />
-        </Button>
+        <RefreshButton
+          label="刷新统计"
+          busy={result.isFetching}
+          onRefresh={() => result.refetch()}
+        />
       </div>
       {result.isError ? (
-        <ErrorState error={result.error} retry={() => void result.refetch()} />
+        <div className="empty-state">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void result.refetch()}
+          >
+            重新加载
+          </Button>
+        </div>
       ) : !data || !stats ? (
         <Loading />
       ) : (
@@ -381,9 +395,19 @@ export default function DashboardPage({ enabled }: { enabled: boolean }) {
               </div>
               <div className="metric-detail">
                 失败 {count(stats.failures)} / 调用{" "}
-                {count(stats.checked + stats.failures)}
+                {count(stats.classifierCalls)}
               </div>
             </Link>
+            <div className="metric">
+              <div className="metric-label">缓存命中</div>
+              <div className="metric-value">{count(cache.hits)}</div>
+              <div className="metric-detail">
+                命中率{" "}
+                {percent(
+                  cache.lookups ? (cache.hits / cache.lookups) * 100 : null,
+                )}
+              </div>
+            </div>
             <div className="metric">
               <div className="metric-label">
                 审查耗时 P95

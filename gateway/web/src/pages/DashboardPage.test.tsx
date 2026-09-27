@@ -7,6 +7,7 @@ import {
   act,
 } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
+import { toast } from "sonner";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router";
 import DashboardPage from "./DashboardPage";
@@ -130,10 +131,11 @@ it("clicking an endpoint loads its own statistics", async () => {
   ).toBe(true);
 });
 it("shows a failed query instead of a zero-traffic dashboard", async () => {
+  const errorToast = vi.spyOn(toast, "error").mockImplementation(() => "toast");
   vi.mocked(request).mockRejectedValue(new Error("统计数据暂不可用"));
   mount();
-  expect((await screen.findByRole("alert")).textContent).toContain(
-    "统计数据暂不可用",
+  await waitFor(() =>
+    expect(errorToast.mock.calls[0][0]).toBe("统计数据暂不可用"),
   );
   expect(screen.queryByRole("link", { name: "查看拦截记录" })).toBeNull();
 });
@@ -223,4 +225,83 @@ it("shows the recent minute RPM independently of the selected historical window"
   const label = await screen.findByText("RPM", { selector: ".metric-label" });
   expect(label.parentElement?.textContent).toContain("42");
   expect(label.parentElement?.textContent).toContain("最近一分钟");
+});
+
+it("shows cache reuse and its rate for the selected traffic scope", async () => {
+  vi.mocked(request).mockResolvedValue({
+    ...data,
+    distributions: [
+      {
+        time: data.since,
+        endpoint: "openai_chat",
+        model: "gpt-test",
+        metric: "cache_lookup",
+        upper: 0,
+        count: 40,
+      },
+      {
+        time: data.since,
+        endpoint: "openai_chat",
+        model: "gpt-test",
+        metric: "cache_hit",
+        upper: 0,
+        count: 10,
+      },
+      {
+        time: data.until,
+        endpoint: "openai_chat",
+        model: "gpt-test",
+        metric: "cache_lookup",
+        upper: 0,
+        count: 60,
+      },
+      {
+        time: data.until,
+        endpoint: "openai_chat",
+        model: "gpt-test",
+        metric: "cache_hit",
+        upper: 0,
+        count: 20,
+      },
+      {
+        time: data.since,
+        endpoint: "openai_chat",
+        model: "gpt-test",
+        metric: "review_ms",
+        upper: 200,
+        count: 100,
+      },
+    ],
+  });
+  mount("/?endpoint=openai_chat&model=gpt-test&minutes=60");
+  const label = await screen.findByText("缓存命中", {
+    selector: ".metric-label",
+  });
+  expect(label.parentElement?.querySelector(".metric-value")?.textContent).toBe(
+    "30",
+  );
+  expect(
+    label.parentElement?.querySelector(".metric-detail")?.textContent,
+  ).toBe("命中率 30%");
+  const query = new URL(
+    String(vi.mocked(request).mock.lastCall?.[0]),
+    "http://localhost",
+  ).searchParams;
+  expect(query.get("endpoint")).toBe("openai_chat");
+  expect(query.get("model")).toBe("gpt-test");
+  expect(query.get("minutes")).toBe("60");
+});
+
+it("does not invent a cache hit rate when there have been no lookups", async () => {
+  vi.mocked(request).mockResolvedValue(data);
+  mount();
+  const label = await screen.findByText("缓存命中", {
+    selector: ".metric-label",
+  });
+  expect(label.parentElement?.querySelector(".metric-value")?.textContent).toBe(
+    "0",
+  );
+  expect(
+    label.parentElement?.querySelector(".metric-detail")?.textContent,
+  ).toBe("命中率 —");
 });

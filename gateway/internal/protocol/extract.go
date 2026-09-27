@@ -38,15 +38,13 @@ var Endpoints = []Endpoint{
 	{"openai_chat", "Chat Completions", "/v1/chat/completions"},
 	{"openai_responses", "Responses", "/v1/responses"},
 	{"anthropic", "Messages", "/v1/messages"},
-	{"openai_images_generations", "Images Generations", "/v1/images/generations"},
-	{"openai_images_edits", "Images Edits", "/v1/images/edits"},
-	{"openai_images_variations", "Images Variations", "/v1/images/variations"},
+	{"openai_images", "Images", "/v1/images/generations"},
 }
 
 // Monitored distinguishes audited formats from transparent passthrough traffic.
 func Monitored(name string) bool {
 	for _, endpoint := range Endpoints {
-		if endpoint.ID == name {
+		if endpoint.ID == Group(name) {
 			return true
 		}
 	}
@@ -263,4 +261,24 @@ func lastGeminiContent(raw json.RawMessage) (string, bool) {
 		}
 	}
 	return strings.Join(texts, "\n"), nonText
+}
+
+// Group is the operator-facing scope; the original operation stays on events.
+func Group(name string) string {
+	switch name {
+	case "openai_images_generations", "openai_images_edits":
+		return "openai_images"
+	}
+	return name
+}
+
+// ImageOperation preserves generation/edit detail within the unified Images group.
+func ImageOperation(name string) string {
+	switch name {
+	case "openai_images_generations":
+		return "generation"
+	case "openai_images_edits":
+		return "edit"
+	}
+	return ""
 }

@@ -3,6 +3,7 @@ export type Match = "any" | "all";
 export type Question = { key: string; type: "noul" | "score"; max: number };
 export type Condition = { question: string; threshold: number };
 export type Scene = {
+  needs_endpoint_selection?: boolean;
   id: string;
   name: string;
   note?: string;
@@ -24,3 +25,7 @@ export type Policy = {
   session_block_ttl_seconds?: number;
 };
 export type PolicyResponse = Policy & { questions: Question[] };
+
+export type PolicyPatch = Partial<Omit<Policy, "version">> & {
+  version: number;
+};

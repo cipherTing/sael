@@ -4,6 +4,7 @@ package store
 import (
 	"bufio"
 	"context"
+	"crypto/cipher"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/cipherTing/sael/gateway/internal/gateway"
 	"github.com/cipherTing/sael/gateway/internal/policy"
+	"github.com/cipherTing/sael/gateway/internal/protocol"
 )
 
 //go:embed migrations/*.sql
@@ -25,18 +27,19 @@ var migrations embed.FS
 
 // PG persists policy, events, and minute counts in PostgreSQL.
 type PG struct {
-	pool            *pgxpool.Pool
-	spoolPath       string
-	spoolMu         sync.Mutex
-	policyMu        sync.RWMutex
-	cachedPolicy    policy.Policy
-	hasCachedPolicy bool
-	jevMu           sync.RWMutex
-	cachedJev       gateway.JevConfig
-	hasCachedJev    bool
-	upstreamMu      sync.RWMutex
-	cachedUpstream  gateway.UpstreamConfig
-	hasUpstream     bool
+	credentialCipher cipher.AEAD
+	pool             *pgxpool.Pool
+	spoolPath        string
+	spoolMu          sync.Mutex
+	policyMu         sync.RWMutex
+	cachedPolicy     policy.Policy
+	hasCachedPolicy  bool
+	jevMu            sync.RWMutex
+	cachedJev        gateway.JevConfig
+	hasCachedJev     bool
+	upstreamMu       sync.RWMutex
+	cachedUpstream   gateway.UpstreamConfig
+	hasUpstream      bool
 }
 
 // Open connects to PostgreSQL and applies the embedded schema.
@@ -49,7 +52,7 @@ func Open(ctx context.Context, dsn, spoolPath string) (*PG, error) {
 		pool.Close()
 		return nil, err
 	}
-	for _, name := range []string{"migrations/001_init.sql", "migrations/002_jev.sql", "migrations/003_metrics.sql", "migrations/004_connections.sql", "migrations/005_remove_upstream_errors.sql", "migrations/006_analytics.sql", "migrations/007_session_blocks.sql", "migrations/008_jev_input_limits.sql", "migrations/009_ingest_cursor.sql"} {
+	for _, name := range []string{"migrations/001_init.sql", "migrations/002_jev.sql", "migrations/003_metrics.sql", "migrations/004_connections.sql", "migrations/005_remove_upstream_errors.sql", "migrations/006_analytics.sql", "migrations/007_session_blocks.sql", "migrations/008_jev_input_limits.sql", "migrations/009_ingest_cursor.sql", "migrations/010_review_cache_credentials.sql"} {
 		sql, err := migrations.ReadFile(name)
 		if err != nil {
 			pool.Close()
@@ -501,15 +504,15 @@ func (s *PG) Events(ctx context.Context, f gateway.EventFilter) ([]gateway.Event
 	}
 	rows, err := s.pool.Query(ctx, `SELECT body FROM audit_events WHERE time >= $1
 		AND ($2='' OR kind=$2) AND ($3='' OR action=$3)
-		AND ($7::timestamptz IS NULL OR time < $7) AND ($8='' OR body->>'protocol'=$8)
+		AND ($7::timestamptz IS NULL OR time < $7) AND ($8='' OR body->>'protocol'=$8 OR ($8='openai_images' AND body->>'protocol' IN ('openai_images_generations','openai_images_edits')))
         AND ($9='' OR body->>'model'=$9) AND ($10='' OR body->'decision'->>'scene_id'=$10)
         AND ($11='' OR body->>'error_kind'=$11)
- AND ($12='' OR body->>'client_ip'=$12) AND ($13='' OR body->>'session_id'=$13)
+ AND ($14='' OR body->>'credential_id'=$14) AND ($12='' OR body->>'client_ip'=$12) AND ($13='' OR body->>'session_id'=$13)
         AND ($4='' OR request_id ILIKE '%'||$4||'%' OR body->>'text' ILIKE '%'||$4||'%' OR body->>'text_preview' ILIKE '%'||$4||'%' OR body->>'model' ILIKE '%'||$4||'%'
  OR body->>'client_ip' ILIKE '%'||$4||'%' OR body->>'session_id' ILIKE '%'||$4||'%'
  OR body->>'client_request_id' ILIKE '%'||$4||'%' OR body->'parameters'->>'conversation_id' ILIKE '%'||$4||'%'
  OR body->'parameters'->>'previous_response_id' ILIKE '%'||$4||'%')
-		ORDER BY time DESC LIMIT $5 OFFSET $6`, f.Since, f.Kind, f.Action, f.Search, f.Limit, f.Offset, optionalTime(f.Until), f.Endpoint, f.Model, f.Scene, f.ErrorKind, f.ClientIP, f.SessionID)
+		ORDER BY time DESC LIMIT $5 OFFSET $6`, f.Since, f.Kind, f.Action, f.Search, f.Limit, f.Offset, optionalTime(f.Until), f.Endpoint, f.Model, f.Scene, f.ErrorKind, f.ClientIP, f.SessionID, f.CredentialID)
 	if err != nil {
 		return nil, err
 	}
@@ -524,9 +527,18 @@ func (s *PG) Events(ctx context.Context, f gateway.EventFilter) ([]gateway.Event
 		if err := json.Unmarshal(raw, &event); err != nil {
 			return nil, err
 		}
+		event.EndpointGroup = protocol.Group(event.Protocol)
+		event.ImageOperation = protocol.ImageOperation(event.Protocol)
 		out = append(out, event)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	if err := s.hydrateCredentials(ctx, out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // Event retrieves one stored event by ID.
@@ -541,7 +553,14 @@ func (s *PG) Event(ctx context.Context, id string) (gateway.Event, error) {
 		return out, err
 	}
 	err = json.Unmarshal(raw, &out)
-	return out, err
+	if err != nil {
+		return out, err
+	}
+	out.EndpointGroup = protocol.Group(out.Protocol)
+	out.ImageOperation = protocol.ImageOperation(out.Protocol)
+	items := []gateway.Event{out}
+	err = s.hydrateCredentials(ctx, items)
+	return items[0], err
 }
 
 // Changes returns recent policy edits in reverse order.

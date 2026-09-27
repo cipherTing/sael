@@ -3,7 +3,8 @@ import { Check, FlaskConical, PlugZap, Save, RotateCcw } from "lucide-react";
 import { Input } from "./components/ui/input";
 import { Textarea } from "./components/ui/textarea";
 import { Button } from "./components/ui/button";
-import { ErrorState, Help, PageHeading, Panel } from "./components/common";
+import { Help, Panel } from "./components/common";
+import { notifyError } from "./notifications";
 import { questionName } from "./questionMeta";
 import { duration } from "./analytics";
 import type { Answer, Hit } from "./types";
@@ -62,9 +63,7 @@ export default function JevSettingsPage({
       config.max_input_tokens || 28800,
     ),
     [saved, setSaved] = useState(config);
-  const [error, setError] = useState(""),
-    [testError, setTestError] = useState(""),
-    [saving, setSaving] = useState(false),
+  const [saving, setSaving] = useState(false),
     [testing, setTesting] = useState(false),
     [text, setText] = useState(""),
     [result, setResult] = useState<JevTestResult | null>(null),
@@ -115,17 +114,15 @@ export default function JevSettingsPage({
     setConnectionOK(false);
     setResult(null);
     setTesting(false);
-    setTestError("");
   }, [baseURL, model, key, timeout, maxInputTokens]);
   async function save() {
     setSaving(true);
-    setError("");
     try {
       const value = await onSave(input());
       setSaved(value);
       setKey("");
     } catch (error) {
-      setError(error instanceof Error ? error.message : String(error));
+      notifyError(error);
     } finally {
       setSaving(false);
     }
@@ -133,7 +130,6 @@ export default function JevSettingsPage({
   async function test(connectionOnly = false) {
     const id = ++serial.current;
     setTesting(true);
-    setTestError("");
     setResult(null);
     try {
       const value = await onTest(
@@ -146,17 +142,13 @@ export default function JevSettingsPage({
       }
     } catch (error) {
       if (id === serial.current)
-        setTestError(error instanceof Error ? error.message : String(error));
+        notifyError(error);
     } finally {
       if (id === serial.current) setTesting(false);
     }
   }
   return (
     <>
-      <PageHeading title="设置" />
-      <div className="section-tabs">
-        <span className="section-tab active">Jev 分类器</span>
-      </div>
       <div className="connection-layout">
         <Panel
           title="连接配置"
@@ -184,9 +176,6 @@ export default function JevSettingsPage({
                   onChange={(e) => setBaseURL(e.target.value)}
                   aria-invalid={Boolean(baseURL) && !urlValid}
                 />
-                {baseURL && !urlValid && (
-                  <p className="field-error">请输入有效的 HTTP(S) 地址</p>
-                )}
               </label>
               <label className="field">
                 <span>模型 ID</span>
@@ -255,11 +244,6 @@ export default function JevSettingsPage({
                 />
               </label>
             </div>
-            {error && (
-              <div style={{ marginTop: 14 }}>
-                <ErrorState error={error} />
-              </div>
-            )}
             <div className="form-actions">
               {connectionOK && (
                 <span
@@ -293,11 +277,6 @@ export default function JevSettingsPage({
                 {saving ? "保存中…" : "保存 Jev 配置"}
               </Button>
             </div>
-            {testError && (
-              <div style={{ marginTop: 14 }}>
-                <ErrorState error={testError} />
-              </div>
-            )}
           </div>
         </Panel>
         <Panel
@@ -328,7 +307,6 @@ export default function JevSettingsPage({
                   serial.current++;
                   setText("");
                   setResult(null);
-                  setTestError("");
                   setTesting(false);
                 }}
               >

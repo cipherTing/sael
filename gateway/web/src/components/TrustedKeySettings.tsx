@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { notifyError } from "../notifications";
 import type { Policy } from "../policy";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
-import { Help, Panel, ErrorState } from "./common";
+import { Help, Panel } from "./common";
 
 export function TrustedKeySettings({
   policy,
@@ -14,20 +15,18 @@ export function TrustedKeySettings({
 }) {
   const current = policy.trusted_key_idle_days || 30;
   const [days, setDays] = useState(String(current));
-  const [busy, setBusy] = useState(false),
-    [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
   useEffect(() => setDays(String(current)), [current, policy.version]);
   const value = Number(days),
     valid = Number.isInteger(value) && value > 0 && value <= 106751;
   async function save() {
     if (!valid || busy) return;
     setBusy(true);
-    setError("");
     try {
       await onSave({ ...policy, trusted_key_idle_days: value });
       toast.success("可信密钥设置已保存");
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      notifyError(e);
     } finally {
       setBusy(false);
     }
@@ -69,11 +68,6 @@ export function TrustedKeySettings({
             {busy ? "保存中…" : "保存可信密钥设置"}
           </Button>
         </form>
-        {error && (
-          <div className="panel-body">
-            <ErrorState error={error} />
-          </div>
-        )}
       </Panel>
     </div>
   );

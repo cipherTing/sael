@@ -48,6 +48,39 @@ func (s *Server) review(parent context.Context, event Event, p policy.Policy, co
 		s.writeEvent(parent, event)
 		return count, decision
 	}
+	keys := []string{}
+	byScene := map[string]string{}
+	cacheAvailable := false
+	if s.ReviewCache != nil && configErr == nil {
+		for _, scene := range p.Scenes {
+			if scene.AppliesTo(event.Protocol) && scene.AppliesToModel(event.Model) {
+				key := sceneCacheKey(config, scene, event.Text)
+				keys = append(keys, key)
+				byScene[scene.ID] = key
+			}
+		}
+		count.CacheLookup = len(keys) > 0
+		values, err := s.ReviewCache.Lookup(parent, keys)
+		cacheAvailable = err == nil
+		if err == nil && len(keys) > 0 {
+			verdicts := map[string]bool{}
+			complete := true
+			for id, key := range byScene {
+				value, ok := values[key]
+				if !ok {
+					complete = false
+					break
+				}
+				verdicts[id] = value
+			}
+			if complete {
+				count.CacheHit = true
+				event.ReviewSource = "cache"
+				event.Decision, event.Trace = cachedDecision(p, verdicts, event.Protocol, event.Model)
+				return s.finishReview(parent, event, p, count)
+			}
+		}
+	}
 	timeout := s.Timeout
 	if configErr == nil {
 		timeout = config.timeout()
@@ -83,10 +116,11 @@ func (s *Server) review(parent context.Context, event Event, p policy.Policy, co
 	s.markClassifier(err, timedOut)
 	count.ClassifierSample = true
 	count.ClassifierMS = time.Since(started).Milliseconds()
-	if err == nil && len(decision.Hits) == 0 {
+	if err == nil && decision.SceneID == "" {
 		count.Outcome = "clean"
 		return count, decision
 	}
+	event.ReviewSource = "jev"
 	event.ClassifierMS = count.ClassifierMS
 	event.Scores, event.Decision, event.Trace = scores, decision, trace
 	if err != nil {
@@ -96,14 +130,34 @@ func (s *Server) review(parent context.Context, event Event, p policy.Policy, co
 		s.writeEvent(parent, event)
 		return count, decision
 	}
+	if s.ReviewCache != nil && cacheAvailable && len(keys) > 0 {
+		values := map[string]bool{}
+		for _, t := range trace {
+			if key, ok := byScene[t.ID]; ok {
+				values[key] = t.Status == "effective" || t.Status == "shadowed"
+			}
+		}
+		if err := s.ReviewCache.Save(parent, values); err != nil {
+			slog.Warn("review cache write failed", "error", err)
+		}
+	}
 	count.Scores = scores
+	return s.finishReview(parent, event, p, count)
+}
+
+func (s *Server) finishReview(ctx context.Context, event Event, p policy.Policy, count Count) (Count, policy.Decision) {
+	decision := event.Decision
+	if decision.SceneID == "" {
+		count.Outcome = "clean"
+		return count, decision
+	}
 	for _, scene := range p.Scenes {
 		if scene.ID == decision.SceneID || slices.Contains(decision.AlsoMatched, scene.ID) {
 			count.SceneMatches = append(count.SceneMatches, SceneMatch{SceneID: scene.ID, Name: scene.Name, Action: string(scene.Action), WinnerID: decision.SceneID, WinnerName: decision.SceneName})
 		}
 	}
 	event.Kind = "hit"
-	s.writeEvent(parent, event)
+	s.writeEvent(ctx, event)
 	count.Outcome = "hit_allowed"
 	if decision.Action == policy.Block {
 		count.Outcome = "blocked"
