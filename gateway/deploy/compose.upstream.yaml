@@ -1,0 +1,12 @@
+# Add the gateway to an existing upstream container's Docker network.
+# Usage: UPSTREAM_NETWORK=<network-name> docker compose -f compose.yaml -f compose.upstream.yaml up -d
+services:
+  gateway:
+    networks:
+      default: {}
+      upstream: {}
+
+networks:
+  upstream:
+    external: true
+    name: ${UPSTREAM_NETWORK:?set UPSTREAM_NETWORK to the upstream Docker network name}

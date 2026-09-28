@@ -8,33 +8,20 @@ import (
 )
 
 func (s *Server) clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-	peer, err := netip.ParseAddr(host)
+	peer, err := peerIP(r)
 	if err != nil {
 		return ""
 	}
-	peer = peer.Unmap()
-	trusted := func(ip netip.Addr) bool {
-		for _, prefix := range s.TrustedProxies {
-			if prefix.Contains(ip) {
-				return true
-			}
-		}
-		return false
-	}
-	if !trusted(peer) {
+	if !s.trustsProxy(peer) {
 		return peer.String()
 	}
 	forwarded := r.Header.Get("X-Forwarded-For")
 	if forwarded == "" {
-		forwarded = r.Header.Get("X-Real-IP")
+		return peer.String()
 	}
 	chain := strings.Split(forwarded, ",")
 	for i := len(chain) - 1; i >= 0; i-- {
-		if !trusted(peer) {
+		if !s.trustsProxy(peer) {
 			break
 		}
 		candidate, err := netip.ParseAddr(strings.TrimSpace(chain[i]))
@@ -44,4 +31,22 @@ func (s *Server) clientIP(r *http.Request) string {
 		peer = candidate.Unmap()
 	}
 	return peer.String()
+}
+
+func peerIP(r *http.Request) (netip.Addr, error) {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	peer, err := netip.ParseAddr(host)
+	return peer.Unmap(), err
+}
+
+func (s *Server) trustsProxy(ip netip.Addr) bool {
+	for _, prefix := range s.TrustedProxies {
+		if prefix.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }

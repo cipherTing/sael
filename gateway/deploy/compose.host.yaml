@@ -1,0 +1,24 @@
+# Use only when a host upstream cannot listen outside 127.0.0.1.
+# The reverse proxy must also run on the host to reach these loopback listeners.
+services:
+  db:
+    ports:
+      - "127.0.0.1:${HOST_DB_PORT:-55432}:5432"
+  redis:
+    ports:
+      - "127.0.0.1:${HOST_REDIS_PORT:-56379}:6379"
+  review-cache:
+    ports:
+      - "127.0.0.1:${HOST_REVIEW_CACHE_PORT:-56380}:6379"
+  gateway:
+    network_mode: host
+    ports: !reset []
+    environment:
+      ADMIN_LISTEN_ADDR: "127.0.0.1:${ADMIN_PORT:-8080}"
+      INGRESS_LISTEN_ADDR: "127.0.0.1:${INGRESS_PORT:-8081}"
+      DB_HOST: 127.0.0.1
+      DB_PORT: ${HOST_DB_PORT:-55432}
+      REDIS_HOST: 127.0.0.1
+      REDIS_PORT: ${HOST_REDIS_PORT:-56379}
+      REVIEW_CACHE_REDIS_HOST: 127.0.0.1
+      REVIEW_CACHE_REDIS_PORT: ${HOST_REVIEW_CACHE_PORT:-56380}

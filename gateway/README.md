@@ -22,7 +22,7 @@ docker compose ps
 | `http://localhost:8080` | 运维控制台与 `/admin/*` API |
 | `http://localhost:8081` | 客户端业务进网 |
 
-两个端口在启动时确定，控制台不能动态修改。管理端口不转发业务，进网端口不提供管理 API；两端均有 `/healthz`。Compose 默认绑定 `127.0.0.1`；对外提供服务时，通过域名反向代理，或在 `.env` 中调整对应绑定地址。
+两个端口在启动时确定，控制台不能动态修改。管理端口不转发业务，进网端口不提供管理 API；两端均有 `/healthz`。默认 bridge 部署把容器内 8080/8081 映射到 `.env` 指定的宿主端口，默认仅绑定宿主 `127.0.0.1`。外网请求由 Caddy/Nginx 转发至进网端口。
 
 ### `.env` 配置
 
@@ -40,11 +40,14 @@ docker compose ps
 | `REVIEW_CACHE_REDIS_URL` | 空 | 可选完整审核缓存连接串，覆盖对应连接字段 |
 | `REDIS_HOST` / `REDIS_PORT` | `redis` / `6379` | Redis 连接地址 |
 | `REDIS_URL` | 空 | 可选外部 Redis 连接串，覆盖 Redis 连接字段 |
-| `ADMIN_BIND_IP` / `INGRESS_BIND_IP` | `127.0.0.1` | 两个宿主机监听地址 |
-| `ADMIN_PORT` / `INGRESS_PORT` | `8080` / `8081` | 两个宿主机端口 |
+| `ADMIN_BIND_IP` / `INGRESS_BIND_IP` | `127.0.0.1` | bridge 部署的宿主绑定地址 |
+| `ADMIN_PORT` / `INGRESS_PORT` | `8080` / `8081` | bridge 部署的宿主端口；host 部署的实际监听端口 |
 | `INGRESS_PUBLIC_URL` | `http://localhost:<INGRESS_PORT>` | 控制台展示的外部进网地址，不改变监听 |
 | `UPSTREAM_URL` | 空 | 首次导入的出站根地址，如 `https://api.example.com` |
 | `TRUSTED_PROXY_CIDRS` | 空 | 可信代理网段，逗号分隔；用于解析来源 IP |
+| `PROXY_NETWORK` | 空 | 使用 `compose.proxy.yaml` 时，反代容器所在的 Docker 网络名 |
+| `UPSTREAM_NETWORK` | 空 | 使用 `compose.upstream.yaml` 时，下游容器所在的 Docker 网络名 |
+| `HOST_DB_PORT` / `HOST_REDIS_PORT` / `HOST_REVIEW_CACHE_PORT` | `55432` / `56379` / `56380` | 使用 `compose.host.yaml` 时，依赖服务在宿主回环上的端口 |
 | `JEV_MAX_INPUT_TOKENS` | `28800` | 首次导入的送审上限，使用本地 Token 估算 |
 | `MAX_REQUEST_BODY_SIZE` | `268435456` | 请求体读取上限，256 MiB |
 | `MAX_HEADER_BYTES` | `65536` | 请求头上限，64 KiB |
@@ -58,6 +61,18 @@ docker compose ps
 | `DATABASE_URL` | 空 | 可选完整连接串；填写后覆盖上面的连接参数 |
 
 `UPSTREAM_URL` 与 `JEV_MAX_INPUT_TOKENS` 只初始化尚未保存的配置，重启不会覆盖管理员在控制台的修改。Jev 地址、模型和密钥在控制台设置，密钥不会明文回传给前端。使用已有数据库卷时，修改 `.env` 中的数据库密码不会修改库中已有用户的密码。外部数据库应按其要求设置 TLS；当前 Compose 仍会启动内置数据库和 Redis 服务。
+
+### 反代与下游接入
+
+- **反代在宿主机**：保持默认 bridge 部署，让反代访问 `127.0.0.1:<INGRESS_PORT>`。反代若在容器内，填写其 Docker 网络名 `PROXY_NETWORK`，以 `docker compose -f compose.yaml -f compose.proxy.yaml up --build -d` 启动，让反代访问 `gateway:8081`；该配置只保留管理端口的宿主回环映射。
+- **下游也是容器**：在 `.env` 填写其 Docker 网络名 `UPSTREAM_NETWORK`，以 `docker compose -f compose.yaml -f compose.upstream.yaml up --build -d` 启动。然后在 **设置 → 接入** 将出站地址设为容器名及容器内端口，例如 `http://sub2api:8080`。数据库和 Redis 仍通过默认网络的服务名连接。已有配置不会被 `UPSTREAM_URL` 覆盖。
+- **下游是宿主服务**：网关可通过 `host.docker.internal` 访问；Linux 的默认 Compose 已提供 `host-gateway` 映射。Linux 上只监听宿主 `127.0.0.1` 的服务无法经此地址访问，需要让服务监听容器可达的地址，或使用下述 host 部署。
+
+反代和下游都在容器中时，同时传入两个覆盖文件：`docker compose -f compose.yaml -f compose.proxy.yaml -f compose.upstream.yaml up --build -d`。
+
+反代必须覆盖客户端自带的来源头，将确认过的客户端 IP 写入 `X-Forwarded-For`，并提供外部协议与主机名。`TRUSTED_PROXY_CIDRS` 只填写**网关实际看到的反代 TCP 对端**；经 Docker 端口映射时，它不一定是 `127.0.0.1`。未配置时网关使用 TCP 对端 IP；可先用一条审核记录核对该地址，再设置可信范围并确认记录和下游显示的真实 IP。Sael 只从可信代理的 XFF 解析客户端 IP，并用同一结果重建转发给下游的 `X-Forwarded-For` 和 `X-Real-IP`。下游也应只信任它实际看到的 Sael 对端。
+
+仅当宿主下游必须保持 `127.0.0.1` 监听时，使用 `docker compose -f compose.yaml -f compose.host.yaml up --build -d`。该配置要求反代也在宿主机；网关使用宿主网络、移除端口映射，并在 `127.0.0.1:<ADMIN_PORT>` 和 `127.0.0.1:<INGRESS_PORT>` 监听。数据库和两个 Redis 经宿主回环高位端口连接。启动前确保这些端口可用，完整数据库／Redis URL 若已设置会覆盖独立主机与端口字段。Docker Desktop 使用 host 网络须先在设置中启用该功能。镜像健康检查读取实际监听地址。
 
 ### 统计写入与故障恢复
 
@@ -168,7 +183,7 @@ Jev 没有公开分词器。Sael 使用本地 `cl100k_base` **估算**输入 Tok
 
 请求参数采用白名单，包括输出 Token 上限、温度、推理强度、服务等级、工具数量、输出格式，及 Responses 的会话/前序响应 ID、Messages 的思考设置。不会保存任意请求头、全部 metadata 或历史消息。
 
-来源 IP 默认取 TCP 对端；配置 `TRUSTED_PROXY_CIDRS` 后，才沿可信代理链解析转发头。请求文本、预览和参数在写库或暂存前去敏，覆盖常见邮箱、手机号、身份证、Bearer/Basic 凭据、API Key、JWT、私钥和敏感键值。JSON 递归处理，普通文本用正则；先去敏，再截预览。规则不保证识别所有个人信息，Jev 与出站服务仍接收原始文本。
+来源 IP 默认取 TCP 对端；配置 `TRUSTED_PROXY_CIDRS` 后，才沿可信代理链解析 `X-Forwarded-For`。请求文本、预览和参数在写库或暂存前去敏，覆盖常见邮箱、手机号、身份证、Bearer/Basic 凭据、API Key、JWT、私钥和敏感键值。JSON 递归处理，普通文本用正则；先去敏，再截预览。规则不保证识别所有个人信息，Jev 与出站服务仍接收原始文本。
 
 ## 本地开发与测试
 

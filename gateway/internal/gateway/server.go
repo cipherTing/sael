@@ -292,7 +292,25 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	proxy := &httputil.ReverseProxy{
-		Rewrite:   func(pr *httputil.ProxyRequest) { pr.SetURL(target); pr.SetXForwarded() },
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.SetURL(target)
+			pr.SetXForwarded()
+			pr.Out.Header.Del("X-Real-IP")
+			if ip := s.clientIP(pr.In); ip != "" {
+				pr.Out.Header.Set("X-Forwarded-For", ip)
+				pr.Out.Header.Set("X-Real-IP", ip)
+			} else {
+				pr.Out.Header.Del("X-Forwarded-For")
+			}
+			if peer, err := peerIP(pr.In); err == nil && s.trustsProxy(peer) {
+				if proto := strings.ToLower(pr.In.Header.Get("X-Forwarded-Proto")); proto == "http" || proto == "https" {
+					pr.Out.Header.Set("X-Forwarded-Proto", proto)
+				}
+				if host := pr.In.Header.Get("X-Forwarded-Host"); host != "" && !strings.ContainsAny(host, "/, \t\r\n?#@\\") {
+					pr.Out.Header.Set("X-Forwarded-Host", host)
+				}
+			}
+		},
 		Transport: s.transport, BufferPool: &s.buffers, FlushInterval: -1, ModifyResponse: s.observeCredential,
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
 			var large *http.MaxBytesError

@@ -1,13 +1,14 @@
 FROM node:22-alpine AS web
 WORKDIR /src/gateway/web
 COPY gateway/web/package.json gateway/web/package-lock.json ./
-RUN npm ci
+RUN npm ci --include=optional && node --input-type=module -e "import 'rolldown'"
 COPY gateway/web/ ./
 RUN npm run build
 
 FROM golang:1.26-alpine AS go-build
 WORKDIR /src
 ARG GOPROXY=https://proxy.golang.org,direct
+ENV GOPROXY=${GOPROXY}
 COPY sdk/ ./sdk/
 COPY cli/ ./cli/
 COPY gateway/ ./gateway/
@@ -19,8 +20,9 @@ RUN apk add --no-cache ca-certificates && addgroup -S sael && adduser -S -G sael
 COPY --from=go-build /out/sael-gateway /usr/local/bin/sael-gateway
 COPY --from=go-build /out/sael /usr/local/bin/sael
 COPY --from=web /src/gateway/web/dist/ /opt/sael/web/
+COPY --chmod=755 gateway/deploy/healthcheck.sh /usr/local/bin/sael-healthcheck
 USER sael
 ENV WEB_DIR=/opt/sael/web SPOOL_PATH=/var/lib/sael/spool.jsonl ADMIN_LISTEN_ADDR=:8080 INGRESS_LISTEN_ADDR=:8081
 EXPOSE 8080 8081
-HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://127.0.0.1:8080/healthz >/dev/null && wget -qO- http://127.0.0.1:8081/healthz >/dev/null || exit 1
+HEALTHCHECK --interval=30s --timeout=3s CMD ["/usr/local/bin/sael-healthcheck"]
 ENTRYPOINT ["/usr/local/bin/sael-gateway"]
