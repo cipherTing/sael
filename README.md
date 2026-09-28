@@ -83,7 +83,7 @@ flowchart LR
 git clone https://github.com/cipherTing/sael.git
 cd sael/gateway/deploy
 cp .env.example .env
-# 在 .env 中填写密码、出站地址，并用 openssl rand -base64 32 生成 CREDENTIAL_ENCRYPTION_KEY
+# 在 .env 中填写密码，并用 openssl rand -base64 32 生成 CREDENTIAL_ENCRYPTION_KEY
 docker compose up --build -d
 ```
 
@@ -100,7 +100,7 @@ npm run docker:rebuild     # 重建并更新网关容器
 
 默认管理地址 **http://localhost:8080**，客户端进网地址 **http://localhost:8081**。客户端的 API 根地址通常填写 `http://localhost:8081/v1`，凭据继续使用上游原有密钥。
 
-首次启动审查关闭。登录后，在 **设置 → 接入**确认出站地址，在 **设置 → Jev 分类器**配置并测试连接，再到 **场景**添加规则和试算，最后在 **设置 → 审查**开启。端口、绑定地址与部署参数都在 `.env` 中维护。
+首次启动审查关闭。登录后，在 **设置 → 接入**填写出站地址，在 **设置 → Jev 分类器**配置并测试连接，再到 **场景**添加规则和试算，最后在 **设置 → 审查**开启。宿主端口可在 `.env` 中调整。
 
 完整步骤见 [网关部署文档](gateway/README.md)。
 

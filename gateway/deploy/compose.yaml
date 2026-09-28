@@ -41,7 +41,7 @@ services:
       retries: 10
 
   gateway:
-    stop_grace_period: ${STOP_GRACE_PERIOD:-30s}
+    stop_grace_period: 30s
     build:
       context: ../..
       dockerfile: gateway/deploy/Dockerfile
@@ -54,41 +54,20 @@ services:
       review-cache:
         condition: service_started
     ports:
-      - "${ADMIN_BIND_IP:-127.0.0.1}:${ADMIN_PORT:-8080}:8080"
-      - "${INGRESS_BIND_IP:-127.0.0.1}:${INGRESS_PORT:-8081}:8081"
+      - "127.0.0.1:${ADMIN_PORT:-8080}:8080"
+      - "127.0.0.1:${INGRESS_PORT:-8081}:8081"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
       CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:?set CREDENTIAL_ENCRYPTION_KEY}
-      REVIEW_CACHE_REDIS_URL: ${REVIEW_CACHE_REDIS_URL:-}
-      REVIEW_CACHE_REDIS_HOST: ${REVIEW_CACHE_REDIS_HOST:-review-cache}
-      REVIEW_CACHE_REDIS_PORT: ${REVIEW_CACHE_REDIS_PORT:-6379}
       REVIEW_CACHE_REDIS_PASSWORD: ${REVIEW_CACHE_REDIS_PASSWORD:?set REVIEW_CACHE_REDIS_PASSWORD}
-      REDIS_URL: ${REDIS_URL:-}
-      REDIS_HOST: ${REDIS_HOST:-redis}
-      REDIS_PORT: ${REDIS_PORT:-6379}
+      REDIS_HOST: redis
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
-      DATABASE_URL: ${DATABASE_URL:-}
-      DB_HOST: ${DB_HOST:-db}
-      DB_PORT: ${DB_PORT:-5432}
-      DB_SSLMODE: ${DB_SSLMODE:-disable}
-      POSTGRES_USER: ${POSTGRES_USER:-sael}
-      POSTGRES_DB: ${POSTGRES_DB:-sael}
+      DB_HOST: db
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
-      UPSTREAM_URL: ${UPSTREAM_URL:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD}
-      ADMIN_LISTEN_ADDR: ":8080"
-      INGRESS_LISTEN_ADDR: ":8081"
       INGRESS_PUBLIC_URL: ${INGRESS_PUBLIC_URL:-http://localhost:${INGRESS_PORT:-8081}}
       TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-}
-      CLASSIFIER_TIMEOUT: ${CLASSIFIER_TIMEOUT:-5s}
-      SAEL_CLI_PATH: ${SAEL_CLI_PATH:-/usr/local/bin/sael}
-      MAX_REQUEST_BODY_SIZE: ${MAX_REQUEST_BODY_SIZE:-268435456}
-      MAX_HEADER_BYTES: ${MAX_HEADER_BYTES:-65536}
-      READ_HEADER_TIMEOUT: ${READ_HEADER_TIMEOUT:-10s}
-      IDLE_TIMEOUT: ${IDLE_TIMEOUT:-120s}
-      ASYNC_REVIEW_CONCURRENCY: ${ASYNC_REVIEW_CONCURRENCY:-256}
-      JEV_MAX_INPUT_TOKENS: ${JEV_MAX_INPUT_TOKENS:-28800}
     volumes:
       - spool_data:/var/lib/sael
 

@@ -77,13 +77,13 @@ flowchart LR
 git clone https://github.com/cipherTing/sael.git
 cd sael/gateway/deploy
 cp .env.example .env
-# Set ADMIN_PASSWORD, POSTGRES_PASSWORD, REDIS_PASSWORD and UPSTREAM_URL in .env.
+# Set ADMIN_PASSWORD, POSTGRES_PASSWORD, REDIS_PASSWORD, REVIEW_CACHE_REDIS_PASSWORD and CREDENTIAL_ENCRYPTION_KEY in .env.
 docker compose up --build -d
 ```
 
 The console defaults to **http://localhost:8080** and ingress to **http://localhost:8081**. OpenAI clients typically use `http://localhost:8081/v1` as their API base and retain their upstream API key.
 
-Review starts disabled. Sign in, confirm the forwarding destination under **接入**, configure and test Jev under **设置**, then create and test rules under **场景** before enabling review. Ports and deployment parameters live in `.env`.
+Review starts disabled. Sign in, set the forwarding destination under **设置 → 接入**, configure and test Jev under **设置 → Jev 分类器**, then create and test rules under **场景** before enabling review. Host ports can be changed in `.env`.
 
 See the [deployment guide](../gateway/README.md) for environment variables, session freezing, the estimated Jev input limit and development commands.
 

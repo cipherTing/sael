@@ -7,7 +7,7 @@
 ```sh
 cd gateway/deploy
 cp .env.example .env
-# 编辑 .env：填写密码和 UPSTREAM_URL
+# 编辑 .env：填写密码和加密密钥
 # 用 openssl rand -base64 32 生成 CREDENTIAL_ENCRYPTION_KEY 并保存到 .env
 docker compose up --build -d
 docker compose ps
@@ -22,7 +22,7 @@ docker compose ps
 | `http://localhost:8080` | 运维控制台与 `/admin/*` API |
 | `http://localhost:8081` | 客户端业务进网 |
 
-两个端口在启动时确定，控制台不能动态修改。管理端口不转发业务，进网端口不提供管理 API；两端均有 `/healthz`。默认 bridge 部署把容器内 8080/8081 映射到 `.env` 指定的宿主端口，默认仅绑定宿主 `127.0.0.1`。外网请求由 Caddy/Nginx 转发至进网端口。
+两个端口在启动时确定，控制台不能动态修改。管理端口不转发业务，进网端口不提供管理 API；两端均有 `/healthz`。Compose 把容器内 8080/8081 映射到 `.env` 指定的宿主端口，默认仅绑定宿主 `127.0.0.1`。外网请求由反代转发至进网端口。
 
 ### `.env` 配置
 
@@ -30,49 +30,23 @@ docker compose ps
 
 | 变量 | 默认值 | 用途 |
 | --- | --- | --- |
-| `COMPOSE_PROJECT_NAME` | `sael` | Compose 项目和数据卷名称 |
 | `ADMIN_PASSWORD` | 必填 | 控制台登录密码 |
-| `POSTGRES_PASSWORD` | 必填 | 内置数据库密码；网关自动编码连接串中的特殊字符 |
-| `REDIS_PASSWORD` | 必填 | 内置 Redis 密码 |
+| `POSTGRES_PASSWORD` | 必填 | 数据库密码 |
+| `REDIS_PASSWORD` | 必填 | Redis 密码 |
+| `REVIEW_CACHE_REDIS_PASSWORD` | 必填 | 审核缓存密码 |
 | `CREDENTIAL_ENCRYPTION_KEY` | 必填 | Base64 编码的 32 字节凭据加密主密钥，所有实例共用 |
-| `REVIEW_CACHE_REDIS_PASSWORD` | 必填 | 独立审核缓存 Redis 密码 |
-| `REVIEW_CACHE_REDIS_HOST` / `REVIEW_CACHE_REDIS_PORT` | `review-cache` / `6379` | 审核缓存实例地址 |
-| `REVIEW_CACHE_REDIS_URL` | 空 | 可选完整审核缓存连接串，覆盖对应连接字段 |
-| `REDIS_HOST` / `REDIS_PORT` | `redis` / `6379` | Redis 连接地址 |
-| `REDIS_URL` | 空 | 可选外部 Redis 连接串，覆盖 Redis 连接字段 |
-| `ADMIN_BIND_IP` / `INGRESS_BIND_IP` | `127.0.0.1` | bridge 部署的宿主绑定地址 |
-| `ADMIN_PORT` / `INGRESS_PORT` | `8080` / `8081` | bridge 部署的宿主端口；host 部署的实际监听端口 |
+| `ADMIN_PORT` / `INGRESS_PORT` | `8080` / `8081` | 宿主端口冲突时修改 |
 | `INGRESS_PUBLIC_URL` | `http://localhost:<INGRESS_PORT>` | 控制台展示的外部进网地址，不改变监听 |
-| `UPSTREAM_URL` | 空 | 首次导入的出站根地址，如 `https://api.example.com` |
-| `TRUSTED_PROXY_CIDRS` | 空 | 可信代理网段，逗号分隔；用于解析来源 IP |
-| `PROXY_NETWORK` | 空 | 使用 `compose.proxy.yaml` 时，反代容器所在的 Docker 网络名 |
-| `UPSTREAM_NETWORK` | 空 | 使用 `compose.upstream.yaml` 时，下游容器所在的 Docker 网络名 |
-| `HOST_DB_PORT` / `HOST_REDIS_PORT` / `HOST_REVIEW_CACHE_PORT` | `55432` / `56379` / `56380` | 使用 `compose.host.yaml` 时，依赖服务在宿主回环上的端口 |
-| `JEV_MAX_INPUT_TOKENS` | `28800` | 首次导入的送审上限，使用本地 Token 估算 |
-| `MAX_REQUEST_BODY_SIZE` | `268435456` | 请求体读取上限，256 MiB |
-| `MAX_HEADER_BYTES` | `65536` | 请求头上限，64 KiB |
-| `READ_HEADER_TIMEOUT` / `IDLE_TIMEOUT` | `10s` / `120s` | 读取请求头、空闲连接超时；不设置整段上传或 SSE 响应超时 |
-| `STOP_GRACE_PERIOD` | `30s` | Docker 停止宽限期；网关等待后台审查最多 10 秒后取消剩余任务 |
-| `ASYNC_REVIEW_CONCURRENCY` | `256` | 每实例非阻塞审查的在途任务上限；满时跳过本次审查并累计进网、输出限频运行告警，不排队阻塞转发 |
-| `CLASSIFIER_TIMEOUT` | `5s` | 分类器默认超时；已保存的 Jev 设置优先 |
-| `SAEL_CLI_PATH` | 容器内 `/usr/local/bin/sael`；本机 `sael` | 与网关同版本的常驻 CLI 可执行文件 |
-| `POSTGRES_USER` / `POSTGRES_DB` | `sael` / `sael` | 内置数据库用户和库名 |
-| `DB_HOST` / `DB_PORT` / `DB_SSLMODE` | `db` / `5432` / `disable` | 网关的数据库连接参数 |
-| `DATABASE_URL` | 空 | 可选完整连接串；填写后覆盖上面的连接参数 |
+| `TRUSTED_PROXY_CIDRS` | 空 | 可信反代的实际对端网段；留空时使用 TCP 对端 IP |
 
-`UPSTREAM_URL` 与 `JEV_MAX_INPUT_TOKENS` 只初始化尚未保存的配置，重启不会覆盖管理员在控制台的修改。Jev 地址、模型和密钥在控制台设置，密钥不会明文回传给前端。使用已有数据库卷时，修改 `.env` 中的数据库密码不会修改库中已有用户的密码。外部数据库应按其要求设置 TLS；当前 Compose 仍会启动内置数据库和 Redis 服务。
+出站地址在控制台 **设置 → 接入** 配置。Jev 地址、模型、密钥、超时和输入上限也在控制台设置。其他运行参数使用默认值，无需填入 `.env`。
 
 ### 反代与下游接入
 
-- **反代在宿主机**：保持默认 bridge 部署，让反代访问 `127.0.0.1:<INGRESS_PORT>`。反代若在容器内，填写其 Docker 网络名 `PROXY_NETWORK`，以 `docker compose -f compose.yaml -f compose.proxy.yaml up --build -d` 启动，让反代访问 `gateway:8081`；该配置只保留管理端口的宿主回环映射。
-- **下游也是容器**：在 `.env` 填写其 Docker 网络名 `UPSTREAM_NETWORK`，以 `docker compose -f compose.yaml -f compose.upstream.yaml up --build -d` 启动。然后在 **设置 → 接入** 将出站地址设为容器名及容器内端口，例如 `http://sub2api:8080`。数据库和 Redis 仍通过默认网络的服务名连接。已有配置不会被 `UPSTREAM_URL` 覆盖。
-- **下游是宿主服务**：网关可通过 `host.docker.internal` 访问；Linux 的默认 Compose 已提供 `host-gateway` 映射。Linux 上只监听宿主 `127.0.0.1` 的服务无法经此地址访问，需要让服务监听容器可达的地址，或使用下述 host 部署。
+- 反代只需要转发到 Sael 的进网端口：`127.0.0.1:<INGRESS_PORT>`。
+- 出站地址在 **设置 → 接入** 填写，必须是 Sael 容器可以访问的 HTTP(S) 根地址。
 
-反代和下游都在容器中时，同时传入两个覆盖文件：`docker compose -f compose.yaml -f compose.proxy.yaml -f compose.upstream.yaml up --build -d`。
-
-反代必须覆盖客户端自带的来源头，将确认过的客户端 IP 写入 `X-Forwarded-For`，并提供外部协议与主机名。`TRUSTED_PROXY_CIDRS` 只填写**网关实际看到的反代 TCP 对端**；经 Docker 端口映射时，它不一定是 `127.0.0.1`。未配置时网关使用 TCP 对端 IP；可先用一条审核记录核对该地址，再设置可信范围并确认记录和下游显示的真实 IP。Sael 只从可信代理的 XFF 解析客户端 IP，并用同一结果重建转发给下游的 `X-Forwarded-For` 和 `X-Real-IP`。下游也应只信任它实际看到的 Sael 对端。
-
-仅当宿主下游必须保持 `127.0.0.1` 监听时，使用 `docker compose -f compose.yaml -f compose.host.yaml up --build -d`。该配置要求反代也在宿主机；网关使用宿主网络、移除端口映射，并在 `127.0.0.1:<ADMIN_PORT>` 和 `127.0.0.1:<INGRESS_PORT>` 监听。数据库和两个 Redis 经宿主回环高位端口连接。启动前确保这些端口可用，完整数据库／Redis URL 若已设置会覆盖独立主机与端口字段。Docker Desktop 使用 host 网络须先在设置中启用该功能。镜像健康检查读取实际监听地址。
+反代需要覆盖客户端自带的来源头。`TRUSTED_PROXY_CIDRS` 留空时，记录和登录限流使用 Sael 看到的 TCP 对端 IP；填写实际可信反代网段后，Sael 才读取其 `X-Forwarded-For`，并将识别出的 IP 传给下游。
 
 ### 统计写入与故障恢复
 
@@ -113,7 +87,7 @@ Redis 不可用时，去敏后的批次先写本地暂存并刷盘，恢复后�
 
 ### 登录与可信密钥
 
-控制台登录按真实来源 IP 每分钟最多尝试 3 次，Redis 统一计数。超限返回 `429` 和 `Retry-After`，首次冷却 60 秒；重复触发按 120、240、480、900 秒退避，最高 15 分钟。冷却期间的请求不延长截止时间；一个小时没有尝试后重置退避。登录会话有效期为 30 天，保存在 Redis，网关重启后仍有效；退出登录或更改管理员密码会使旧会话失效。Redis 不可用时暂停登录。反向代理后部署时，设置准确的 `TRUSTED_PROXY_CIDRS`。
+控制台登录按识别到的来源 IP 每分钟最多尝试 3 次，Redis 统一计数。超限返回 `429` 和 `Retry-After`，首次冷却 60 秒；重复触发按 120、240、480、900 秒退避，最高 15 分钟。冷却期间的请求不延长截止时间；一个小时没有尝试后重置退避。登录会话有效期为 30 天，保存在 Redis，网关重启后仍有效；退出登录或更改管理员密码会使旧会话失效。Redis 不可用时暂停登录。
 
 调用密钥第一次进入网关时直接透传，不读取审查正文、不调用 Jev。只有受监控 POST 端点返回 2xx 且响应类型为 JSON 或 SSE 时才自动建立信任；该首次请求及信任建立前已进入的请求不补审。公共路径和 HTML 页面不会建立信任。这个判断使用上游 HTTP 响应状态，不扫描响应正文。
 
@@ -164,7 +138,7 @@ Jev 没有公开分词器。Sael 使用本地 `cl100k_base` **估算**输入 Tok
 | 正常未命中 | 放行 | 仅计数和耗时聚合，不存分类分数 |
 | 上游服务返回错误 | 转发原响应 | 不记录为审核故障 |
 
-控制台的连接测试和场景文本试算使用相同的输入预检。请求体与 HTTP 超时按部署参数控制；非阻塞审查任务满时不排队等待。
+控制台的连接测试和场景文本试算使用相同的输入预检。请求体上限和 HTTP 超时使用网关默认值；非阻塞审查任务满时不排队等待。
 
 ## 总览与记录
 
@@ -175,7 +149,7 @@ Jev 没有公开分词器。Sael 使用本地 `cl100k_base` **估算**输入 Tok
 - **Jev 失败率** = Jev 失败 /（完成审查 + Jev 失败）。输入超限和冻结重试不进入分母。
 - 分母为零显示 `—`；P50/P95 通过耗时分桶估算上界，不平均各时间桶的分位数。
 
-进网计数在转发前完成，不等待 SSE 结束。事件和计数暂时写库失败时，写入持久卷的 JSONL，恢复后重放并对计数去重。新增统计从升级后开始积累，不补造旧数据。
+进网计数在转发前完成，不等待 SSE 结束。事件和计数暂时写库失败时，写入持久卷的 JSONL，恢复后重放并对计数去重。
 
 ### 请求记录与去敏
 
@@ -227,12 +201,4 @@ TEST_REVIEW_CACHE_URL='redis://localhost:6380/0' \
 
 客户端完整 API Key 使用 AES-256-GCM 加密存入 PostgreSQL；可信状态只在主 Redis 保存指纹和活动时间。管理接口先解密，再只返回掩码值。**记录列表、详情和设置中的可信密钥列表**都显示密钥；可以按同一凭据筛选记录。闲置清除移除信任，已有审核记录仍保留密钥关联。
 
-### 从旧版本升级
-
-1. 保留现有 `.env` 和数据卷，补上 `REVIEW_CACHE_REDIS_PASSWORD` 与 `CREDENTIAL_ENCRYPTION_KEY`。
-2. 主密钥只生成一次：`openssl rand -base64 32`。所有网关副本使用同一个值，将它与数据库备份一起妥善保存；丢失后无法还原已加密密钥。
-3. 执行 `docker compose up --build -d`。数据库迁移可重复执行；缺失或错误的主密钥会阻止网关启动。
-4. 旧可信指纹在后续请求中自动补齐密文。旧审核记录从未保存过的密钥显示“—”，无法反推恢复。
-5. 旧 Images 生成／编辑场景统一为 Images，历史统计查询时合并。只匹配 Variations 的旧场景停用，需重新选择端点。
-
-设置保存按字段更新，并校验版本；过期场景草稿不能覆盖另一页面刚修改的设置。`/access` 旧链接跳转至 `/settings?tab=access`。
+设置保存按字段更新并校验版本，过期的场景草稿不会覆盖另一页面刚修改的设置。加密主密钥须与数据库备份一起保存，丢失后无法还原已加密的密钥。
