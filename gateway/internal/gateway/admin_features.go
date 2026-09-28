@@ -34,7 +34,7 @@ func (s *Server) policyInput(r *http.Request) (policy.Policy, error) {
 	raw, _ := json.Marshal(next)
 	var fields map[string]json.RawMessage
 	_ = json.Unmarshal(raw, &fields)
-	allowed := map[string]bool{"version": true, "scenes": true, "enabled": true, "trusted_key_idle_days": true, "preview_chars": true, "retention_days": true, "session_block_enabled": true, "session_block_ttl_seconds": true}
+	allowed := map[string]bool{"version": true, "scenes": true, "enabled": true, "trusted_key_idle_days": true, "preview_chars": true, "retention_days": true, "session_block_enabled": true, "session_block_on_blocking_review": true, "session_block_on_nonblocking_review": true, "session_block_ttl_seconds": true}
 	for k, v := range patch {
 		if !allowed[k] {
 			return next, errors.New("不支持的策略配置字段")

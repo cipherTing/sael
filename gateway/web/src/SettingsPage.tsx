@@ -83,7 +83,12 @@ const copyPolicy = (p: PolicyResponse): Policy => ({
   scenes: structuredClone(p.scenes),
   preview_chars: p.preview_chars,
   retention_days: p.retention_days,
-  session_block_enabled: Boolean(p.session_block_enabled),
+  session_block_on_blocking_review: Boolean(
+    p.session_block_on_blocking_review ?? p.session_block_enabled,
+  ),
+  session_block_on_nonblocking_review: Boolean(
+    p.session_block_on_nonblocking_review,
+  ),
   session_block_ttl_seconds: p.session_block_ttl_seconds || 3600,
 });
 function sceneError(scene: Scene, questions: Question[]) {

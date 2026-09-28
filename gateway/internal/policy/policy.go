@@ -85,16 +85,20 @@ func (s Scene) AppliesToModel(model string) bool {
 
 // Policy is one versioned snapshot used for a whole request.
 type Policy struct {
-	TrustedKeyIdleDays     int                `json:"trusted_key_idle_days"`
-	Enabled                bool               `json:"enabled"`
-	Version                int64              `json:"version"`
-	Thresholds             map[string]float64 `json:"thresholds,omitempty"` // Legacy policies are converted on load.
-	Scenes                 []Scene            `json:"scenes"`
-	UnmatchedAction        Action             `json:"unmatched_action,omitempty"` // Legacy policies are converted on load.
-	PreviewChars           *int               `json:"preview_chars"`
-	RetentionDays          *int               `json:"retention_days"`
-	SessionBlockEnabled    bool               `json:"session_block_enabled,omitempty"`
-	SessionBlockTTLSeconds int                `json:"session_block_ttl_seconds,omitempty"`
+	TrustedKeyIdleDays int                `json:"trusted_key_idle_days"`
+	Enabled            bool               `json:"enabled"`
+	Version            int64              `json:"version"`
+	Thresholds         map[string]float64 `json:"thresholds,omitempty"` // Legacy policies are converted on load.
+	Scenes             []Scene            `json:"scenes"`
+	UnmatchedAction    Action             `json:"unmatched_action,omitempty"` // Legacy policies are converted on load.
+	PreviewChars       *int               `json:"preview_chars"`
+	RetentionDays      *int               `json:"retention_days"`
+	// SessionBlockEnabled is retained only to read policies written before the
+	// freeze behavior was split by review mode.
+	SessionBlockEnabled             bool `json:"session_block_enabled,omitempty"`
+	SessionBlockOnBlockingReview    bool `json:"session_block_on_blocking_review,omitempty"`
+	SessionBlockOnNonblockingReview bool `json:"session_block_on_nonblocking_review,omitempty"`
+	SessionBlockTTLSeconds          int  `json:"session_block_ttl_seconds,omitempty"`
 }
 
 // Answer is one measurement returned by the Sael CLI.
@@ -123,7 +127,11 @@ type Decision struct {
 
 // UpgradeLegacy moves the old shared thresholds into each scene once.
 func UpgradeLegacy(p *Policy) {
-	if p.SessionBlockEnabled && p.SessionBlockTTLSeconds <= 0 {
+	if p.SessionBlockEnabled && !p.SessionBlockOnBlockingReview && !p.SessionBlockOnNonblockingReview {
+		p.SessionBlockOnBlockingReview = true
+	}
+	p.SessionBlockEnabled = false
+	if (p.SessionBlockOnBlockingReview || p.SessionBlockOnNonblockingReview) && p.SessionBlockTTLSeconds <= 0 {
 		p.SessionBlockTTLSeconds = 3600
 	}
 	if p.Enabled && len(p.Scenes) == 0 {
@@ -184,7 +192,7 @@ func Validate(p Policy) error {
 	if p.RetentionDays != nil && (*p.RetentionDays < 1 || *p.RetentionDays > 3650) {
 		return errors.New("retention days must be 1–3650")
 	}
-	if p.SessionBlockEnabled && (p.SessionBlockTTLSeconds < 1 || p.SessionBlockTTLSeconds > 9223372036) {
+	if (p.SessionBlockEnabled || p.SessionBlockOnBlockingReview || p.SessionBlockOnNonblockingReview) && (p.SessionBlockTTLSeconds < 1 || p.SessionBlockTTLSeconds > 9223372036) {
 		return errors.New("会话冻结时长必须大于 0 且不超过时间类型的范围")
 	}
 	known := map[string]Question{}

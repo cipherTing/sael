@@ -17,7 +17,7 @@ import (
 
 func TestSessionFreezeIsIsolatedByCallerAndExpires(t *testing.T) {
 	p := activePolicy()
-	p.SessionBlockEnabled, p.SessionBlockTTLSeconds = true, 60
+	p.SessionBlockOnBlockingReview, p.SessionBlockTTLSeconds = true, 60
 	c := &testClassifier{answers: fullAnswers(map[string]float64{"cyber_abuse": 0.9})}
 	s, store, upstream := makeServer(t, p, c)
 	call := func(key, session string) int {
@@ -61,7 +61,7 @@ func TestSessionFreezeIsIsolatedByCallerAndExpires(t *testing.T) {
 
 func TestSessionFreezeNeedsStableSessionAndOnlyBlocksMonitoredRequests(t *testing.T) {
 	p := activePolicy()
-	p.SessionBlockEnabled, p.SessionBlockTTLSeconds = true, 60
+	p.SessionBlockOnBlockingReview, p.SessionBlockTTLSeconds = true, 60
 	c := &testClassifier{answers: fullAnswers(map[string]float64{"cyber_abuse": 0.9})}
 	s, store, _ := makeServer(t, p, c)
 	r := authorizedRequest("POST", "/v1/responses", strings.NewReader("{\"input\":\"hello\"}"))
@@ -199,7 +199,7 @@ func TestImageEditReviewsOnlyPromptAndPreservesMultipartRequest(t *testing.T) {
 
 func TestFrozenSessionRespectsSceneScopeAndDoesNotRenewOnRetry(t *testing.T) {
 	p := activePolicy()
-	p.SessionBlockEnabled, p.SessionBlockTTLSeconds = true, 60
+	p.SessionBlockOnBlockingReview, p.SessionBlockTTLSeconds = true, 60
 	c := &testClassifier{answers: fullAnswers(map[string]float64{"cyber_abuse": .9})}
 	s, store, _ := makeServer(t, p, c)
 	call := func(path string) int {
@@ -236,7 +236,7 @@ func TestFrozenSessionRespectsSceneScopeAndDoesNotRenewOnRetry(t *testing.T) {
 		t.Fatal("endpoint outside scene scope did not bypass freeze")
 	}
 	store.policy.Scenes[0].Endpoints = nil
-	store.policy.SessionBlockEnabled = false
+	store.policy.SessionBlockOnBlockingReview = false
 	if call("/v1/responses") != 201 || c.calls != 2 {
 		t.Fatal("freeze-off did not resume normal review")
 	}

@@ -85,6 +85,17 @@ func TestSessionFreezeSettingsValidate(t *testing.T) {
 	}
 }
 
+func TestLegacySessionFreezeMapsToBlockingReviewOnly(t *testing.T) {
+	p := Policy{SessionBlockEnabled: true, Scenes: []Scene{{ID: "a", Name: "场景", Match: Any, Action: Block, Conditions: []Condition{{Question: "gore", Threshold: 1}}}}}
+	UpgradeLegacy(&p)
+	if !p.SessionBlockOnBlockingReview || p.SessionBlockOnNonblockingReview || p.SessionBlockEnabled {
+		t.Fatalf("legacy freeze mapping: %+v", p)
+	}
+	if p.SessionBlockTTLSeconds != 3600 {
+		t.Fatalf("legacy freeze default ttl: %d", p.SessionBlockTTLSeconds)
+	}
+}
+
 func TestLegacyPolicyCopiesGlobalThresholdsIntoScenes(t *testing.T) {
 	p := Policy{Enabled: true, Thresholds: map[string]float64{"gore": 1.5, "self_harm": 0.8}, UnmatchedAction: Block,
 		Scenes: []Scene{{ID: "old", Name: "旧场景", Questions: []string{"gore", "self_harm"}, Match: All, Action: Block}}}

@@ -14,30 +14,47 @@ export function SessionFreezeSettings({
   policy: Policy;
   onSave: (value: Policy) => Promise<void>;
 }) {
-  const [enabled, setEnabled] = useState(Boolean(policy.session_block_enabled));
+  const [blockingEnabled, setBlockingEnabled] = useState(
+    Boolean(
+      policy.session_block_on_blocking_review ?? policy.session_block_enabled,
+    ),
+  );
+  const [nonblockingEnabled, setNonblockingEnabled] = useState(
+    Boolean(policy.session_block_on_nonblocking_review),
+  );
   const [minutes, setMinutes] = useState(
     (policy.session_block_ttl_seconds || 3600) / 60,
   );
   const [busy, setBusy] = useState(false);
   useEffect(() => {
-    setEnabled(Boolean(policy.session_block_enabled));
+    setBlockingEnabled(
+      Boolean(
+        policy.session_block_on_blocking_review ?? policy.session_block_enabled,
+      ),
+    );
+    setNonblockingEnabled(Boolean(policy.session_block_on_nonblocking_review));
     setMinutes((policy.session_block_ttl_seconds || 3600) / 60);
   }, [policy.version]);
   const seconds = Math.round(minutes * 60);
   const valid =
     Number.isFinite(minutes) && seconds > 0 && seconds <= 9223372036;
   const dirty =
-    enabled !== Boolean(policy.session_block_enabled) ||
+    blockingEnabled !==
+      Boolean(
+        policy.session_block_on_blocking_review ?? policy.session_block_enabled,
+      ) ||
+    nonblockingEnabled !== Boolean(policy.session_block_on_nonblocking_review) ||
     seconds !== (policy.session_block_ttl_seconds || 3600);
   async function save() {
     setBusy(true);
     try {
       await onSave({
         ...policy,
-        session_block_enabled: enabled,
+        session_block_on_blocking_review: blockingEnabled,
+        session_block_on_nonblocking_review: nonblockingEnabled,
         session_block_ttl_seconds: seconds,
       });
-      toast.success("会话策略已保存");
+      toast.success("会话冻结设置已保存");
     } catch (e) {
       notifyError(e);
     } finally {
@@ -50,19 +67,26 @@ export function SessionFreezeSettings({
         title="会话冻结"
         extra={
           <Help>
-            命中拦截场景后，冻结同一调用凭据下的会话。到期自动恢复，重试不续期；请求必须携带凭据和显式会话
-            ID。
+            阻塞审查命中后冻结当前会话；非阻塞审查在后台命中后冻结后续请求。到期自动恢复，重试不续期。
           </Help>
         }
       >
         <div className="session-settings-row">
           <label className="review-state">
             <Switch
-              aria-label="启用会话冻结"
-              checked={enabled}
-              onCheckedChange={setEnabled}
+              aria-label="阻塞审查命中后冻结会话"
+              checked={blockingEnabled}
+              onCheckedChange={setBlockingEnabled}
             />
-            <span>拦截后冻结会话</span>
+            <span>阻塞审查命中后冻结会话</span>
+          </label>
+          <label className="review-state">
+            <Switch
+              aria-label="非阻塞审查命中后冻结会话"
+              checked={nonblockingEnabled}
+              onCheckedChange={setNonblockingEnabled}
+            />
+            <span>非阻塞审查命中后冻结会话</span>
           </label>
           <label className="field">
             <span>冻结时长（分钟）</span>
@@ -70,7 +94,7 @@ export function SessionFreezeSettings({
               type="number"
               min={1 / 60}
               step={1}
-              disabled={!enabled}
+              disabled={!blockingEnabled && !nonblockingEnabled}
               aria-label="冻结时长（分钟）"
               value={minutes || ""}
               onChange={(e) => setMinutes(Number(e.target.value))}
@@ -81,7 +105,7 @@ export function SessionFreezeSettings({
             disabled={!dirty || !valid || busy}
             onClick={() => void save()}
           >
-            {busy ? "保存中…" : "保存会话策略"}
+            {busy ? "保存中…" : "保存会话冻结"}
           </Button>
         </div>
       </Panel>

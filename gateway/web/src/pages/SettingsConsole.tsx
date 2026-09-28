@@ -145,7 +145,10 @@ function ReviewSettings({
         onSave={(next) =>
           onSave({
             version: next.version,
-            session_block_enabled: next.session_block_enabled,
+            session_block_on_blocking_review:
+              next.session_block_on_blocking_review,
+            session_block_on_nonblocking_review:
+              next.session_block_on_nonblocking_review,
             session_block_ttl_seconds: next.session_block_ttl_seconds,
           })
         }

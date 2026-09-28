@@ -234,7 +234,7 @@ func TestPromptOverConfiguredJevLimitIsWarnedAndForwarded(t *testing.T) {
 
 func TestBlockedSessionIsRejectedBeforeClassifier(t *testing.T) {
 	p := activePolicy()
-	p.SessionBlockEnabled = true
+	p.SessionBlockOnBlockingReview = true
 	p.SessionBlockTTLSeconds = 600
 	c := &testClassifier{answers: fullAnswers(map[string]float64{"cyber_abuse": 0.9})}
 	s, store, calls := makeServer(t, p, c)
@@ -268,6 +268,33 @@ func TestAllowedHitForwardsOriginalRequest(t *testing.T) {
 	s.reviewWG.Wait()
 	if w.Code != 201 || *calls != 1 || w.Header().Get("X-Upstream-Body") != body || w.Header().Get("X-Upstream-Query") != "trace=1" || len(store.events) != 1 || store.counts[0].Outcome != "hit_allowed" {
 		t.Fatalf("status=%d calls=%d event=%+v counts=%+v", w.Code, *calls, store.events, store.counts)
+	}
+}
+
+func TestNonBlockingReviewHitFreezesSessionAfterForwarding(t *testing.T) {
+	p := activePolicy()
+	p.Scenes[0].Action = policy.Allow
+	p.SessionBlockOnNonblockingReview = true
+	p.SessionBlockTTLSeconds = 600
+	c := &testClassifier{answers: fullAnswers(map[string]float64{"cyber_abuse": 0.9})}
+	s, store, calls := makeServer(t, p, c)
+	body := `{"model":"test","messages":[{"role":"user","content":"danger"}]}`
+	first := authorizedRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	first.Header.Set("X-Session-Id", "session-async")
+	first.Header.Set("Authorization", "Bearer test-user")
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, first)
+	s.reviewWG.Wait()
+	if w.Code != 201 || *calls != 1 || len(store.events) != 1 || store.events[0].Kind != "hit" || len(store.blocked) != 1 {
+		t.Fatalf("first status=%d upstream=%d events=%+v blocks=%v", w.Code, *calls, store.events, store.blocked)
+	}
+	second := authorizedRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"test","messages":[{"role":"user","content":"safe"}]}`))
+	second.Header.Set("X-Session-Id", "session-async")
+	second.Header.Set("Authorization", "Bearer test-user")
+	w = httptest.NewRecorder()
+	s.ServeHTTP(w, second)
+	if w.Code != 403 || *calls != 1 || c.calls != 1 {
+		t.Fatalf("second status=%d upstream=%d classifier=%d events=%+v", w.Code, *calls, c.calls, store.events)
 	}
 }
 

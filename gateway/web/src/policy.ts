@@ -22,6 +22,8 @@ export type Policy = {
   preview_chars: number | null;
   retention_days: number | null;
   session_block_enabled?: boolean;
+  session_block_on_blocking_review?: boolean;
+  session_block_on_nonblocking_review?: boolean;
   session_block_ttl_seconds?: number;
 };
 export type PolicyResponse = Policy & { questions: Question[] };

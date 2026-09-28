@@ -381,7 +381,7 @@ func (s *Server) proxyRequest(w http.ResponseWriter, r *http.Request) {
 	s.observeIngress(r.Context(), count)
 	event := s.baseEvent(r, requestID, meta, p)
 	freezeKey := sessionBlockKey(r, meta.SessionID)
-	if p.SessionBlockEnabled && meta.SessionID != "" && s.sessionBlocked(r.Context(), freezeKey) {
+	if (p.SessionBlockEnabled || p.SessionBlockOnBlockingReview || p.SessionBlockOnNonblockingReview) && meta.SessionID != "" && s.sessionBlocked(r.Context(), freezeKey) {
 		count.Outcome = "session_blocked"
 		event.Kind = "warning"
 		event.Decision = policy.Decision{Action: policy.Block}
@@ -398,7 +398,7 @@ func (s *Server) proxyRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !slices.ContainsFunc(p.Scenes, func(scene policy.Scene) bool { return applies(scene) && scene.Action == policy.Block }) {
-		if !s.startReview(event, p, count) {
+		if !s.startReview(event, p, count, freezeKey) {
 			count.Outcome = "review_busy"
 			now := time.Now().Unix()
 			last := s.reviewBusyLoggedAt.Load()
@@ -416,7 +416,7 @@ func (s *Server) proxyRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if decision.Action == policy.Block {
-		if p.SessionBlockEnabled && meta.SessionID != "" {
+		if (p.SessionBlockEnabled || p.SessionBlockOnBlockingReview) && meta.SessionID != "" {
 			ttl := time.Duration(p.SessionBlockTTLSeconds) * time.Second
 			if ttl <= 0 {
 				ttl = time.Hour

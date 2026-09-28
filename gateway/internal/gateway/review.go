@@ -165,7 +165,7 @@ func (s *Server) finishReview(ctx context.Context, event Event, p policy.Policy,
 	return count, decision
 }
 
-func (s *Server) startReview(event Event, p policy.Policy, count Count) bool {
+func (s *Server) startReview(event Event, p policy.Policy, count Count, freezeKey string) bool {
 	s.reviewMu.Lock()
 	defer s.reviewMu.Unlock()
 	if s.closed {
@@ -179,8 +179,15 @@ func (s *Server) startReview(event Event, p policy.Policy, count Count) bool {
 	go func() {
 		defer s.reviewWG.Done()
 		defer func() { s.reviewMu.Lock(); s.reviewActive--; s.reviewMu.Unlock() }()
-		result, _ := s.review(s.reviewContext, event, p, count)
+		result, decision := s.review(s.reviewContext, event, p, count)
 		s.recordCount(result)
+		if p.SessionBlockOnNonblockingReview && decision.SceneID != "" && event.SessionID != "" {
+			ttl := time.Duration(p.SessionBlockTTLSeconds) * time.Second
+			if ttl <= 0 {
+				ttl = time.Hour
+			}
+			s.rememberSessionBlock(s.reviewContext, freezeKey, ttl)
+		}
 	}()
 	return true
 }
