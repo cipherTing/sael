@@ -9,7 +9,10 @@ import (
 func (s *PG) PutSessionBlock(ctx context.Context, sessionHash string, until time.Time) error {
 	_, err := s.pool.Exec(ctx, `INSERT INTO gateway_session_blocks(session_hash,expires_at,updated_at)
 		VALUES ($1,$2,now())
-		ON CONFLICT (session_hash) DO UPDATE SET expires_at=GREATEST(gateway_session_blocks.expires_at, EXCLUDED.expires_at), updated_at=now()`, sessionHash, until)
+		ON CONFLICT (session_hash) DO UPDATE SET expires_at=CASE
+			WHEN gateway_session_blocks.expires_at <= now() THEN EXCLUDED.expires_at
+			ELSE gateway_session_blocks.expires_at
+		END, updated_at=now()`, sessionHash, until)
 	return err
 }
 

@@ -49,8 +49,8 @@ func TestIngressLearnsEncryptedCredentialAndRecordsEachCachedHit(t *testing.T) {
 	defer upstream.Close()
 	_, _ = p.UpdateUpstream(ctx, gateway.UpstreamConfig{BaseURL: upstream.URL})
 	_, _ = p.UpdateJev(ctx, gateway.JevConfig{BaseURL: jev.URL, Model: "mock", APIKey: "classifier-only-key"})
-	old, _ := p.Policy(ctx)
-	_, err := p.UpdatePolicy(ctx, old.Version, policy.Policy{Enabled: true, Scenes: []policy.Scene{{ID: "block", Name: "block", Conditions: []policy.Condition{{Question: "gore", Threshold: 1.5}}, Match: policy.Any, Action: policy.Block}}}, "test")
+	next := policy.Policy{Enabled: true, Scenes: []policy.Scene{{ID: "block", Name: "block", Conditions: []policy.Condition{{Question: "gore", Threshold: 1.5}}, Match: policy.Any, Action: policy.Block}}}
+	_, err := p.UpdatePolicy(ctx, gateway.PolicyUpdate{Replace: &next}, "test")
 	if err != nil {
 		t.Fatal(err)
 	}

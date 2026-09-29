@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -77,6 +78,25 @@ func TestReviewCacheDoesNotStoreCleanPrompts(t *testing.T) {
 	}
 	if len(cache.values) != 0 || len(st.events) != 0 || c.calls != 2 {
 		t.Fatal("clean prompts became stored records/cache")
+	}
+}
+
+func TestReviewCacheStoresFalsePredicatesAlongsideAHit(t *testing.T) {
+	p := activePolicy()
+	p.Scenes = append(p.Scenes, policy.Scene{ID: "unhit", Name: "unhit", Match: policy.Any, Action: policy.Allow, Conditions: []policy.Condition{{Question: "illicit", Threshold: .5}}})
+	c := &testClassifier{answers: fullAnswers(map[string]float64{"cyber_abuse": .9})}
+	s, st, _ := makeServer(t, p, c)
+	cache := &memoryReviewCache{values: map[string]bool{}}
+	s.ReviewCache = cache
+	for range 2 {
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, authorizedRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"test","messages":[{"role":"user","content":"mixed"}]}`)))
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("unexpected status %d", w.Code)
+		}
+	}
+	if c.calls != 1 || len(st.events) != 2 || st.events[1].ReviewSource != "cache" {
+		t.Fatalf("false scene predicate was not reused: calls=%d events=%+v cache=%v", c.calls, st.events, cache.values)
 	}
 }
 

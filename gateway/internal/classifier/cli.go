@@ -118,7 +118,7 @@ func (*CLI) Check(context.Context, string) ([]policy.Answer, error) {
 }
 
 // CheckConfigured evaluates a request using its saved configuration snapshot.
-func (c *CLI) CheckConfigured(parent context.Context, text string, settings gateway.JevConfig) ([]policy.Answer, error) {
+func (c *CLI) CheckConfigured(parent context.Context, text string, settings gateway.JevConfig, questions []string) ([]policy.Answer, error) {
 	select {
 	case <-c.done:
 		return nil, errors.New("classifier CLI unavailable")
@@ -131,7 +131,7 @@ func (c *CLI) CheckConfigured(parent context.Context, text string, settings gate
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	deadline, _ := ctx.Deadline()
-	raw, err := json.Marshal(protocol.Request{Text: text, BaseURL: settings.BaseURL, APIKey: settings.APIKey, Model: settings.Model, Deadline: deadline}) // #nosec G117 -- Credentials travel only over the authenticated loopback channel to the owned CLI, never to logs or storage.
+	raw, err := json.Marshal(protocol.Request{Text: text, Questions: questions, BaseURL: settings.BaseURL, APIKey: settings.APIKey, Model: settings.Model, Deadline: deadline}) // #nosec G117 -- Credentials travel only over the authenticated loopback channel to the owned CLI, never to logs or storage.
 	if err != nil {
 		return nil, err
 	}
@@ -174,7 +174,7 @@ func (c *CLI) CheckConfigured(parent context.Context, text string, settings gate
 	for _, a := range result.Answers {
 		answers = append(answers, policy.Answer{Question: a.Question, Type: a.Type, Value: a.Value})
 	}
-	if policy.ValidateAnswers(answers) != nil {
+	if policy.ValidateAnswersFor(answers, questions) != nil {
 		return nil, gateway.ErrInvalidClassifierResponse
 	}
 	return answers, nil

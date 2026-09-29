@@ -1,7 +1,7 @@
 name: Release
 
 # A pushed tag is the release. This repository has no root module, so the two
-# modules are tagged in their own namespaces (`cli/v0.0.1-rc1`, `sdk/v0.0.1-rc1`)
+# modules are tagged in their own namespaces (`cli/v0.0.1-rc2`, `sdk/v0.0.1-rc2`)
 # -- Go requires a subdirectory module's tag to carry the directory name as a
 # prefix. A bare `v*` pattern would therefore match a tag that means nothing here
 # and build nothing from it.
@@ -66,7 +66,7 @@ jobs:
       #
       # `--skip=validate` is required here, not a shortcut: GoReleaser parses the
       # current tag as a semantic version before it builds anything, and
-      # `cli/v0.0.1-rc1` is not one -- the prefix is a Go module requirement, and
+      # `cli/v0.0.1-rc2` is not one -- the prefix is a Go module requirement, and
       # the open-source build has no setting to strip it (that is the Pro
       # `monorepo.tag_prefix` feature). The only switch that skips that parse also
       # skips GoReleaser's git checks, which is why the tag is passed in below:
@@ -79,8 +79,8 @@ jobs:
           args: release --clean --skip=validate
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # The tag, passed explicitly rather than detected. `sdk/v0.0.1-rc1` and
-          # `cli/v0.0.1-rc1` are pushed at the same commit, and GoReleaser picks
+          # The tag, passed explicitly rather than detected. `sdk/v0.0.1-rc2` and
+          # `cli/v0.0.1-rc2` are pushed at the same commit, and GoReleaser picks
           # one of the tags pointing at HEAD by version sort; picking the SDK's
           # would build the CLI's archives from the SDK's tag.
           GORELEASER_CURRENT_TAG: ${{ github.ref_name }}

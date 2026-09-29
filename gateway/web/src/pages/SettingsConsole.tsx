@@ -66,7 +66,6 @@ export default function SettingsConsole({ policy, onSave, jev }: Props) {
             policy={policy}
             onSave={(next) =>
               onSave({
-                version: next.version,
                 trusted_key_idle_days: next.trusted_key_idle_days,
               })
             }
@@ -98,7 +97,7 @@ function ReviewSettings({
     if (busy) return;
     setBusy(true);
     try {
-      await onSave({ version: policy.version, enabled });
+      await onSave({ enabled });
       toast.success(enabled ? "审查已开启" : "审查已关闭");
     } catch (error) {
       notifyError(error);
@@ -111,7 +110,7 @@ function ReviewSettings({
     if (!Number.isInteger(value) || value < 1 || value > 3650 || saving) return;
     setSaving(true);
     try {
-      await onSave({ version: policy.version, retention_days: value });
+      await onSave({ retention_days: value });
       toast.success("记录设置已保存");
     } catch (error) {
       notifyError(error);
@@ -144,7 +143,6 @@ function ReviewSettings({
         policy={policy}
         onSave={(next) =>
           onSave({
-            version: next.version,
             session_block_on_blocking_review:
               next.session_block_on_blocking_review,
             session_block_on_nonblocking_review:

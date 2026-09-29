@@ -29,6 +29,7 @@ func newCheckCmd() *cobra.Command {
 	var (
 		file   string
 		asJSON bool
+		chosen string
 	)
 
 	cmd := &cobra.Command{
@@ -63,7 +64,18 @@ that turns one into an action belongs to the caller.`,
 				return err
 			}
 
-			result, err := client.Evaluate(cmd.Context(), text, questions.Moderation())
+			selected := questions.Moderation()
+			if cmd.Flags().Changed("questions") {
+				keys := strings.Split(chosen, ",")
+				for i := range keys {
+					keys[i] = strings.TrimSpace(keys[i])
+				}
+				selected, err = questions.Select(keys)
+				if err != nil {
+					return err
+				}
+			}
+			result, err := client.Evaluate(cmd.Context(), text, selected)
 			if err != nil {
 				return err
 			}
@@ -78,6 +90,7 @@ that turns one into an action belongs to the caller.`,
 
 	cmd.Flags().StringVarP(&file, "file", "f", "", "read the request from this file instead of the argument or standard input")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print JSON even at a terminal")
+	cmd.Flags().StringVar(&chosen, "questions", "", "comma-separated moderation question IDs for this request")
 
 	return cmd
 }

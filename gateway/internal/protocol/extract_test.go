@@ -17,8 +17,14 @@ func TestExtractCurrentUserText(t *testing.T) {
 		{"chat history only", "/v1/chat/completions", `{"messages":[{"role":"user","content":"old"},{"role":"assistant","content":"reply"}]}`, "", "openai_chat", "", false, false},
 		{"responses string", "/v1/responses", `{"model":"gpt-4.1","input":"now"}`, "now", "openai_responses", "gpt-4.1", false, false},
 		{"responses array", "/v1/responses", `{"input":[{"role":"user","content":[{"type":"input_text","text":"old"}]},{"role":"user","content":[{"type":"input_text","text":"new"},{"type":"input_image","image_url":"https://example.test/a"}]}]}`, "new", "openai_responses", "", false, true},
+		{"responses typed input item", "/v1/responses", `{"input":[{"type":"input_text","text":"now"}]}`, "now", "openai_responses", "", false, false},
+		{"responses typed input object", "/v1/responses", `{"input":{"type":"input_text","text":"now"}}`, "now", "openai_responses", "", false, false},
+		{"responses message item without role", "/v1/responses", `{"input":[{"type":"message","content":[{"type":"input_text","text":"now"}]}]}`, "now", "openai_responses", "", false, false},
 		{"responses tool only", "/v1/responses", `{"input":[{"role":"user","content":"old"},{"type":"function_call_output","output":"result"}]}`, "", "openai_responses", "", false, false},
 		{"anthropic", "/v1/messages", `{"model":"claude-test","messages":[{"role":"user","content":"old"},{"role":"assistant","content":"reply"},{"role":"user","content":[{"type":"text","text":"now"},{"type":"tool_result","content":"ignore"}]}]}`, "now", "anthropic", "claude-test", false, true},
+		{"anthropic trailing system", "/v1/messages", `{"model":"claude-test","messages":[{"role":"user","content":"now"},{"role":"system","content":"context"}]}`, "now", "anthropic", "claude-test", false, false},
+		{"anthropic multiple trailing system", "/v1/messages", `{"messages":[{"role":"user","content":"now"},{"role":"system","content":"one"},{"role":"system","content":"two"}]}`, "now", "anthropic", "", false, false},
+		{"anthropic assistant then system", "/v1/messages", `{"messages":[{"role":"user","content":"old"},{"role":"assistant","content":"reply"},{"role":"system","content":"context"}]}`, "", "anthropic", "", false, false},
 		{"gemini", "/v1beta/models/gemini-test:streamGenerateContent", `{"contents":[{"role":"user","parts":[{"text":"old"}]},{"role":"model","parts":[{"text":"reply"}]},{"role":"user","parts":[{"text":"now"},{"inlineData":{"mimeType":"image/png","data":"abc"}}]}]}`, "now", "gemini", "gemini-test", true, true},
 	}
 	for _, tt := range tests {

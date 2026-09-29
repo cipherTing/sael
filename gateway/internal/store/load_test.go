@@ -107,12 +107,9 @@ func TestGatewayLoad(t *testing.T) {
 	if _, err := p.UpdateJev(ctx, gateway.JevConfig{BaseURL: provider.URL, APIKey: "load-fixture", Model: "fixed-response", TimeoutMS: 5000}); err != nil {
 		t.Fatal(err)
 	}
-	old, err := p.Policy(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
 	chars := 200
-	_, err = p.UpdatePolicy(ctx, old.Version, policy.Policy{Enabled: mode != "disabled", PreviewChars: &chars, Scenes: []policy.Scene{{ID: "load-scene", Name: "Load", Match: policy.Any, Action: policy.Block, Conditions: []policy.Condition{{Question: "cyber_abuse", Threshold: .5}}}}}, "load-test")
+	next := policy.Policy{Enabled: mode != "disabled", PreviewChars: &chars, Scenes: []policy.Scene{{ID: "load-scene", Name: "Load", Match: policy.Any, Action: policy.Block, Conditions: []policy.Condition{{Question: "cyber_abuse", Threshold: .5}}}}}
+	_, err := p.UpdatePolicy(ctx, gateway.PolicyUpdate{Replace: &next}, "load-test")
 	if err != nil {
 		t.Fatal(err)
 	}

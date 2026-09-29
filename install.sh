@@ -33,7 +33,7 @@ REPO="cipherTing/sael"
 RELEASES_URL="https://github.com/${REPO}/releases"
 # Two modules (sdk/ and cli/) are tagged in their own namespaces, because a
 # subdirectory module's tag must carry the directory name as a prefix. The CLI
-# tag is `cli/v0.0.1-rc1`, not `v0.0.1-rc1`; the download path must match it or
+# tag is `cli/v0.0.1-rc2`, not `v0.0.1-rc2`; the download path must match it or
 # every fetch 404s.
 TAG_PREFIX="cli/"
 # The published matrix, and the only thing the platform check accepts. Intel
@@ -85,7 +85,7 @@ Install sael from a GitHub Release. Linux and macOS.
 Usage: install.sh [OPTIONS]
 
   --version <v>         Install this version instead of the latest release;
-                        the bare number, as in --version 0.0.1-rc1
+                        the bare number, as in --version 0.0.1-rc2
   --install-dir <path>  Root holding the per-version directories
                         (default ~/.local/share/sael)
   --bin-dir <path>      Where the `sael` symlink is created (default
@@ -127,7 +127,7 @@ parse_args() {
         esac
     done
 
-    # Accept "v0.0.1-rc1" and "cli/v0.0.1-rc1" as well as the bare number, so
+    # Accept "v0.0.1-rc2" and "cli/v0.0.1-rc2" as well as the bare number, so
     # pasting the tag off the releases page does the obvious thing instead of
     # 404ing on an asset name the user cannot see is wrong.
     case "$VERSION" in
@@ -216,7 +216,7 @@ resolve_version() {
     local url tag=""
     # One request against /releases/latest, then read where it landed: no JSON at
     # all. It cannot see a prerelease, and the first tag this project publishes is
-    # 0.0.1-rc1, so fall through to the API list -- which does include prereleases
+    # 0.0.1-rc2, so fall through to the API list -- which does include prereleases
     # -- when the redirect does not name a tag.
     url="$(curl -fsSLI -o /dev/null -w '%{url_effective}' "${RELEASES_URL}/latest" 2>/dev/null || true)"
     case "$url" in
@@ -230,7 +230,7 @@ resolve_version() {
     fi
     if [ -z "$tag" ]; then
         log_error "Could not determine the latest release of ${REPO}."
-        log_info "Name it explicitly:  install.sh --version 0.0.1-rc1"
+        log_info "Name it explicitly:  install.sh --version 0.0.1-rc2"
         exit 1
     fi
 

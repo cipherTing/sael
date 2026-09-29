@@ -150,12 +150,18 @@ func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
 			Questions []policy.Question `json:"questions"`
 		}{p, policy.Questions})
 	case r.URL.Path == "/admin/policy" && (r.Method == http.MethodPut || r.Method == http.MethodPatch):
-		next, decodeErr := s.policyInput(r)
+		update, decodeErr := s.policyInput(r)
 		if decodeErr != nil {
 			http.Error(w, decodeErr.Error(), http.StatusBadRequest)
 			return
 		}
-		if err := policy.Validate(next); err != nil {
+		current, err := s.Store.Policy(r.Context())
+		if err != nil {
+			http.Error(w, "policy unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		next, err := update.Apply(current)
+		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -170,9 +176,9 @@ func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		updated, err := s.Store.UpdatePolicy(r.Context(), next.Version, next, "admin")
-		if errors.Is(err, ErrConflict) {
-			http.Error(w, "policy changed; reload before saving", http.StatusConflict)
+		updated, err := s.Store.UpdatePolicy(r.Context(), update, "admin")
+		if errors.Is(err, ErrInvalidPolicy) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		if err != nil {

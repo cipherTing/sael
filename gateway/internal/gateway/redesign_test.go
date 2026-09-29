@@ -73,7 +73,7 @@ func TestClassifierHasNoImplicitThirtyTwoRequestLimit(t *testing.T) {
 
 func TestSceneOnlyAffectsSelectedEndpoint(t *testing.T) {
 	p := activePolicy()
-	raw := `{"enabled":true,"version":2,"scenes":[{"id":"scope","name":"Responses only","endpoints":["openai_responses"],"conditions":[{"question":"gore","threshold":1.5}],"match":"all","action":"block"}]}`
+	raw := `{"enabled":true,"scenes":[{"id":"scope","name":"Responses only","endpoints":["openai_responses"],"conditions":[{"question":"gore","threshold":1.5}],"match":"all","action":"block"}]}`
 	if err := json.Unmarshal([]byte(raw), &p); err != nil {
 		t.Fatal(err)
 	}

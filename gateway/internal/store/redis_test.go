@@ -110,6 +110,82 @@ func TestRedisFailureSpoolsOnlyRedactedBatchesAndReplaysOnce(t *testing.T) {
 		t.Fatal("redis leaked prompt")
 	}
 }
+
+func TestCloseStopsProducerWhenRedisAndSpoolAreBothUnavailable(t *testing.T) {
+	tmp := t.TempDir()
+	blocker := filepath.Join(tmp, "spool-parent")
+	if err := os.WriteFile(blocker, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	offline := redis.NewClient(&redis.Options{
+		Addr:         "127.0.0.1:1",
+		MaxRetries:   -1,
+		DialTimeout:  20 * time.Millisecond,
+		ReadTimeout:  20 * time.Millisecond,
+		WriteTimeout: 20 * time.Millisecond,
+	})
+	defer offline.Close()
+	s := &RedisStore{
+		PG:           &PG{spoolPath: filepath.Join(blocker, "telemetry")},
+		redis:        offline,
+		queue:        make(chan ingestItem, 1),
+		stopCh:       make(chan struct{}),
+		producerDone: make(chan struct{}),
+	}
+	s.producerCtx, s.producerCancel = context.WithCancel(context.Background())
+	go s.produce()
+	if err := s.Increment(context.Background(), gateway.Count{Time: time.Now(), Protocol: "openai_chat", Outcome: "clean"}); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		s.Close()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(telemetryShutdownTimeout + 2*time.Second):
+		t.Fatal("Close blocked while telemetry backends were unavailable")
+	}
+}
+
+func TestCloseUnblocksEnqueueWaitingOnFullQueue(t *testing.T) {
+	offline := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1"})
+	s := &RedisStore{
+		queue:        make(chan ingestItem, 1),
+		stopCh:       make(chan struct{}),
+		producerDone: make(chan struct{}),
+		redis:        offline,
+	}
+	defer offline.Close()
+	close(s.producerDone)
+	s.queue <- ingestItem{}
+
+	enqueued := make(chan error, 1)
+	go func() {
+		enqueued <- s.Increment(context.Background(), gateway.Count{Time: time.Now(), Protocol: "openai_chat", Outcome: "clean"})
+	}()
+	time.Sleep(20 * time.Millisecond)
+
+	closed := make(chan struct{})
+	go func() {
+		s.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("Close blocked behind a full telemetry queue")
+	}
+	select {
+	case err := <-enqueued:
+		if err == nil {
+			t.Fatal("enqueue succeeded after telemetry store closed")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("blocked enqueue did not observe shutdown")
+	}
+}
 func TestRedisSessionMigrationExpiryAndRetry(t *testing.T) {
 	p, r := redisFixture(t)
 	ctx := context.Background()

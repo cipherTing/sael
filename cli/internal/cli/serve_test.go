@@ -48,7 +48,7 @@ func startService(t *testing.T) serviceFixture {
 		t.Fatalf("CLI did not start persistent service: %v", err)
 	}
 	host, _, err := net.SplitHostPort(handshake.Address)
-	if err != nil || host != "127.0.0.1" || handshake.Version != 1 || len(handshake.Token) < 32 {
+	if err != nil || host != "127.0.0.1" || handshake.Version != 2 || len(handshake.Token) < 32 {
 		t.Fatal("invalid private service handshake")
 	}
 	return serviceFixture{handshake.Address, handshake.Token, owner, done}
@@ -56,7 +56,16 @@ func startService(t *testing.T) serviceFixture {
 
 func serviceRequest(ctx context.Context, t *testing.T, s serviceFixture, text, endpoint, key, model string, authenticated bool) *http.Response {
 	t.Helper()
-	raw, _ := json.Marshal(map[string]any{"text": text, "base_url": endpoint, "api_key": key, "model": model, "deadline": time.Now().Add(2 * time.Second)})
+	keys := make([]string, 0, len(questions.Moderation()))
+	for key := range questions.Moderation() {
+		keys = append(keys, key)
+	}
+	return serviceRequestSelected(ctx, t, s, text, endpoint, key, model, keys, authenticated)
+}
+
+func serviceRequestSelected(ctx context.Context, t *testing.T, s serviceFixture, text, endpoint, key, model string, selected []string, authenticated bool) *http.Response {
+	t.Helper()
+	raw, _ := json.Marshal(map[string]any{"text": text, "base_url": endpoint, "api_key": key, "model": model, "deadline": time.Now().Add(2 * time.Second), "questions": selected})
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+s.address+"/check", bytes.NewReader(raw))
 	req.Header.Set("Content-Type", "application/json")
 	if authenticated {
@@ -67,6 +76,88 @@ func serviceRequest(ctx context.Context, t *testing.T, s serviceFixture, text, e
 		t.Fatal(err)
 	}
 	return resp
+}
+
+func TestServeUsesAnIndependentQuestionSelectionForEachRequest(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			State     string                     `json:"state"`
+			Questions map[string]json.RawMessage `json:"questions"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+			return
+		}
+		answers := map[string]any{}
+		for key := range body.Questions {
+			if key == "gore" {
+				answers[key] = map[string]any{"type": "score", "score": 1.5}
+			} else {
+				answers[key] = map[string]any{"type": "noul", "noul": 0.9}
+			}
+		}
+		if body.State == "first" {
+			close(entered)
+			<-release
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"answers": answers})
+	}))
+	defer upstream.Close()
+	s := startService(t)
+	firstDone := make(chan []string, 1)
+	go func() {
+		resp := serviceRequestSelected(context.Background(), t, s, "first", upstream.URL, "key", "model", []string{"gore"}, true)
+		defer resp.Body.Close()
+		var result struct {
+			Answers []struct {
+				Question string `json:"question"`
+			} `json:"answers"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&result)
+		out := make([]string, 0, len(result.Answers))
+		for _, answer := range result.Answers {
+			out = append(out, answer.Question)
+		}
+		firstDone <- out
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("first subset did not reach Jev")
+	}
+	second := serviceRequestSelected(context.Background(), t, s, "second", upstream.URL, "key", "model", []string{"self_harm"}, true)
+	var result struct {
+		Answers []struct {
+			Question string `json:"question"`
+		} `json:"answers"`
+	}
+	if err := json.NewDecoder(second.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	_ = second.Body.Close()
+	if second.StatusCode != 200 || len(result.Answers) != 1 || result.Answers[0].Question != "self_harm" {
+		t.Fatalf("second request used the wrong question set: status=%d answers=%+v", second.StatusCode, result.Answers)
+	}
+	close(release)
+	if got := <-firstDone; len(got) != 1 || got[0] != "gore" {
+		t.Fatalf("first request used the wrong question set: %v", got)
+	}
+}
+
+func TestServeRejectsMissingAndDuplicateQuestionSelectionBeforeJev(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("invalid selection reached Jev")
+	}))
+	defer upstream.Close()
+	s := startService(t)
+	for _, keys := range [][]string{nil, {}, {"gore", "gore"}, {"missing"}} {
+		resp := serviceRequestSelected(context.Background(), t, s, "text", upstream.URL, "key", "model", keys, true)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("questions %v returned %d", keys, resp.StatusCode)
+		}
+	}
 }
 
 func serveAnswer(w http.ResponseWriter) {

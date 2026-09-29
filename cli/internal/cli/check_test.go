@@ -176,6 +176,31 @@ func TestCheckCommandSendsEveryModerationQuestion(t *testing.T) {
 	}
 }
 
+func TestCheckQuestionsFlagSendsOnlyTheChosenQuestions(t *testing.T) {
+	var sent struct {
+		Questions map[string]json.RawMessage `json:"questions"`
+	}
+	fakeService(t, func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&sent))
+		_, _ = io.WriteString(w, `{"answers":{"gore":{"type":"score","score":1.5},"self_harm":{"type":"noul","noul":0.9}}}`)
+	})
+	_, _, err := runCheck(t, "--questions", "gore,self_harm", "text")
+	require.NoError(t, err)
+	require.Len(t, sent.Questions, 2)
+	assert.Contains(t, sent.Questions, "gore")
+	assert.Contains(t, sent.Questions, "self_harm")
+}
+
+func TestCheckQuestionsFlagRejectsUnknownAndDuplicateItemsBeforeNetwork(t *testing.T) {
+	fakeService(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Error("invalid question selection reached Jev")
+	})
+	for _, value := range []string{"", "missing", "gore,gore"} {
+		_, _, err := runCheck(t, "--questions", value, "text")
+		require.Error(t, err, "value %q", value)
+	}
+}
+
 func TestCheckCommandReportsAnErrorFromTheService(t *testing.T) {
 	const errorBody = `{"error": {"message": "model not found", "code": 404}, "user_id": "user_1"}`
 

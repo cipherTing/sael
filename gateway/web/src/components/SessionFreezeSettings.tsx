@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { notifyError } from "../notifications";
-import type { Policy } from "../policy";
+import type { Policy, PolicyPatch } from "../policy";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Switch } from "./ui/switch";
@@ -12,7 +12,7 @@ export function SessionFreezeSettings({
   onSave,
 }: {
   policy: Policy;
-  onSave: (value: Policy) => Promise<void>;
+  onSave: (value: PolicyPatch) => Promise<void>;
 }) {
   const [blockingEnabled, setBlockingEnabled] = useState(
     Boolean(
@@ -34,7 +34,12 @@ export function SessionFreezeSettings({
     );
     setNonblockingEnabled(Boolean(policy.session_block_on_nonblocking_review));
     setMinutes((policy.session_block_ttl_seconds || 3600) / 60);
-  }, [policy.version]);
+  }, [
+    policy.session_block_on_blocking_review,
+    policy.session_block_on_nonblocking_review,
+    policy.session_block_enabled,
+    policy.session_block_ttl_seconds,
+  ]);
   const seconds = Math.round(minutes * 60);
   const valid =
     Number.isFinite(minutes) && seconds > 0 && seconds <= 9223372036;
@@ -49,7 +54,6 @@ export function SessionFreezeSettings({
     setBusy(true);
     try {
       await onSave({
-        ...policy,
         session_block_on_blocking_review: blockingEnabled,
         session_block_on_nonblocking_review: nonblockingEnabled,
         session_block_ttl_seconds: seconds,

@@ -114,11 +114,11 @@ func ExtractWithContentType(path, contentType string, body []byte) (Request, err
 			_ = json.Unmarshal(root.Input, &out.Text)
 			out.Text = strings.TrimSpace(out.Text)
 		} else {
-			out.Text, out.HasNonText = lastMessage(root.Input, "input_text")
+			out.Text, out.HasNonText = lastResponsesInput(root.Input)
 		}
 	case "/v1/messages":
 		out.SessionID = anthropicSession(root.Metadata)
-		out.Text, out.HasNonText = lastMessage(root.Messages, "text")
+		out.Text, out.HasNonText = lastAnthropicUserMessage(root.Messages)
 	case "/v1/images/generations":
 		out.Text = strings.TrimSpace(root.Prompt)
 		out.HasNonText = false
@@ -202,16 +202,164 @@ func lastMessage(raw json.RawMessage, textType string) (string, bool) {
 	if last.Role != "user" {
 		return "", false
 	}
-	if len(last.Content) > 0 && last.Content[0] == '"' {
+	return messageContent(last.Content, textType)
+}
+
+// lastResponsesInput follows the Responses input shape used by sub2api. The
+// final item is the only candidate: it may be a role=user message, a bare
+// input_text item without a role, or a single input object. Assistant/tool and
+// reasoning items are not searched past, so a continuation cannot re-submit an
+// earlier user prompt for review.
+func lastResponsesInput(raw json.RawMessage) (string, bool) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return "", false
+	}
+	if trimmed[0] == '[' {
+		var items []json.RawMessage
+		if json.Unmarshal(trimmed, &items) != nil || len(items) == 0 {
+			return "", false
+		}
+		return responsesItemContent(items[len(items)-1])
+	}
+	if trimmed[0] == '{' {
+		return responsesItemContent(trimmed)
+	}
+	return "", false
+}
+
+func responsesItemContent(raw json.RawMessage) (string, bool) {
+	var item struct {
+		Role    string          `json:"role"`
+		Type    string          `json:"type"`
+		Text    string          `json:"text"`
+		Content json.RawMessage `json:"content"`
+	}
+	if json.Unmarshal(raw, &item) != nil {
+		return "", false
+	}
+	role := strings.ToLower(strings.TrimSpace(item.Role))
+	if role != "" && role != "user" {
+		return "", false
+	}
+
+	texts := make([]string, 0, 2)
+	nonText := false
+	if len(item.Content) > 0 {
+		text, hasNonText := responsesContent(item.Content)
+		if text != "" {
+			texts = append(texts, text)
+		}
+		nonText = nonText || hasNonText
+	}
+	typ := strings.ToLower(strings.TrimSpace(item.Type))
+	if typ == "input_text" || typ == "text" || strings.TrimSpace(item.Text) != "" {
+		if text := strings.TrimSpace(item.Text); text != "" {
+			texts = append(texts, text)
+		}
+	} else if typ != "" && typ != "message" {
+		switch typ {
+		case "input_image", "image", "input_file", "file", "input_audio", "audio":
+			// A user input item carrying an image, file, or audio is a legitimate
+			// current input, but it still has no text to send to Jev.
+			nonText = true
+		case "function_call_output", "reasoning", "function_call", "computer_call", "computer_call_output":
+			// These are continuation/tool items. Do not walk backwards to an
+			// earlier user prompt.
+			return "", false
+		default:
+			if len(item.Content) == 0 && strings.TrimSpace(item.Text) == "" {
+				return "", false
+			}
+		}
+	}
+	return strings.Join(texts, "\n"), nonText
+}
+
+func responsesContent(raw json.RawMessage) (string, bool) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return "", false
+	}
+	if trimmed[0] == '"' {
 		var text string
-		_ = json.Unmarshal(last.Content, &text)
+		if json.Unmarshal(trimmed, &text) == nil {
+			return strings.TrimSpace(text), false
+		}
+		return "", false
+	}
+	if trimmed[0] == '[' {
+		var parts []json.RawMessage
+		if json.Unmarshal(trimmed, &parts) != nil {
+			return "", false
+		}
+		texts := make([]string, 0, len(parts))
+		nonText := false
+		for _, part := range parts {
+			text, hasNonText := responsesContent(part)
+			if text != "" {
+				texts = append(texts, text)
+			}
+			nonText = nonText || hasNonText
+		}
+		return strings.Join(texts, "\n"), nonText
+	}
+	var part struct {
+		Type    string          `json:"type"`
+		Text    string          `json:"text"`
+		Content json.RawMessage `json:"content"`
+	}
+	if json.Unmarshal(trimmed, &part) != nil {
+		return "", false
+	}
+	typ := strings.ToLower(strings.TrimSpace(part.Type))
+	if typ == "input_text" || typ == "text" || strings.TrimSpace(part.Text) != "" {
+		return strings.TrimSpace(part.Text), false
+	}
+	if typ == "message" && len(part.Content) > 0 {
+		return responsesContent(part.Content)
+	}
+	if typ != "" {
+		return "", true
+	}
+	return "", false
+}
+
+// lastAnthropicUserMessage mirrors Anthropic's request convention used by
+// sub2api: a request may append one or more system entries after the current
+// user turn. Those entries are request context, not a new model/tool turn, so
+// skip only trailing system entries and then require the immediately preceding
+// message to be user. An assistant or tool turn still makes this request
+// ineligible for review.
+func lastAnthropicUserMessage(raw json.RawMessage) (string, bool) {
+	var messages []struct {
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
+	}
+	if json.Unmarshal(raw, &messages) != nil || len(messages) == 0 {
+		return "", false
+	}
+	last := len(messages) - 1
+	for last >= 0 && strings.EqualFold(strings.TrimSpace(messages[last].Role), "system") {
+		last--
+	}
+	if last < 0 || !strings.EqualFold(strings.TrimSpace(messages[last].Role), "user") {
+		return "", false
+	}
+	return messageContent(messages[last].Content, "text")
+}
+
+func messageContent(raw json.RawMessage, textType string) (string, bool) {
+	if len(raw) > 0 && raw[0] == '"' {
+		var text string
+		_ = json.Unmarshal(raw, &text)
 		return strings.TrimSpace(text), false
 	}
 	var parts []struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	}
-	if json.Unmarshal(last.Content, &parts) != nil {
+	if json.Unmarshal(raw, &parts) != nil {
 		return "", false
 	}
 	texts := make([]string, 0, len(parts))

@@ -30,7 +30,7 @@ asking, so that judgement is left to the caller.`,
 		Version:       Version(),
 	}
 
-	// Cobra's default template is "sael version 0.0.1-rc1". The version is the
+	// Cobra's default template is "sael version 0.0.1-rc2". The version is the
 	// whole output here, so it is printed alone: the installer that checks what it
 	// just installed compares this string against a tag, and a word in the middle
 	// of it is a difference nobody would think to strip.

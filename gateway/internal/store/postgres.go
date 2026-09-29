@@ -52,7 +52,7 @@ func Open(ctx context.Context, dsn, spoolPath string) (*PG, error) {
 		pool.Close()
 		return nil, err
 	}
-	for _, name := range []string{"migrations/001_init.sql", "migrations/002_jev.sql", "migrations/003_metrics.sql", "migrations/004_connections.sql", "migrations/005_remove_upstream_errors.sql", "migrations/006_analytics.sql", "migrations/007_session_blocks.sql", "migrations/008_jev_input_limits.sql", "migrations/009_ingest_cursor.sql", "migrations/010_review_cache_credentials.sql"} {
+	for _, name := range []string{"migrations/001_init.sql", "migrations/002_jev.sql", "migrations/003_metrics.sql", "migrations/004_connections.sql", "migrations/005_remove_upstream_errors.sql", "migrations/006_analytics.sql", "migrations/007_session_blocks.sql", "migrations/008_jev_input_limits.sql", "migrations/009_ingest_cursor.sql", "migrations/010_review_cache_credentials.sql", "migrations/011_remove_policy_version.sql"} {
 		sql, err := migrations.ReadFile(name)
 		if err != nil {
 			pool.Close()
@@ -172,7 +172,7 @@ func (s *PG) SeedJevDefaults(ctx context.Context, maxInputTokens int) error {
 	return err
 }
 
-// Policy loads the current versioned policy snapshot.
+// Policy loads the current policy snapshot.
 func (s *PG) Policy(ctx context.Context) (policy.Policy, error) {
 	var raw []byte
 	var result policy.Policy
@@ -195,33 +195,33 @@ func (s *PG) Policy(ctx context.Context) (policy.Policy, error) {
 	return result, err
 }
 
-// UpdatePolicy atomically saves a new version and its change record.
-func (s *PG) UpdatePolicy(ctx context.Context, expected int64, next policy.Policy, actor string) (policy.Policy, error) {
-	if err := policy.Validate(next); err != nil {
-		return policy.Policy{}, err
-	}
+// UpdatePolicy merges submitted fields under the policy row lock and records the change.
+func (s *PG) UpdatePolicy(ctx context.Context, update gateway.PolicyUpdate, actor string) (policy.Policy, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return policy.Policy{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	var oldRaw []byte
-	var version int64
-	if err := tx.QueryRow(ctx, "SELECT version, body FROM gateway_policy WHERE id=1 FOR UPDATE").Scan(&version, &oldRaw); err != nil {
+	if err := tx.QueryRow(ctx, "SELECT body FROM gateway_policy WHERE id=1 FOR UPDATE").Scan(&oldRaw); err != nil {
 		return policy.Policy{}, err
 	}
-	if version != expected {
-		return policy.Policy{}, gateway.ErrConflict
+	var current policy.Policy
+	if err := json.Unmarshal(oldRaw, &current); err != nil {
+		return policy.Policy{}, err
 	}
-	next.Version = version + 1
+	next, err := update.Apply(current)
+	if err != nil {
+		return policy.Policy{}, err
+	}
 	newRaw, err := json.Marshal(next)
 	if err != nil {
 		return policy.Policy{}, err
 	}
-	if _, err := tx.Exec(ctx, "UPDATE gateway_policy SET version=$1, body=$2, updated_at=now() WHERE id=1", next.Version, newRaw); err != nil {
+	if _, err := tx.Exec(ctx, "UPDATE gateway_policy SET body=$1, updated_at=now() WHERE id=1", newRaw); err != nil {
 		return policy.Policy{}, err
 	}
-	if _, err := tx.Exec(ctx, "INSERT INTO policy_changes(version,actor,before,after) VALUES ($1,$2,$3,$4)", next.Version, actor, oldRaw, newRaw); err != nil {
+	if _, err := tx.Exec(ctx, "INSERT INTO policy_changes(actor,before,after) VALUES ($1,$2,$3)", actor, oldRaw, newRaw); err != nil {
 		return policy.Policy{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -565,7 +565,7 @@ func (s *PG) Event(ctx context.Context, id string) (gateway.Event, error) {
 
 // Changes returns recent policy edits in reverse order.
 func (s *PG) Changes(ctx context.Context) ([]gateway.PolicyChange, error) {
-	rows, err := s.pool.Query(ctx, "SELECT time,version,actor,before,after FROM policy_changes ORDER BY id DESC LIMIT 20")
+	rows, err := s.pool.Query(ctx, "SELECT time,actor,before,after FROM policy_changes ORDER BY id DESC LIMIT 20")
 	if err != nil {
 		return nil, err
 	}
@@ -574,7 +574,7 @@ func (s *PG) Changes(ctx context.Context) ([]gateway.PolicyChange, error) {
 	for rows.Next() {
 		var change gateway.PolicyChange
 		var before, after []byte
-		if err := rows.Scan(&change.Time, &change.Version, &change.Actor, &before, &after); err != nil {
+		if err := rows.Scan(&change.Time, &change.Actor, &before, &after); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal(before, &change.Before); err != nil {

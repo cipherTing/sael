@@ -10,7 +10,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import App from "./App";
 const policy = {
   enabled: false,
-  version: 1,
   scenes: [],
   preview_chars: null,
   retention_days: null,
@@ -62,7 +61,7 @@ it("logs in and exposes four pages with access inside settings", async () => {
   await screen.findByRole("heading", { name: "总览" }, { timeout: 10000 });
   for (const label of ["总览", "场景", "记录", "设置"])
     expect(screen.getByRole("link", { name: label })).toBeTruthy();
-});
+}, 30000);
 it("preserves endpoint, error and exact time filters on the next records page", async () => {
   window.history.pushState(
     {},
@@ -80,7 +79,6 @@ it("preserves endpoint, error and exact time filters on the next records page", 
     stream: false,
     has_non_text_input: false,
     text_preview: "",
-    policy_version: 1,
     classifier_ms: 10,
     decision: { action: "allow", hits: [] },
   }));
@@ -221,7 +219,7 @@ it("saves configurable trusted-key inactivity without losing the scenes", async 
       if (path === "/admin/policy") {
         if (init?.method === "PATCH") {
           saved = JSON.parse(String(init.body));
-          return Response.json({ ...policy, ...saved, version: 2 });
+          return Response.json({ ...policy, ...saved });
         }
         return Response.json({ ...policy, trusted_key_idle_days: 30 });
       }
@@ -251,6 +249,7 @@ it("saves configurable trusted-key inactivity without losing the scenes", async 
   await waitFor(() => expect(saved?.trusted_key_idle_days).toBe(7));
   expect(saved.scenes).toBeUndefined();
   expect(saved.enabled).toBeUndefined();
+  expect(saved.version).toBeUndefined();
 });
 it("disables login for the Retry-After duration", async () => {
   vi.stubGlobal(

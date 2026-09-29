@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -10,42 +9,31 @@ import (
 	"github.com/cipherTing/sael/gateway/internal/policy"
 )
 
-func (s *Server) policyInput(r *http.Request) (policy.Policy, error) {
-	var next policy.Policy
+func (s *Server) policyInput(r *http.Request) (PolicyUpdate, error) {
+	var update PolicyUpdate
 	if r.Method == http.MethodPut {
+		var next policy.Policy
 		dec := json.NewDecoder(r.Body)
 		dec.DisallowUnknownFields()
 		err := dec.Decode(&next)
-		return next, err
+		update.Replace = &next
+		return update, err
 	}
 	var patch map[string]json.RawMessage
 	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
-		return next, errors.New("策略配置格式错误")
+		return update, errors.New("策略配置格式错误")
 	}
-	var version int64
-	if raw, ok := patch["version"]; !ok || json.Unmarshal(raw, &version) != nil || version < 1 {
-		return next, errors.New("缺少有效配置版本，请刷新后重试")
+	if len(patch) == 0 {
+		return update, errors.New("没有要保存的配置")
 	}
-	var err error
-	next, err = s.Store.Policy(r.Context())
-	if err != nil {
-		return next, err
-	}
-	raw, _ := json.Marshal(next)
-	var fields map[string]json.RawMessage
-	_ = json.Unmarshal(raw, &fields)
-	allowed := map[string]bool{"version": true, "scenes": true, "enabled": true, "trusted_key_idle_days": true, "preview_chars": true, "retention_days": true, "session_block_enabled": true, "session_block_on_blocking_review": true, "session_block_on_nonblocking_review": true, "session_block_ttl_seconds": true}
-	for k, v := range patch {
+	allowed := map[string]bool{"scenes": true, "enabled": true, "trusted_key_idle_days": true, "preview_chars": true, "retention_days": true, "session_block_enabled": true, "session_block_on_blocking_review": true, "session_block_on_nonblocking_review": true, "session_block_ttl_seconds": true}
+	for k := range patch {
 		if !allowed[k] {
-			return next, errors.New("不支持的策略配置字段")
+			return update, errors.New("不支持的策略配置字段")
 		}
-		fields[k] = v
 	}
-	raw, _ = json.Marshal(fields)
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	err = dec.Decode(&next)
-	return next, err
+	update.Fields = patch
+	return update, nil
 }
 func (s *Server) adminFeatures(w http.ResponseWriter, r *http.Request) bool {
 	switch {

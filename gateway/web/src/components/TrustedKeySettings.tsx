@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { notifyError } from "../notifications";
-import type { Policy } from "../policy";
+import type { Policy, PolicyPatch } from "../policy";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Help, Panel } from "./common";
@@ -11,19 +11,19 @@ export function TrustedKeySettings({
   onSave,
 }: {
   policy: Policy;
-  onSave: (value: Policy) => Promise<void>;
+  onSave: (value: PolicyPatch) => Promise<void>;
 }) {
   const current = policy.trusted_key_idle_days || 30;
   const [days, setDays] = useState(String(current));
   const [busy, setBusy] = useState(false);
-  useEffect(() => setDays(String(current)), [current, policy.version]);
+  useEffect(() => setDays(String(current)), [current]);
   const value = Number(days),
     valid = Number.isInteger(value) && value > 0 && value <= 106751;
   async function save() {
     if (!valid || busy) return;
     setBusy(true);
     try {
-      await onSave({ ...policy, trusted_key_idle_days: value });
+      await onSave({ trusted_key_idle_days: value });
       toast.success("可信密钥设置已保存");
     } catch (e) {
       notifyError(e);

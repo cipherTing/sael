@@ -21,8 +21,8 @@ require (
 )
 
 require (
-	github.com/cipherTing/sael/cli v0.0.1-rc1
-	github.com/cipherTing/sael/sdk v0.0.1-rc1
+	github.com/cipherTing/sael/cli v0.0.1-rc2
+	github.com/cipherTing/sael/sdk v0.0.1-rc2
 	golang.org/x/sync v0.17.0
 )
 

@@ -351,7 +351,7 @@ gateway/
 ## 6. 实现依据与待确认数据
 
 - sub2api 的当前用户提取参考：[`content_moderation_input.go`](https://github.com/Wei-Shaw/sub2api/blob/main/backend/internal/service/content_moderation_input.go)。请求上下文字段参考：[`content_moderation.go`](https://github.com/Wei-Shaw/sub2api/blob/main/backend/internal/service/content_moderation.go)。它另有全对话扫描路径，本设计不采用。
-- Sael 的实际答案形状和问题集见仓库的 `cli/internal/cli/output.go`、`sdk/moderation/questions.go` 与 `sdk/answers.go`。TypeSafe 官方分别定义了 [Noul](https://docs.typesafe.ai/primitives/noul) 和 [Score](https://docs.typesafe.ai/primitives/score) 的取值语义。
+- Sael 的实际答案形状和问题集见仓库的 `cli/internal/cli/output.go`、`cli/internal/questions/moderation.go` 与 `sdk/answers.go`。TypeSafe 官方分别定义了 [Noul](https://docs.typesafe.ai/primitives/noul) 和 [Score](https://docs.typesafe.ai/primitives/score) 的取值语义。
 - 代理行为按 Go [`httputil.ReverseProxy`](https://pkg.go.dev/net/http/httputil#ReverseProxy) 的 HTTP 语义设计。四种协议的提取路径应以各自官方 API 文档和真实请求样本验证。
 
 落地前仍需给出两类业务数据：**各项初始阈值、初始场景顺序和未匹配命中处理**，以及**命中记录需要保留的去敏文本长度和天数**。这些数值不从旧文档的示意图抄作默认值。

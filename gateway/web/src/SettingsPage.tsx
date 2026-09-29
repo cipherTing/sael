@@ -65,7 +65,7 @@ type Props = {
   initialScene?: string;
   initialEndpoint?: string;
   policy: PolicyResponse;
-  onSave: (p: Policy) => Promise<void>;
+  onSave: (p: Pick<Policy, "scenes">) => Promise<void>;
   storageKey?: string;
   sample?: {
     text: string;
@@ -79,7 +79,6 @@ type Props = {
 };
 const copyPolicy = (p: PolicyResponse): Policy => ({
   enabled: p.enabled,
-  version: p.version,
   scenes: structuredClone(p.scenes),
   preview_chars: p.preview_chars,
   retention_days: p.retention_days,
@@ -284,13 +283,20 @@ export default function SettingsPage({
       if (storageKey) {
         try {
           const cached = sessionStorage.getItem(storageKey);
-          if (cached) return JSON.parse(cached) as Policy;
+          if (cached) {
+            const saved = JSON.parse(cached) as Pick<Policy, "scenes">;
+            if (Array.isArray(saved.scenes))
+              return { ...copyPolicy(policy), scenes: saved.scenes };
+          }
         } catch {
           /* use server snapshot */
         }
       }
       return copyPolicy(policy);
     }),
+    [baseScenes, setBaseScenes] = useState<Scene[]>(() =>
+      structuredClone(policy.scenes),
+    ),
     [selected, setSelected] = useState(
       initialScene || policy.scenes[0]?.id || "",
     ),
@@ -301,9 +307,9 @@ export default function SettingsPage({
     [inspector, setInspector] = useState<"test" | "analysis" | null>(
       sample ? "test" : null,
     );
-  const dirty = JSON.stringify(draft) !== JSON.stringify(copyPolicy(policy)),
+  const dirty = JSON.stringify(draft.scenes) !== JSON.stringify(baseScenes),
     scene = draft.scenes.find((s) => s.id === selected) || draft.scenes[0];
-  const previousVersion = useRef(policy.version);
+  const lastPolicyScenes = useRef(JSON.stringify(policy.scenes));
   const inspectorRef = useRef<HTMLDivElement>(null);
   const revealInspector = (value: "test" | "analysis") => {
     setInspector(value);
@@ -318,11 +324,14 @@ export default function SettingsPage({
     if (initialScene) setSelected(initialScene);
   }, [initialScene]);
   useEffect(() => {
-    if (previousVersion.current !== policy.version) {
-      previousVersion.current = policy.version;
+    const serialized = JSON.stringify(policy.scenes);
+    if (serialized === lastPolicyScenes.current) return;
+    lastPolicyScenes.current = serialized;
+    if (!dirty) {
       setDraft(copyPolicy(policy));
+      setBaseScenes(structuredClone(policy.scenes));
     }
-  }, [policy]);
+  }, [policy, dirty]);
   useEffect(() => {
     if (!storageKey) return;
     if (dirty) sessionStorage.setItem(storageKey, JSON.stringify(draft));
@@ -378,7 +387,7 @@ export default function SettingsPage({
           endpoints: [],
           models: [],
           conditions: [],
-          match: "all",
+          match: "any",
           action: "block",
         },
       ],
@@ -438,13 +447,14 @@ export default function SettingsPage({
       notifyError(new Error(issues.get(invalid.id)!));
       return;
     }
-    if (draft.enabled && !draft.scenes.length) {
+    if (policy.enabled && !draft.scenes.length) {
       notifyError(new Error("请先创建场景"));
       return;
     }
     setSaving(true);
     try {
-      await onSave(draft);
+      await onSave({ scenes: draft.scenes });
+      setBaseScenes(structuredClone(draft.scenes));
       if (storageKey) sessionStorage.removeItem(storageKey);
       toast.success("场景已生效");
     } catch (e) {
@@ -806,6 +816,7 @@ export default function SettingsPage({
                 disabled={saving}
                 onClick={() => {
                   setDraft(copyPolicy(policy));
+                  setBaseScenes(structuredClone(policy.scenes));
                 }}
               >
                 <RotateCcw size={13} />

@@ -9,11 +9,11 @@
 #
 # The reason they are not one-liners is that this repository has no root module.
 # The CLI is the `cli/` module, so it is tagged in its own namespace --
-# `cli/v0.0.1-rc1` -- because Go requires a subdirectory module's tag to carry
+# `cli/v0.0.1-rc2` -- because Go requires a subdirectory module's tag to carry
 # the directory name as a prefix. GoReleaser's open-source build knows nothing
 # about module prefixes: it takes `{{ .Version }}` to be the tag with a leading
-# `v` removed, which leaves the literal string `cli/v0.0.1-rc1`. That string in a
-# file name is a path, not a name, and `-X ...version=cli/v0.0.1-rc1` is a
+# `v` removed, which leaves the literal string `cli/v0.0.1-rc2`. That string in a
+# file name is a path, not a name, and `-X ...version=cli/v0.0.1-rc2` is a
 # version no installer would match. Every use of the version below therefore
 # trims the prefix back off. (GoReleaser Pro has `monorepo.tag_prefix` for
 # exactly this case; the version pinned in the Makefile is the open-source one,
@@ -64,7 +64,7 @@ builds:
       # The symbol path is the release contract that cli/internal/cli/version.go
       # documents: renaming or moving it fails no build, it only produces a
       # binary that reports "devel". The value is the version without the module
-      # prefix and without a leading `v` (`0.0.1-rc1`), which is what the archive
+      # prefix and without a leading `v` (`0.0.1-rc2`), which is what the archive
       # names carry and what the installer checks `--version` against.
       - -X github.com/cipherTing/sael/cli/internal/cli.version={{ trimprefix .Version "cli/v" }}
     goos:
@@ -95,7 +95,7 @@ archives:
       - tar.gz
     # Byte for byte what the installers ask for: each composes
     # `sael_${VERSION}_${OS}_${ARCH}` from the tag and has no fallback if the
-    # name differs. `{{ .Version }}` is `cli/v0.0.1-rc1` here -- see the note at
+    # name differs. `{{ .Version }}` is `cli/v0.0.1-rc2` here -- see the note at
     # the top -- so the module prefix is trimmed off.
     name_template: '{{ .ProjectName }}_{{ trimprefix .Version "cli/v" }}_{{ .Os }}_{{ .Arch }}'
     format_overrides:
@@ -121,6 +121,6 @@ checksum:
   algorithm: sha256
 
 release:
-  # Without this the title is the raw tag, `cli/v0.0.1-rc1`. The module prefix is
+  # Without this the title is the raw tag, `cli/v0.0.1-rc2`. The module prefix is
   # how `go get` finds the module and it means nothing on a releases page.
   name_template: '{{ .ProjectName }} {{ trimprefix .Version "cli/v" }}'

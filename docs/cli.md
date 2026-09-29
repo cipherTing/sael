@@ -32,11 +32,12 @@ go build -o sael ./cmd/sael
 
 ```sh
 sael check "需要审查的文本"
+sael check --questions gore,self_harm "只审指定审核项"
 sael check --file prompt.txt
 cat prompt.txt | sael check --json
 ```
 
-终端默认显示按分数排序的结果；管道输出默认 JSON，`--json` 可强制使用 JSON。一次请求并行评估全部 11 项。
+终端默认显示按分数排序的结果；管道输出默认 JSON，`--json` 可强制使用 JSON。裸 `sael check` 一次评估全部 11 项；`--questions` 只影响当前请求，使用逗号分隔的审核项键名，不修改本地配置。
 
 | 审核项 | 键名 | 返回值 |
 | --- | --- | --- |

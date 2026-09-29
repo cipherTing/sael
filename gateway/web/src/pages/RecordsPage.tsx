@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -59,6 +59,12 @@ import { notifyRetry } from "../notifications";
 export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
   const [params, setParams] = useSearchParams(),
     [search, setSearch] = useState(params.get("search") || ""),
+    [clientIP, setClientIP] = useState(params.get("client_ip") || ""),
+    [sessionID, setSessionID] = useState(params.get("session_id") || ""),
+    [credentialID, setCredentialID] = useState(
+      params.get("credential_id") || "",
+    ),
+    [model, setModel] = useState(params.get("model") || ""),
     [visibility, setVisibility] = useState<VisibilityState>({
       request_id: false,
       session_id: false,
@@ -68,6 +74,7 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
   const kind = params.get("kind") || "hit";
   const selected = params.get("event") || "",
     offset = Number(params.get("offset") || 0);
+  const filterQuery = params.toString();
   const query = new URLSearchParams(params);
   query.delete("event");
   if (!query.has("kind")) query.set("kind", "hit");
@@ -87,6 +94,13 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
     if (result.error) notifyRetry(result.error, () => void result.refetch());
     if (detail.error) notifyRetry(detail.error, () => void detail.refetch());
   }, [result.error, result.refetch, detail.error, detail.refetch]);
+  useEffect(() => {
+    setSearch(params.get("search") || "");
+    setClientIP(params.get("client_ip") || "");
+    setSessionID(params.get("session_id") || "");
+    setCredentialID(params.get("credential_id") || "");
+    setModel(params.get("model") || "");
+  }, [filterQuery]);
   function filter(key: string, value: string) {
     const next = new URLSearchParams(params);
     next.delete("offset");
@@ -98,6 +112,51 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
     else next.delete(key);
     setParams(next);
   }
+  function applyTextFilters(event?: FormEvent<HTMLFormElement>) {
+    event?.preventDefault();
+    const next = new URLSearchParams(params);
+    next.delete("offset");
+    next.delete("event");
+    for (const [key, value] of [
+      ["search", search],
+      ["client_ip", clientIP],
+      ["session_id", sessionID],
+      ["credential_id", credentialID],
+      ["model", model],
+    ]) {
+      const trimmed = value.trim();
+      if (trimmed) next.set(key, trimmed);
+      else next.delete(key);
+    }
+    setParams(next);
+  }
+  function clearTextFilters() {
+    setSearch("");
+    setClientIP("");
+    setSessionID("");
+    setCredentialID("");
+    setModel("");
+    const next = new URLSearchParams(params);
+    next.delete("offset");
+    next.delete("event");
+    for (const key of [
+      "search",
+      "client_ip",
+      "session_id",
+      "credential_id",
+      "model",
+    ]) {
+      next.delete(key);
+    }
+    setParams(next);
+  }
+  const hasTextFilters = Boolean(
+    search.trim() ||
+      clientIP.trim() ||
+      sessionID.trim() ||
+      credentialID.trim() ||
+      model.trim(),
+  );
   const columns = useMemo<ColumnDef<Event>[]>(
     () =>
       (
@@ -276,59 +335,72 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
           网关警告
         </button>
       </div>
-      {(params.get("client_ip") || params.get("session_id")) && (
-        <div className="filterbar">
-          {["client_ip", "session_id"]
-            .filter((k) => params.get(k))
-            .map((key) => (
-              <button
-                key={key}
-                className="filter-chip"
-                onClick={() => filter(key, "")}
-              >
-                {key === "client_ip" ? "IP" : "会话"}：{params.get(key)}
-                <X size={12} />
-              </button>
-            ))}
-        </div>
-      )}
       <div className="panel">
-        {params.get("credential_id") && (
-          <div className="record-credential-filter">
-            <span>已筛选调用密钥</span>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => filter("credential_id", "")}
-            >
-              清除
-              <X size={12} />
-            </Button>
-          </div>
-        )}
-        <div className="records-toolbar">
-          <form
-            style={{ display: "flex", gap: 6, flex: "1 1 250px" }}
-            onSubmit={(event) => {
-              event.preventDefault();
-              filter("search", search);
-            }}
-          >
+        <form className="records-filter-form" onSubmit={applyTextFilters}>
+          <label className="records-filter-field records-filter-search">
+            <span>关键词</span>
             <Input
               aria-label="搜索记录"
-              placeholder="搜索文本、模型、IP 或会话 ID"
+              placeholder="文本、模型或请求 ID"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
-            <Button
-              variant="outline"
-              size="icon-sm"
-              aria-label="查询记录"
-              type="submit"
-            >
+          </label>
+          <label className="records-filter-field">
+            <span>来源 IP</span>
+            <Input
+              aria-label="筛选来源 IP"
+              placeholder="输入 IP"
+              value={clientIP}
+              onChange={(e) => setClientIP(e.target.value)}
+            />
+          </label>
+          <label className="records-filter-field">
+            <span>会话 ID</span>
+            <Input
+              aria-label="筛选会话 ID"
+              placeholder="输入会话 ID"
+              value={sessionID}
+              onChange={(e) => setSessionID(e.target.value)}
+            />
+          </label>
+          <label className="records-filter-field">
+            <span>调用密钥 ID</span>
+            <Input
+              aria-label="筛选调用密钥 ID"
+              placeholder="输入凭据 ID"
+              value={credentialID}
+              onChange={(e) => setCredentialID(e.target.value)}
+            />
+          </label>
+          <label className="records-filter-field">
+            <span>模型</span>
+            <Input
+              aria-label="筛选模型"
+              placeholder="输入模型"
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+            />
+          </label>
+          <div className="records-filter-actions">
+            <Button type="submit" size="sm" aria-label="应用筛选">
               <Search size={14} />
+              应用筛选
             </Button>
-          </form>
+            {hasTextFilters && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={clearTextFilters}
+              >
+                清空
+                <X size={13} />
+              </Button>
+            )}
+          </div>
+        </form>
+        <div className="records-toolbar records-select-toolbar">
           <Choice
             label="记录端点"
             value={params.get("endpoint") || ""}
@@ -382,16 +454,6 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
               ]}
             />
           )}
-          {params.get("model") && (
-            <button
-              className="filter-chip"
-              onClick={() => filter("model", "")}
-              aria-label="清除模型筛选"
-            >
-              {params.get("model")}
-              <X size={12} />
-            </button>
-          )}
           {kind === "hit" && (
             <Choice
               label="处理结果"
@@ -406,7 +468,12 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
           )}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button size="icon-sm" variant="ghost" aria-label="显示列">
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="ghost"
+                aria-label="显示列"
+              >
                 <Columns3 size={14} />
               </Button>
             </DropdownMenuTrigger>
@@ -592,14 +659,13 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
                   <dt>来源 IP</dt>
                   <dd>
                     {current.client_ip ? (
-                      <button
-                        className="detail-link"
-                        aria-label={`查看 IP ${current.client_ip} 的记录`}
-                        onClick={() => filter("client_ip", current.client_ip!)}
-                      >
-                        {current.client_ip}
-                        <Search size={12} />
-                      </button>
+                      <span className="detail-value-actions">
+                        <span>{current.client_ip}</span>
+                        <CopyButton
+                          value={current.client_ip}
+                          label="复制来源 IP"
+                        />
+                      </span>
                     ) : (
                       "—"
                     )}
@@ -609,34 +675,37 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
                   <dt>会话 ID</dt>
                   <dd>
                     {current.session_id ? (
-                      <button
-                        className="detail-link"
-                        aria-label={`查看会话 ${current.session_id} 的记录`}
-                        onClick={() =>
-                          filter("session_id", current.session_id!)
-                        }
-                      >
-                        {current.session_id}
-                        <Search size={12} />
-                      </button>
+                      <span className="detail-value-actions">
+                        <span>{current.session_id}</span>
+                        <CopyButton
+                          value={current.session_id}
+                          label="复制会话 ID"
+                        />
+                      </span>
                     ) : (
                       "—"
                     )}
                   </dd>
                 </div>
+                {current.session_source === "history" && (
+                  <div>
+                    <dt>会话关联</dt>
+                    <dd>历史消息指纹 · {current.session_ref || "—"}</dd>
+                  </div>
+                )}
                 <div>
                   <dt>调用密钥</dt>
                   <dd>
                     {current.credential_id ? (
-                      <button
-                        className="detail-link"
-                        onClick={() =>
-                          filter("credential_id", current.credential_id!)
-                        }
-                      >
+                      <span className="detail-value-actions">
                         <code>{current.masked_key || "—"}</code>
-                        <Search size={12} />
-                      </button>
+                        {current.masked_key && (
+                          <CopyButton
+                            value={current.masked_key}
+                            label="复制调用密钥"
+                          />
+                        )}
+                      </span>
                     ) : (
                       "—"
                     )}
@@ -755,6 +824,12 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
                           label="复制会话 ID"
                         />
                       </dd>
+                    </div>
+                  )}
+                  {current.session_source === "history" && (
+                    <div className="full-fact">
+                      <dt>会话关联</dt>
+                      <dd>历史消息指纹 · {current.session_ref || "—"}</dd>
                     </div>
                   )}
                   {Object.entries(current.parameters || {})

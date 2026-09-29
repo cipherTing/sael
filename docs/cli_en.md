@@ -52,12 +52,15 @@ The text comes from an argument, a file, or a pipe:
 
 ```sh
 sael check "text to evaluate"
+sael check --questions gore,self_harm "evaluate only selected questions"
 sael check --file prompt.txt
 cat prompt.txt | sael check
 ```
 
 At a terminal the answers are ranked; down a pipe they come out as JSON. `--json`
-forces JSON at a terminal too.
+forces JSON at a terminal too. A plain `sael check` evaluates all 11 built-in
+questions. `--questions` applies only to that invocation and takes a comma-separated
+list of question IDs; it does not change local configuration.
 
 ```json
 [

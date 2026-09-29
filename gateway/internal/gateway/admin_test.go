@@ -147,30 +147,30 @@ func TestAdminOverviewAcceptsExplicitDateRange(t *testing.T) {
 	}
 }
 
-func TestAdminPolicySaveRejectsStaleVersion(t *testing.T) {
+func TestAdminPolicySaveOverwritesWithoutAConfigurationVersion(t *testing.T) {
 	s, store, _ := makeServer(t, activePolicy(), &testClassifier{})
 	cookie := login(t, s)
 	read := httptest.NewRecorder()
 	get := authorizedRequest("GET", "/admin/policy", http.NoBody)
 	get.AddCookie(cookie)
 	s.AdminHandler().ServeHTTP(read, get)
-	if read.Code != 200 || !strings.Contains(read.Body.String(), `"version":2`) {
+	if read.Code != 200 || strings.Contains(read.Body.String(), `"version"`) {
 		t.Fatalf("get policy: %d %s", read.Code, read.Body.String())
 	}
-	payload := `{"enabled":false,"version":2,"thresholds":{},"scenes":[],"unmatched_action":"allow"}`
+	payload := `{"enabled":false,"scenes":[]}`
 	put := authorizedRequest("PUT", "/admin/policy", strings.NewReader(payload))
 	put.AddCookie(cookie)
 	w := httptest.NewRecorder()
 	s.AdminHandler().ServeHTTP(w, put)
-	if w.Code != 200 || store.policy.Version != 3 || store.policy.Enabled {
+	if w.Code != 200 || store.policy.Enabled || strings.Contains(w.Body.String(), `"version"`) {
 		t.Fatalf("save: %d %+v", w.Code, store.policy)
 	}
-	stale := authorizedRequest("PUT", "/admin/policy", strings.NewReader(payload))
-	stale.AddCookie(cookie)
+	second := authorizedRequest("PUT", "/admin/policy", strings.NewReader(payload))
+	second.AddCookie(cookie)
 	w2 := httptest.NewRecorder()
-	s.AdminHandler().ServeHTTP(w2, stale)
-	if w2.Code != 409 || store.policy.Version != 3 {
-		t.Fatalf("stale save: %d %+v", w2.Code, store.policy)
+	s.AdminHandler().ServeHTTP(w2, second)
+	if w2.Code != 200 {
+		t.Fatalf("second save: %d %+v", w2.Code, store.policy)
 	}
 }
 
@@ -193,23 +193,23 @@ func TestCannotEnableReviewUntilJevConnectionIsSaved(t *testing.T) {
 	}
 }
 
-func TestPolicyPatchPreservesUnrelatedSettingsAndRejectsStaleEdits(t *testing.T) {
+func TestPolicyPatchMergesOnlySubmittedFields(t *testing.T) {
 	s, st, _ := makeServer(t, activePolicy(), &testClassifier{})
 	st.jev = JevConfig{BaseURL: "https://jev.example/v1", Model: "jev", APIKey: "test"}
 	st.policy.TrustedKeyIdleDays = 45
-	w := adminRequest(t, s, http.MethodPatch, "/admin/policy", `{"version":2,"enabled":false}`)
+	w := adminRequest(t, s, http.MethodPatch, "/admin/policy", `{"enabled":false}`)
 	if w.Code != 200 || st.policy.Enabled || st.policy.TrustedKeyIdleDays != 45 || len(st.policy.Scenes) != 1 {
 		t.Fatalf("patch changed unrelated fields: %d %s", w.Code, w.Body.String())
 	}
-	w = adminRequest(t, s, http.MethodPatch, "/admin/policy", `{"version":2,"scenes":[]}`)
-	if w.Code != 409 || len(st.policy.Scenes) != 1 {
-		t.Fatal("stale scene draft overwrote latest policy", w.Code)
+	w = adminRequest(t, s, http.MethodPatch, "/admin/policy", `{"scenes":[]}`)
+	if w.Code != 200 || len(st.policy.Scenes) != 0 || st.policy.TrustedKeyIdleDays != 45 || st.policy.Enabled {
+		t.Fatal("scene save changed unrelated settings", w.Code, st.policy)
 	}
-	w = adminRequest(t, s, http.MethodPatch, "/admin/policy", `{"version":null,"scenes":[]}`)
-	if w.Code != 400 || len(st.policy.Scenes) != 1 {
-		t.Fatal("null version bypassed draft conflict check")
+	w = adminRequest(t, s, http.MethodPatch, "/admin/policy", `{"version":2}`)
+	if w.Code != 400 || len(st.policy.Scenes) != 0 {
+		t.Fatal("removed version field was accepted")
 	}
-	w = adminRequest(t, s, http.MethodPatch, "/admin/policy", `{"version":3,"trusted_key_idle_days":60}`)
+	w = adminRequest(t, s, http.MethodPatch, "/admin/policy", `{"trusted_key_idle_days":60}`)
 	if w.Code != 200 || st.policy.Enabled || st.policy.TrustedKeyIdleDays != 60 {
 		t.Fatal("settings patch replaced global state", w.Code)
 	}

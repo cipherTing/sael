@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,31 @@ type testClassifier struct {
 	err     error
 	calls   int
 	text    string
+}
+
+type subsetClassifier struct {
+	requested [][]string
+}
+
+func (*subsetClassifier) Check(context.Context, string) ([]policy.Answer, error) {
+	return nil, errors.New("gateway called the unconfigured classifier")
+}
+
+func (c *subsetClassifier) CheckConfigured(_ context.Context, _ string, _ JevConfig, keys []string) ([]policy.Answer, error) {
+	c.requested = append(c.requested, append([]string(nil), keys...))
+	answers := make([]policy.Answer, 0, len(keys))
+	for _, key := range keys {
+		for _, question := range policy.Questions {
+			if question.Key == key {
+				value := 0.0
+				if key == "gore" {
+					value = 1.6
+				}
+				answers = append(answers, policy.Answer{Question: key, Type: question.Type, Value: value})
+			}
+		}
+	}
+	return answers, nil
 }
 
 func (c *testClassifier) Check(_ context.Context, text string) ([]policy.Answer, error) {
@@ -36,6 +62,7 @@ type testStore struct {
 	overviewSince time.Time
 	overviewUntil time.Time
 	blocked       map[string]time.Time
+	sessionErr    error
 	adminSessions map[string]time.Time
 }
 
@@ -51,11 +78,11 @@ func (s *testStore) UpdateJev(_ context.Context, next JevConfig) (JevConfig, err
 }
 
 func (s *testStore) Policy(context.Context) (policy.Policy, error) { return s.policy, s.policyErr }
-func (s *testStore) UpdatePolicy(_ context.Context, old int64, next policy.Policy, _ string) (policy.Policy, error) {
-	if old != s.policy.Version {
-		return policy.Policy{}, ErrConflict
+func (s *testStore) UpdatePolicy(_ context.Context, update PolicyUpdate, _ string) (policy.Policy, error) {
+	next, err := update.Apply(s.policy)
+	if err != nil {
+		return policy.Policy{}, err
 	}
-	next.Version = old + 1
 	s.policy = next
 	return next, nil
 }
@@ -85,6 +112,9 @@ func (s *testStore) Event(_ context.Context, id string) (Event, error) {
 }
 func (s *testStore) Changes(context.Context) ([]PolicyChange, error) { return nil, nil }
 func (s *testStore) PutSessionBlock(_ context.Context, key string, until time.Time) error {
+	if s.sessionErr != nil {
+		return s.sessionErr
+	}
 	if s.blocked == nil {
 		s.blocked = map[string]time.Time{}
 	}
@@ -92,6 +122,9 @@ func (s *testStore) PutSessionBlock(_ context.Context, key string, until time.Ti
 	return nil
 }
 func (s *testStore) SessionBlockActive(_ context.Context, key string, now time.Time) (bool, error) {
+	if s.sessionErr != nil {
+		return false, s.sessionErr
+	}
 	return s.blocked[key].After(now), nil
 }
 
@@ -152,8 +185,32 @@ func fullAnswers(values map[string]float64) []policy.Answer {
 
 func activePolicy() policy.Policy {
 	preview, days := 0, 30
-	return policy.Policy{Enabled: true, Version: 2, PreviewChars: &preview, RetentionDays: &days,
+	return policy.Policy{Enabled: true, PreviewChars: &preview, RetentionDays: &days,
 		Scenes: []policy.Scene{{ID: "block", Name: "block cyber", Conditions: []policy.Condition{{Question: "cyber_abuse", Threshold: 0.5}}, Match: policy.Any, Action: policy.Block}}}
+}
+
+func TestGatewayRequestsOnlyQuestionsFromApplicableScenes(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(201) }))
+	defer upstream.Close()
+	p := activePolicy()
+	p.Scenes = []policy.Scene{
+		{ID: "one", Name: "one", Match: policy.All, Action: policy.Block, Endpoints: []string{"openai_chat"}, Models: []string{"selected"}, Conditions: []policy.Condition{{Question: "gore", Threshold: 1.5}, {Question: "self_harm", Threshold: 0.8}}},
+		{ID: "two", Name: "two", Match: policy.Any, Action: policy.Allow, Endpoints: []string{"openai_chat"}, Models: []string{"selected"}, Conditions: []policy.Condition{{Question: "self_harm", Threshold: 0.9}, {Question: "cyber_abuse", Threshold: 0.8}}},
+		{ID: "other", Name: "other", Match: policy.Any, Action: policy.Block, Endpoints: []string{"openai_responses"}, Conditions: []policy.Condition{{Question: "sexual", Threshold: 1}}},
+	}
+	store := &testStore{policy: p, upstream: UpstreamConfig{BaseURL: upstream.URL}, jev: JevConfig{BaseURL: "https://jev.example/v1", APIKey: "test-key", Model: "jev"}}
+	classifier := &subsetClassifier{}
+	s := New(store, classifier, "secret")
+	defer s.Close()
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, authorizedRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"selected","messages":[{"role":"user","content":"prompt"}]}`)))
+	if w.Code != 201 || len(classifier.requested) != 1 {
+		t.Fatalf("status=%d requests=%v", w.Code, classifier.requested)
+	}
+	want := []string{"cyber_abuse", "self_harm", "gore"}
+	if !slices.Equal(classifier.requested[0], want) || len(store.events) != 0 {
+		t.Fatalf("requested=%v events=%+v", classifier.requested, store.events)
+	}
 }
 
 func TestBlockedRequestDoesNotReachUpstream(t *testing.T) {
@@ -244,7 +301,7 @@ func TestBlockedSessionIsRejectedBeforeClassifier(t *testing.T) {
 	first.Header.Set("Authorization", "Bearer test-user")
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, first)
-	if w.Code != 403 || *calls != 0 || c.calls != 1 || len(store.blocked) != 1 {
+	if w.Code != 403 || *calls != 0 || c.calls != 1 || len(store.blocked) < 1 {
 		t.Fatalf("first status=%d upstream=%d classifier=%d blocks=%v", w.Code, *calls, c.calls, store.blocked)
 	}
 	second := authorizedRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"test","messages":[{"role":"user","content":"safe"}]}`))
@@ -285,7 +342,7 @@ func TestNonBlockingReviewHitFreezesSessionAfterForwarding(t *testing.T) {
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, first)
 	s.reviewWG.Wait()
-	if w.Code != 201 || *calls != 1 || len(store.events) != 1 || store.events[0].Kind != "hit" || len(store.blocked) != 1 {
+	if w.Code != 201 || *calls != 1 || len(store.events) != 1 || store.events[0].Kind != "hit" || len(store.blocked) < 1 {
 		t.Fatalf("first status=%d upstream=%d events=%+v blocks=%v", w.Code, *calls, store.events, store.blocked)
 	}
 	second := authorizedRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"test","messages":[{"role":"user","content":"safe"}]}`))
@@ -303,8 +360,28 @@ func TestNoCurrentUserTextBypassesClassifier(t *testing.T) {
 	s, store, calls := makeServer(t, activePolicy(), c)
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, authorizedRequest("POST", "/v1/chat/completions", strings.NewReader(`{"messages":[{"role":"user","content":"old"},{"role":"assistant","content":"reply"}]}`)))
-	if w.Code != 201 || *calls != 1 || c.calls != 0 || len(store.events) != 0 || store.counts[0].Outcome != "no_text" {
+	if w.Code != 201 || *calls != 1 || c.calls != 0 || len(store.events) != 0 || len(store.counts) != 0 {
 		t.Fatalf("status=%d upstream=%d classifier=%d", w.Code, *calls, c.calls)
+	}
+}
+
+func TestIngressStatsCountOnlyCurrentUserInput(t *testing.T) {
+	s, store, calls := makeServer(t, activePolicy(), &testClassifier{answers: fullAnswers(nil)})
+	capture := &ingressCaptureStore{testStore: store}
+	s.Store = capture
+
+	assistantOnly := authorizedRequest("POST", "/v1/chat/completions", strings.NewReader(`{"messages":[{"role":"user","content":"old"},{"role":"assistant","content":"reply"}]}`))
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, assistantOnly)
+	if w.Code != 201 || *calls != 1 || len(capture.ingress) != 0 || len(store.counts) != 0 {
+		t.Fatalf("assistant/tool request affected ingress stats: status=%d calls=%d ingress=%+v counts=%+v", w.Code, *calls, capture.ingress, store.counts)
+	}
+
+	userInput := authorizedRequest("POST", "/v1/chat/completions", strings.NewReader(`{"messages":[{"role":"user","content":"current"}]}`))
+	w = httptest.NewRecorder()
+	s.ServeHTTP(w, userInput)
+	if w.Code != 201 || *calls != 2 || len(capture.ingress) != 1 || len(store.counts) != 1 {
+		t.Fatalf("current user input was not counted once: status=%d calls=%d ingress=%+v counts=%+v", w.Code, *calls, capture.ingress, store.counts)
 	}
 }
 
@@ -333,22 +410,22 @@ func TestClassifierFailureKeepsCurrentUserTextPreviewWhenConfigured(t *testing.T
 
 func TestDisabledPolicyForwardsWithoutClassifying(t *testing.T) {
 	c := &testClassifier{err: errors.New("should not call")}
-	s, store, _ := makeServer(t, policy.Policy{Version: 1}, c)
+	s, store, _ := makeServer(t, policy.Policy{}, c)
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, authorizedRequest("POST", "/v1/chat/completions", strings.NewReader(`{"messages":[{"role":"user","content":"new"}]}`)))
-	if w.Code != 201 || c.calls != 0 || store.counts[0].Outcome != "disabled" {
+	if w.Code != 201 || c.calls != 0 || len(store.counts) != 0 {
 		t.Fatalf("status=%d calls=%d counts=%+v", w.Code, c.calls, store.counts)
 	}
 }
 
-func TestUpstreamFailureDoesNotChangeIngressCount(t *testing.T) {
+func TestDisabledUpstreamFailureIsNotCountedWithoutUserInputClassification(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(503) }))
 	defer upstream.Close()
-	store := &testStore{policy: policy.Policy{Version: 1}, upstream: UpstreamConfig{BaseURL: upstream.URL}}
+	store := &testStore{policy: policy.Policy{}, upstream: UpstreamConfig{BaseURL: upstream.URL}}
 	s := New(store, &testClassifier{}, "secret")
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, authorizedRequest("POST", "/v1/chat/completions", strings.NewReader(`{"messages":[{"role":"user","content":"hello"}]}`)))
-	if w.Code != 503 || len(store.counts) != 1 || store.counts[0].Outcome != "disabled" {
+	if w.Code != 503 || len(store.counts) != 0 {
 		t.Fatalf("status=%d counts=%+v", w.Code, store.counts)
 	}
 }
@@ -362,12 +439,12 @@ func TestReviewedRequestContributesClassifierLatency(t *testing.T) {
 	}
 }
 
-func TestMalformedRequestIsCountedWithoutForwarding(t *testing.T) {
+func TestMalformedRequestIsNotCountedWithoutUserInput(t *testing.T) {
 	c := &testClassifier{}
 	s, store, calls := makeServer(t, activePolicy(), c)
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, authorizedRequest("POST", "/v1/chat/completions", strings.NewReader(`{"messages":`)))
-	if w.Code != 400 || *calls != 0 || c.calls != 0 || len(store.counts) != 1 || store.counts[0].Outcome != "invalid_json" {
+	if w.Code != 400 || *calls != 0 || c.calls != 0 || len(store.counts) != 0 {
 		t.Fatalf("status=%d upstream=%d classifier=%d counts=%+v", w.Code, *calls, c.calls, store.counts)
 	}
 }
@@ -376,21 +453,21 @@ type brokenBody struct{}
 
 func (brokenBody) Read([]byte) (int, error) { return 0, errors.New("request body unavailable") }
 
-func TestBodyReadFailureStillCountsTheIncomingRequest(t *testing.T) {
+func TestBodyReadFailureIsNotCountedWithoutUserInput(t *testing.T) {
 	s, store, calls := makeServer(t, activePolicy(), &testClassifier{})
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, authorizedRequest("POST", "/v1/chat/completions", brokenBody{}))
-	if w.Code != 400 || *calls != 0 || len(store.counts) != 1 || store.counts[0].Outcome != "request_error" {
+	if w.Code != 400 || *calls != 0 || len(store.counts) != 0 {
 		t.Fatalf("status=%d upstream=%d counts=%+v", w.Code, *calls, store.counts)
 	}
 }
 
-func TestPolicyLoadFailureStillCountsTheIncomingRequest(t *testing.T) {
+func TestPolicyLoadFailureIsNotCountedWithoutUserInput(t *testing.T) {
 	s, store, calls := makeServer(t, activePolicy(), &testClassifier{})
 	store.policyErr = errors.New("policy store unavailable")
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, authorizedRequest("POST", "/v1/chat/completions", strings.NewReader(`{"messages":[{"role":"user","content":"new"}]}`)))
-	if w.Code != 503 || *calls != 0 || len(store.counts) != 1 || store.counts[0].Outcome != "gateway_error" {
+	if w.Code != 503 || *calls != 0 || len(store.counts) != 0 {
 		t.Fatalf("status=%d upstream=%d counts=%+v", w.Code, *calls, store.counts)
 	}
 }

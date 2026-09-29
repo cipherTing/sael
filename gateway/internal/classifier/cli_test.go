@@ -20,6 +20,14 @@ import (
 	"github.com/cipherTing/sael/gateway/internal/testcli"
 )
 
+func checkFull(c *CLI, ctx context.Context, text string, cfg gateway.JevConfig) ([]policy.Answer, error) {
+	keys := make([]string, 0, len(policy.Questions))
+	for _, question := range policy.Questions {
+		keys = append(keys, question.Key)
+	}
+	return c.CheckConfigured(ctx, text, cfg, keys)
+}
+
 func TestCLIUsesSavedConnectionAndPreservesMeasurements(t *testing.T) {
 	calls := 0
 	extraAnswer := false
@@ -49,7 +57,7 @@ func TestCLIUsesSavedConnectionAndPreservesMeasurements(t *testing.T) {
 	defer upstream.Close()
 	c := startCLI(t)
 	for i := 0; i < 2; i++ {
-		a, err := c.CheckConfigured(context.Background(), "current user prompt", gateway.JevConfig{BaseURL: upstream.URL + "/v1", APIKey: "saved-key", Model: "saved-model"})
+		a, err := checkFull(c, context.Background(), "current user prompt", gateway.JevConfig{BaseURL: upstream.URL + "/v1", APIKey: "saved-key", Model: "saved-model"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -66,8 +74,34 @@ func TestCLIUsesSavedConnectionAndPreservesMeasurements(t *testing.T) {
 		t.Fatal("unexpected retries")
 	}
 	extraAnswer = true
-	if _, err := c.CheckConfigured(context.Background(), "current user prompt", gateway.JevConfig{BaseURL: upstream.URL + "/v1", APIKey: "saved-key", Model: "saved-model"}); !errors.Is(err, gateway.ErrInvalidClassifierResponse) {
+	if _, err := checkFull(c, context.Background(), "current user prompt", gateway.JevConfig{BaseURL: upstream.URL + "/v1", APIKey: "saved-key", Model: "saved-model"}); !errors.Is(err, gateway.ErrInvalidClassifierResponse) {
 		t.Fatal("unexpected answer silently ignored")
+	}
+}
+
+func TestCLIForwardsOnlyTheRequestedQuestionSubset(t *testing.T) {
+	var got map[string]json.RawMessage
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Questions map[string]json.RawMessage `json:"questions"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		got = body.Questions
+		_ = json.NewEncoder(w).Encode(map[string]any{"answers": map[string]any{
+			"gore":      map[string]any{"type": "score", "score": 1.5},
+			"self_harm": map[string]any{"type": "noul", "noul": .9},
+		}})
+	}))
+	defer upstream.Close()
+	c := startCLI(t)
+	answers, err := c.CheckConfigured(context.Background(), "prompt", gateway.JevConfig{BaseURL: upstream.URL, APIKey: "key", Model: "model"}, []string{"gore", "self_harm"})
+	if err != nil || len(answers) != 2 || len(got) != 2 {
+		t.Fatalf("subset request failed: answers=%+v body=%v err=%v", answers, got, err)
+	}
+	if _, ok := got["sexual"]; ok {
+		t.Fatal("unrequested question was sent")
 	}
 }
 func TestCLIPropagatesCancellationAndInvalidAnswer(t *testing.T) {
@@ -75,12 +109,12 @@ func TestCLIPropagatesCancellationAndInvalidAnswer(t *testing.T) {
 	defer upstream.Close()
 	c := startCLI(t)
 	cfg := gateway.JevConfig{BaseURL: upstream.URL, APIKey: "key", Model: "model"}
-	if _, err := c.CheckConfigured(context.Background(), "text", cfg); !errors.Is(err, gateway.ErrInvalidClassifierResponse) {
+	if _, err := checkFull(c, context.Background(), "text", cfg); !errors.Is(err, gateway.ErrInvalidClassifierResponse) {
 		t.Fatal("missing answers not classified", err)
 	}
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
-	if _, err := c.CheckConfigured(ctx, "text", cfg); err == nil {
+	if _, err := checkFull(c, ctx, "text", cfg); err == nil {
 		t.Fatal("expired request sent")
 	}
 }
@@ -115,7 +149,7 @@ func TestCLIConcurrentRequestsKeepTheirConfigurationSnapshots(t *testing.T) {
 	defer c.Close()
 	firstDone := make(chan error, 1)
 	go func() {
-		_, err := c.CheckConfigured(context.Background(), "first", gateway.JevConfig{BaseURL: first.URL, APIKey: "first-key", Model: "one"})
+		_, err := checkFull(c, context.Background(), "first", gateway.JevConfig{BaseURL: first.URL, APIKey: "first-key", Model: "one"})
 		firstDone <- err
 	}()
 	select {
@@ -125,7 +159,7 @@ func TestCLIConcurrentRequestsKeepTheirConfigurationSnapshots(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	if _, err := c.CheckConfigured(ctx, "second", gateway.JevConfig{BaseURL: second.URL, APIKey: "second-key", Model: "two"}); err != nil {
+	if _, err := checkFull(c, ctx, "second", gateway.JevConfig{BaseURL: second.URL, APIKey: "second-key", Model: "two"}); err != nil {
 		t.Fatal("slow request serialized a new configuration", err)
 	}
 	unblock()
@@ -156,7 +190,7 @@ func TestCLIReusesConnectionsAndBoundsRetryWaitByCallerDeadline(t *testing.T) {
 	defer c.Close()
 	cfg := gateway.JevConfig{BaseURL: upstream.URL, APIKey: "key", Model: "model"}
 	for range 20 {
-		if _, err := c.CheckConfigured(context.Background(), "prompt", cfg); err != nil {
+		if _, err := checkFull(c, context.Background(), "prompt", cfg); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -167,7 +201,7 @@ func TestCLIReusesConnectionsAndBoundsRetryWaitByCallerDeadline(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	if _, err := c.CheckConfigured(ctx, "prompt", cfg); err == nil {
+	if _, err := checkFull(c, ctx, "prompt", cfg); err == nil {
 		t.Fatal("503 unexpectedly succeeded")
 	}
 	if time.Since(start) > 250*time.Millisecond || calls.Load() != 21 {
@@ -184,7 +218,7 @@ func BenchmarkPersistentCLI(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			if _, err := c.CheckConfigured(context.Background(), "ordinary prompt", cfg); err != nil {
+			if _, err := checkFull(c, context.Background(), "ordinary prompt", cfg); err != nil {
 				b.Error(err)
 			}
 		}
@@ -220,7 +254,7 @@ func TestCLICancellationOnlyStopsTheCanceledRequest(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	finished := make(chan error, 1)
-	go func() { _, err := c.CheckConfigured(ctx, "slow", cfg); finished <- err }()
+	go func() { _, err := checkFull(c, ctx, "slow", cfg); finished <- err }()
 	select {
 	case <-entered:
 	case <-time.After(time.Second):
@@ -235,7 +269,7 @@ func TestCLICancellationOnlyStopsTheCanceledRequest(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Jev request continued after gateway canceled")
 	}
-	if _, err := c.CheckConfigured(context.Background(), "next", cfg); err != nil {
+	if _, err := checkFull(c, context.Background(), "next", cfg); err != nil {
 		t.Fatal("canceling one call stopped the shared CLI", err)
 	}
 	c.Close()
@@ -262,7 +296,7 @@ func TestCLIProcessFailureIsReportedWithoutDirectSDKFallback(t *testing.T) {
 	var calls atomic.Int64
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { calls.Add(1); cliTestResponse(w) }))
 	defer upstream.Close()
-	_, err := c.CheckConfigured(context.Background(), "prompt", gateway.JevConfig{BaseURL: upstream.URL, APIKey: "key", Model: "m"})
+	_, err := checkFull(c, context.Background(), "prompt", gateway.JevConfig{BaseURL: upstream.URL, APIKey: "key", Model: "m"})
 	if err == nil || calls.Load() != 0 {
 		t.Fatal("request bypassed the failed CLI")
 	}
@@ -279,7 +313,7 @@ func TestCLIResponseReadTimeoutKeepsItsErrorCategory(t *testing.T) {
 	c := &CLI{client: peer.Client(), address: strings.TrimPrefix(peer.URL, "http://"), done: make(chan struct{})}
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	_, err := c.CheckConfigured(ctx, "prompt", gateway.JevConfig{BaseURL: "http://example.test", APIKey: "key", Model: "m"})
+	_, err := checkFull(c, ctx, "prompt", gateway.JevConfig{BaseURL: "http://example.test", APIKey: "key", Model: "m"})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("IPC response timeout was reclassified: %v", err)
 	}

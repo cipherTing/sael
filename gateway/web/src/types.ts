@@ -27,6 +27,8 @@ export type Event = {
   image_operation?: "generation" | "edit";
   client_ip?: string;
   session_id?: string;
+  session_source?: "explicit" | "history";
+  session_ref?: string;
   client_request_id?: string;
   user_agent?: string;
   parameters?: RequestParameters;
@@ -53,7 +55,6 @@ export type Event = {
   has_non_text_input: boolean;
   text_preview: string;
   scores?: Answer[];
-  policy_version: number;
   classifier_ms?: number;
   error_kind?: string;
   input_tokens_estimated?: number;
@@ -90,7 +91,6 @@ export type Overview = {
 };
 export type PolicyChange = {
   time: string;
-  version: number;
   actor: string;
   before: unknown;
   after: unknown;

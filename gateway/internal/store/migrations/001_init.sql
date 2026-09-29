@@ -4,6 +4,11 @@ CREATE TABLE IF NOT EXISTS gateway_policy (
     body jsonb NOT NULL,
     updated_at timestamptz NOT NULL DEFAULT now()
 );
+-- The migration runner replays this bootstrap SQL on every startup. Older
+-- databases may already have applied 011_remove_policy_version.sql, so restore
+-- the bootstrap column just long enough for the idempotent seed below; migration
+-- 011 removes it again.
+ALTER TABLE gateway_policy ADD COLUMN IF NOT EXISTS version bigint NOT NULL DEFAULT 1;
 INSERT INTO gateway_policy(id, version, body) VALUES
     (1, 1, '{"enabled":false,"version":1,"thresholds":{},"scenes":[],"unmatched_action":"","preview_chars":null,"retention_days":null}')
 ON CONFLICT (id) DO NOTHING;

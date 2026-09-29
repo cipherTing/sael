@@ -23,6 +23,8 @@ const ingestProducers = "sael:ingest:producers"
 const configChannel = "sael:config:changed"
 const sessionPrefix = "sael:session:"
 
+const telemetryShutdownTimeout = 5 * time.Second
+
 type ingestBatch struct {
 	RPM      []rpmPoint      `json:"rpm,omitempty"`
 	Producer string          `json:"producer"`
@@ -46,18 +48,21 @@ type ingestItem struct {
 type RedisStore struct {
 	credentialWrites singleflight.Group
 	*PG
-	redis        *redis.Client
-	snapshot     atomic.Pointer[configSnapshot]
-	refreshMu    sync.Mutex
-	queue        chan ingestItem
-	accepting    sync.RWMutex
-	closed       bool
-	producerDone chan struct{}
-	cancel       context.CancelFunc
-	workers      sync.WaitGroup
-	spoolMu      sync.Mutex
-	spooling     bool
-	replayMu     sync.Mutex
+	redis          *redis.Client
+	snapshot       atomic.Pointer[configSnapshot]
+	refreshMu      sync.Mutex
+	queue          chan ingestItem
+	stopCh         chan struct{}
+	accepting      sync.RWMutex
+	closed         bool
+	producerDone   chan struct{}
+	producerCtx    context.Context
+	producerCancel context.CancelFunc
+	cancel         context.CancelFunc
+	workers        sync.WaitGroup
+	spoolMu        sync.Mutex
+	spooling       bool
+	replayMu       sync.Mutex
 }
 
 // OpenRedis verifies both stores before the listeners accept requests.
@@ -72,7 +77,7 @@ func OpenRedis(ctx context.Context, p *PG, endpoint string) (*RedisStore, error)
 	opt.WriteTimeout = time.Second
 	opt.ContextTimeoutEnabled = true
 	r := redis.NewClient(opt)
-	s := &RedisStore{PG: p, redis: r, queue: make(chan ingestItem, 4096), producerDone: make(chan struct{})}
+	s := &RedisStore{PG: p, redis: r, queue: make(chan ingestItem, 4096), stopCh: make(chan struct{}), producerDone: make(chan struct{})}
 	fail := func(err error) (*RedisStore, error) { _ = r.Close(); return nil, err }
 	if err := r.Ping(ctx).Err(); err != nil {
 		return fail(err)
@@ -91,6 +96,9 @@ func OpenRedis(ctx context.Context, p *PG, endpoint string) (*RedisStore, error)
 		}
 	}
 	work, cancel := context.WithCancel(context.Background())
+	producerCtx, producerCancel := context.WithCancel(context.Background())
+	s.producerCtx = producerCtx
+	s.producerCancel = producerCancel
 	s.cancel = cancel
 	// #nosec G118 -- Close drains telemetry after HTTP shutdown; the startup context must not cancel accepted records.
 	go s.produce()
@@ -108,22 +116,61 @@ func (s *RedisStore) Close() {
 		return
 	}
 	s.closed = true
-	close(s.queue)
+	if s.stopCh == nil {
+		s.stopCh = make(chan struct{})
+	}
+	close(s.stopCh)
 	s.accepting.Unlock()
-	<-s.producerDone
-	s.cancel()
+	producerStopped := false
+	timer := time.NewTimer(telemetryShutdownTimeout)
+	select {
+	case <-s.producerDone:
+		producerStopped = true
+	case <-timer.C:
+		if s.producerCancel != nil {
+			s.producerCancel()
+		}
+		select {
+		case <-s.producerDone:
+			producerStopped = true
+		case <-time.After(time.Second):
+			slog.Error("telemetry producer did not stop before shutdown deadline")
+		}
+	}
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
+	if !producerStopped && s.producerCancel != nil {
+		s.producerCancel()
+	}
+	if s.cancel != nil {
+		s.cancel()
+	}
 	s.workers.Wait()
 	_ = s.redis.Close()
 }
 func (s *RedisStore) enqueue(_ context.Context, item ingestItem) error {
-	s.accepting.RLock()
-	defer s.accepting.RUnlock()
+	s.accepting.Lock()
+	if s.stopCh == nil {
+		s.stopCh = make(chan struct{})
+	}
 	if s.closed {
+		s.accepting.Unlock()
 		return errors.New("telemetry store closed")
 	}
-	// A full queue applies backpressure. Never discard completed-request telemetry on cancellation.
-	s.queue <- item
-	return nil
+	queue, stop := s.queue, s.stopCh
+	s.accepting.Unlock()
+	// A full queue applies backpressure until shutdown signals stop. Do not hold
+	// the lifecycle lock while waiting, or Close could never cancel this send.
+	select {
+	case queue <- item:
+		return nil
+	case <-stop:
+		return errors.New("telemetry store closed")
+	}
 }
 
 // Increment queues one request for aggregation without waiting for network or disk I/O.
@@ -139,9 +186,23 @@ func (s *RedisStore) WriteEvent(ctx context.Context, e gateway.Event) error {
 
 func (s *RedisStore) produce() {
 	defer close(s.producerDone)
+	producerCtx := s.producerCtx
+	if producerCtx == nil {
+		producerCtx = context.Background()
+	}
 	producer := rand.Text()
 	var sequence int64
-	for first := range s.queue {
+	for {
+		var first ingestItem
+		select {
+		case item, ok := <-s.queue:
+			if !ok {
+				return
+			}
+			first = item
+		case <-producerCtx.Done():
+			return
+		}
 		items := []ingestItem{first}
 		timer := time.NewTimer(2 * time.Millisecond)
 	collect:
@@ -154,6 +215,9 @@ func (s *RedisStore) produce() {
 				items = append(items, item)
 			case <-timer.C:
 				break collect
+			case <-producerCtx.Done():
+				timer.Stop()
+				return
 			}
 		}
 		timer.Stop()
@@ -170,14 +234,25 @@ func (s *RedisStore) produce() {
 		sequence++
 		batch := ingestBatch{Producer: producer, Sequence: sequence, Rows: a.rows(), Events: events, RPM: collectRPM(items)}
 		for {
-			ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+			ctx, cancel := context.WithTimeout(producerCtx, 250*time.Millisecond)
 			err := s.persist(ctx, batch)
 			cancel()
 			if err == nil {
 				break
 			}
 			slog.Error("telemetry persistence failed; retaining batch and applying backpressure", "error", err)
-			time.Sleep(100 * time.Millisecond)
+			timer := time.NewTimer(100 * time.Millisecond)
+			select {
+			case <-producerCtx.Done():
+				if !errors.Is(producerCtx.Err(), context.Canceled) {
+					slog.Warn("telemetry producer stopped before persisting batch", "error", producerCtx.Err())
+				}
+				if !timer.Stop() {
+					<-timer.C
+				}
+				return
+			case <-timer.C:
+			}
 		}
 	}
 }
@@ -253,8 +328,8 @@ func (s *RedisStore) changed(ctx context.Context) {
 }
 
 // UpdatePolicy persists a policy and refreshes the local and remote snapshots.
-func (s *RedisStore) UpdatePolicy(ctx context.Context, v int64, p policy.Policy, actor string) (policy.Policy, error) {
-	p, err := s.PG.UpdatePolicy(ctx, v, p, actor)
+func (s *RedisStore) UpdatePolicy(ctx context.Context, update gateway.PolicyUpdate, actor string) (policy.Policy, error) {
+	p, err := s.PG.UpdatePolicy(ctx, update, actor)
 	if err == nil {
 		s.changed(ctx)
 	}

@@ -110,6 +110,7 @@ npm run docker:rebuild     # 重建并更新网关容器
 
 ```sh
 sael check "需要审查的文本"
+sael check --questions gore,self_harm "只审指定审核项"
 cat prompt.txt | sael check --json
 ```
 

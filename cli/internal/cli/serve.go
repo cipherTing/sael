@@ -52,7 +52,7 @@ func serveClassifier(parent context.Context, owner io.Reader, output io.Writer) 
 	transport.MaxIdleConns, transport.MaxIdleConnsPerHost = 1024, 1024
 	client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	defer client.CloseIdleConnections()
-	evaluator := &serviceEvaluator{http: client, questions: questions.Moderation()}
+	evaluator := &serviceEvaluator{http: client}
 	server := &http.Server{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if !hmac.Equal([]byte(r.Header.Get("Authorization")), []byte("Bearer "+token)) {
@@ -70,13 +70,18 @@ func serveClassifier(parent context.Context, owner io.Reader, output io.Writer) 
 				http.Error(w, "invalid request", http.StatusBadRequest)
 				return
 			}
+			selected, err := questions.Select(input.Questions)
+			if err != nil {
+				http.Error(w, "invalid questions", http.StatusBadRequest)
+				return
+			}
 			deadline := input.Deadline
 			if deadline.IsZero() {
 				deadline = time.Now().Add(5 * time.Second)
 			}
 			work, stop := context.WithDeadline(r.Context(), deadline)
 			defer stop()
-			result := evaluator.check(work, input)
+			result := evaluator.check(work, input, selected)
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(result)
 		}),
@@ -112,10 +117,9 @@ type serviceEvaluator struct {
 	baseURL, apiKey, model string
 	client                 *sdk.Client
 	http                   *http.Client
-	questions              sdk.Questions
 }
 
-func (e *serviceEvaluator) check(ctx context.Context, input protocol.Request) protocol.Response {
+func (e *serviceEvaluator) check(ctx context.Context, input protocol.Request, selected sdk.Questions) protocol.Response {
 	if input.BaseURL == "" || input.APIKey == "" || input.Model == "" {
 		return protocol.Response{Error: "unavailable"}
 	}
@@ -131,7 +135,7 @@ func (e *serviceEvaluator) check(ctx context.Context, input protocol.Request) pr
 		e.client, e.baseURL, e.apiKey, e.model = client, input.BaseURL, input.APIKey, input.Model
 	}
 	e.mu.Unlock()
-	result, err := client.Evaluate(ctx, input.Text, e.questions)
+	result, err := client.Evaluate(ctx, input.Text, selected)
 	if err != nil {
 		kind := "unavailable"
 		switch {
@@ -144,11 +148,11 @@ func (e *serviceEvaluator) check(ctx context.Context, input protocol.Request) pr
 		}
 		return protocol.Response{Error: kind}
 	}
-	if len(result.Answers) != len(e.questions) {
+	if len(result.Answers) != len(selected) {
 		return protocol.Response{Error: "invalid_response"}
 	}
-	response := protocol.Response{Answers: make([]protocol.Answer, 0, len(e.questions))}
-	for key, q := range e.questions {
+	response := protocol.Response{Answers: make([]protocol.Answer, 0, len(selected))}
+	for key, q := range selected {
 		a := protocol.Answer{Question: key, Type: q.QuestionType()}
 		if a.Type == "noul" {
 			value, ok := result.Noul(key)

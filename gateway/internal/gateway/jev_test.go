@@ -93,7 +93,7 @@ func TestJevTextTestMarksClassifierAsHealthy(t *testing.T) {
 }
 
 func TestJevTextTestRejectsIncompleteClassifierOutputEvenBeforePolicySetup(t *testing.T) {
-	s, store, _ := makeServer(t, policy.Policy{Version: 1}, &testClassifier{answers: []policy.Answer{{Question: "cyber_abuse", Type: "noul", Value: 0.9}}})
+	s, store, _ := makeServer(t, policy.Policy{}, &testClassifier{answers: []policy.Answer{{Question: "cyber_abuse", Type: "noul", Value: 0.9}}})
 	store.jev = JevConfig{BaseURL: "https://api.example/v1", Model: "jev-test", APIKey: "secret-key"}
 	w := adminRequest(t, s, http.MethodPost, "/admin/jev/test", `{"text":"hello"}`)
 	if w.Code != 502 {

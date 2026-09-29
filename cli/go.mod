@@ -6,7 +6,7 @@ go 1.23.0
 // the released version is what a user resolves while this checkout builds
 // against the neighbouring directory. Remove nothing here at release time: the
 // replacement only applies to this working copy, never to a tag.
-require github.com/cipherTing/sael/sdk v0.0.1-rc1
+require github.com/cipherTing/sael/sdk v0.0.1-rc2
 
 require (
 	github.com/spf13/cobra v1.10.2

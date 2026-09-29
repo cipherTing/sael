@@ -12,7 +12,6 @@ afterEach(cleanup);
 it("saves separate blocking and nonblocking freeze switches", async () => {
   const policy: Policy = {
     enabled: false,
-    version: 7,
     scenes: [],
     preview_chars: 0,
     retention_days: 30,
@@ -34,7 +33,6 @@ it("saves separate blocking and nonblocking freeze switches", async () => {
   fireEvent.click(screen.getByRole("button", { name: "保存会话冻结" }));
   await waitFor(() =>
     expect(onSave).toHaveBeenCalledWith({
-      ...policy,
       session_block_on_blocking_review: true,
       session_block_on_nonblocking_review: true,
       session_block_ttl_seconds: 7200,

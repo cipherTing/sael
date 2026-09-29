@@ -28,7 +28,6 @@ const event: Event = {
   has_non_text_input: false,
   text_preview: "",
   text: "current user text",
-  policy_version: 2,
   classifier_ms: 12,
   scores: [{ question: "gore", type: "score", value: 1.9 }],
   decision: {
@@ -69,6 +68,9 @@ it("defaults to hit records and preserves the separate Jev error view", async ()
     "active",
   );
   expect(screen.getByRole("combobox", { name: "记录场景" })).toBeTruthy();
+  expect(screen.getByRole("textbox", { name: "筛选来源 IP" })).toBeTruthy();
+  expect(screen.getByRole("textbox", { name: "筛选会话 ID" })).toBeTruthy();
+  expect(screen.getByRole("textbox", { name: "筛选调用密钥 ID" })).toBeTruthy();
   expect(
     vi
       .mocked(request)
@@ -102,6 +104,8 @@ it("shows request context and keeps below-threshold scores collapsed", async () 
   const enriched = {
     ...event,
     client_ip: "203.0.113.7",
+    credential_id: "credential-one",
+    masked_key: "sk-a********9876",
     session_id: "session-123",
     user_agent: "codex-test/1",
     parameters: { reasoning_effort: "high", max_output_tokens: 2048 },
@@ -127,8 +131,12 @@ it("shows request context and keeps below-threshold scores collapsed", async () 
     await screen.findByRole("row", { name: "查看请求 request-1" }),
   );
   expect(
-    await screen.findByRole("button", { name: "查看会话 session-123 的记录" }),
+    await screen.findByRole("button", { name: "复制来源 IP" }),
   ).toBeTruthy();
+  expect(screen.getByRole("button", { name: "复制调用密钥" })).toBeTruthy();
+  expect(
+    screen.getAllByRole("button", { name: "复制会话 ID" }).length,
+  ).toBeGreaterThan(0);
   expect(screen.getByText("high")).toBeTruthy();
   expect(screen.getByText("2,048")).toBeTruthy();
   const hidden = screen
@@ -138,9 +146,11 @@ it("shows request context and keeps below-threshold scores collapsed", async () 
   expect(hidden!.open).toBe(false);
   expect(hidden!.textContent).toContain("自伤风险");
   expect(hidden!.textContent).not.toContain("血腥程度");
-  fireEvent.click(
-    screen.getByRole("button", { name: "查看会话 session-123 的记录" }),
-  );
+  fireEvent.click(screen.getByRole("button", { name: "Close" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "筛选会话 ID" }), {
+    target: { value: "session-123" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "应用筛选" }));
   await waitFor(() =>
     expect(
       vi

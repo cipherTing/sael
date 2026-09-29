@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { CircleHelp, Loader2, Copy, Check } from "lucide-react";
 import { useState } from "react";
+import { toast } from "sonner";
 import { Button } from "./ui/button";
 import {
   Tooltip,
@@ -139,9 +140,13 @@ export function CopyButton({
       variant="ghost"
       aria-label={label}
       onClick={async () => {
-        await navigator.clipboard.writeText(value);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1500);
+        try {
+          await navigator.clipboard.writeText(value);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        } catch {
+          toast.error("复制失败");
+        }
       }}
     >
       {copied ? <Check /> : <Copy />}

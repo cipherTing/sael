@@ -9,14 +9,7 @@ import (
 	"slices"
 
 	"github.com/cipherTing/sael/gateway/internal/policy"
-	"github.com/cipherTing/sael/sdk/moderation"
 )
-
-var reviewDefinition = func() string {
-	raw, _ := json.Marshal(moderation.Questions())
-	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:])
-}()
 
 // ReviewCache contains scene predicates only; request identity and actions remain live.
 type ReviewCache interface {
@@ -72,7 +65,7 @@ func sceneCacheKey(c JevConfig, scene policy.Scene, text string) string {
 		return hex.EncodeToString(sum[:])
 	}
 	prompt := sha256.Sum256([]byte(text))
-	return "sael:review:v1:" + reviewDefinition + ":" + digest(struct {
+	return "sael:review:v1:" + digest(struct {
 		Config    JevConfig
 		Questions []policy.Question
 	}{c, policy.Questions}) + ":" + digest(struct {

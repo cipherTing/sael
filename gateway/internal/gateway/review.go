@@ -13,6 +13,9 @@ import (
 )
 
 func (s *Server) recordCount(c Count) {
+	if !c.UserInput {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := s.Store.Increment(ctx, c); err != nil {
@@ -20,6 +23,9 @@ func (s *Server) recordCount(c Count) {
 	}
 }
 func (s *Server) observeIngress(ctx context.Context, c Count) {
+	if !c.UserInput {
+		return
+	}
 	if sampler, ok := s.Store.(interface {
 		ObserveIngress(context.Context, Count) error
 	}); ok {
@@ -32,6 +38,11 @@ func (s *Server) observeIngress(ctx context.Context, c Count) {
 // review owns classification and persistence; it never writes to the client's response.
 func (s *Server) review(parent context.Context, event Event, p policy.Policy, count Count) (Count, policy.Decision) {
 	decision := policy.Decision{Action: policy.Allow}
+	required := policy.RequiredQuestions(p, event.Protocol, event.Model)
+	if len(required) == 0 {
+		count.Outcome = "clean"
+		return count, decision
+	}
 	config, configErr := s.Store.Jev(parent)
 	inputLimit := config.inputLimit()
 	inputTokens, tokenErr := inputTokensOverLimit(event.Text, inputLimit)
@@ -93,7 +104,7 @@ func (s *Server) review(parent context.Context, event Event, p policy.Policy, co
 	if err == nil {
 		if configured, ok := s.Classifier.(configuredClassifier); ok {
 			if err = config.validate(); err == nil {
-				scores, err = configured.CheckConfigured(ctx, event.Text, config)
+				scores, err = configured.CheckConfigured(ctx, event.Text, config, required)
 			}
 		} else {
 			scores, err = s.Classifier.Check(ctx, event.Text)
@@ -132,9 +143,18 @@ func (s *Server) review(parent context.Context, event Event, p policy.Policy, co
 	}
 	if s.ReviewCache != nil && cacheAvailable && len(keys) > 0 {
 		values := map[string]bool{}
+		matched := map[string]bool{}
 		for _, t := range trace {
-			if key, ok := byScene[t.ID]; ok {
-				values[key] = t.Status == "effective" || t.Status == "shadowed"
+			matched[t.ID] = t.Status == "effective" || t.Status == "shadowed"
+		}
+		// Cache every applicable scene predicate once the prompt has at least one
+		// hit. False values are meaningful here: without them a later lookup can
+		// never prove that all current scenes were evaluated.
+		if decision.SceneID != "" {
+			for _, scene := range p.Scenes {
+				if key, ok := byScene[scene.ID]; ok {
+					values[key] = matched[scene.ID]
+				}
 			}
 		}
 		if err := s.ReviewCache.Save(parent, values); err != nil {
@@ -165,7 +185,7 @@ func (s *Server) finishReview(ctx context.Context, event Event, p policy.Policy,
 	return count, decision
 }
 
-func (s *Server) startReview(event Event, p policy.Policy, count Count, freezeKey string) bool {
+func (s *Server) startReview(event Event, p policy.Policy, count Count, blockPlan sessionBlockPlan) bool {
 	s.reviewMu.Lock()
 	defer s.reviewMu.Unlock()
 	if s.closed {
@@ -181,12 +201,12 @@ func (s *Server) startReview(event Event, p policy.Policy, count Count, freezeKe
 		defer func() { s.reviewMu.Lock(); s.reviewActive--; s.reviewMu.Unlock() }()
 		result, decision := s.review(s.reviewContext, event, p, count)
 		s.recordCount(result)
-		if p.SessionBlockOnNonblockingReview && decision.SceneID != "" && event.SessionID != "" {
+		if p.SessionBlockOnNonblockingReview && decision.SceneID != "" {
 			ttl := time.Duration(p.SessionBlockTTLSeconds) * time.Second
 			if ttl <= 0 {
 				ttl = time.Hour
 			}
-			s.rememberSessionBlock(s.reviewContext, freezeKey, ttl)
+			s.rememberSessionBlock(s.reviewContext, blockPlan, ttl)
 		}
 	}()
 	return true

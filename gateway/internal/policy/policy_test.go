@@ -55,8 +55,40 @@ func TestUnmatchedScoreDoesNotCreateAHit(t *testing.T) {
 
 func TestIncompleteAnswersAreUnavailable(t *testing.T) {
 	p := Policy{Enabled: true, Scenes: []Scene{{ID: "a", Name: "攻击", Match: Any, Action: Block, Conditions: []Condition{{Question: "cyber_abuse", Threshold: 0.8}}}}}
-	if _, err := Evaluate(p, []Answer{{Question: "cyber_abuse", Type: "noul", Value: 0.9}}); err == nil {
-		t.Fatal("missing answers must fail")
+	if _, err := Evaluate(p, []Answer{{Question: "illicit", Type: "noul", Value: 0.9}}); err == nil {
+		t.Fatal("missing required scene answer must fail")
+	}
+}
+
+func TestEvaluateUsesOnlyApplicableSceneQuestions(t *testing.T) {
+	p := Policy{Enabled: true, Scenes: []Scene{
+		{ID: "a", Name: "chat", Match: All, Action: Block, Endpoints: []string{"openai_chat"}, Conditions: []Condition{{Question: "gore", Threshold: 1.5}, {Question: "self_harm", Threshold: 0.8}}},
+		{ID: "b", Name: "other model", Match: Any, Action: Block, Models: []string{"other"}, Conditions: []Condition{{Question: "sexual", Threshold: 1}}},
+	}}
+	got := RequiredQuestions(p, "openai_chat", "current")
+	if len(got) != 2 || got[0] != "self_harm" || got[1] != "gore" {
+		t.Fatalf("wrong applicable question union: %v", got)
+	}
+	decision, err := Evaluate(p, []Answer{{Question: "gore", Type: "score", Value: 1.6}, {Question: "self_harm", Type: "noul", Value: 0.9}}, "openai_chat", "current")
+	if err != nil || decision.SceneID != "a" || decision.Action != Block {
+		t.Fatalf("partial scores did not decide scene: %+v %v", decision, err)
+	}
+}
+
+func TestValidateAnswersForRejectsMissingAndUnexpectedSubsetScores(t *testing.T) {
+	want := []string{"gore"}
+	for _, scores := range [][]Answer{
+		nil,
+		{{Question: "self_harm", Type: "noul", Value: 0.9}},
+		{{Question: "gore", Type: "score", Value: 1.5}, {Question: "sexual", Type: "score", Value: 1}},
+		{{Question: "gore", Type: "score", Value: 3.1}},
+	} {
+		if err := ValidateAnswersFor(scores, want); err == nil {
+			t.Fatalf("accepted invalid subset response: %+v", scores)
+		}
+	}
+	if err := ValidateAnswersFor([]Answer{{Question: "gore", Type: "score", Value: 1.5}}, want); err != nil {
+		t.Fatal(err)
 	}
 }
 

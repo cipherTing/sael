@@ -83,11 +83,33 @@ func (s Scene) AppliesToModel(model string) bool {
 	return len(s.Models) == 0 || slices.Contains(s.Models, model)
 }
 
-// Policy is one versioned snapshot used for a whole request.
+// RequiredQuestions returns the distinct questions for scenes that can affect this request.
+func RequiredQuestions(p Policy, endpoint, model string) []string {
+	if !p.Enabled {
+		return nil
+	}
+	needed := make(map[string]bool)
+	for _, scene := range p.Scenes {
+		if !scene.Active() || (endpoint != "" && !scene.AppliesTo(endpoint)) || !scene.AppliesToModel(model) {
+			continue
+		}
+		for _, condition := range scene.Conditions {
+			needed[condition.Question] = true
+		}
+	}
+	keys := make([]string, 0, len(needed))
+	for _, question := range Questions {
+		if needed[question.Key] {
+			keys = append(keys, question.Key)
+		}
+	}
+	return keys
+}
+
+// Policy is one configuration snapshot used for a whole request.
 type Policy struct {
 	TrustedKeyIdleDays int                `json:"trusted_key_idle_days"`
 	Enabled            bool               `json:"enabled"`
-	Version            int64              `json:"version"`
 	Thresholds         map[string]float64 `json:"thresholds,omitempty"` // Legacy policies are converted on load.
 	Scenes             []Scene            `json:"scenes"`
 	UnmatchedAction    Action             `json:"unmatched_action,omitempty"` // Legacy policies are converted on load.
@@ -289,7 +311,11 @@ func EvaluateDetailed(p Policy, answers []Answer, endpoint string, model ...stri
 	if !p.Enabled {
 		return decision, traces, nil
 	}
-	byKey, err := checkedAnswers(answers)
+	requestModel := ""
+	if len(model) > 0 {
+		requestModel = model[0]
+	}
+	byKey, err := checkedAnswersFor(answers, RequiredQuestions(p, endpoint, requestModel), false)
 	if err != nil {
 		return Decision{}, nil, err
 	}
@@ -304,10 +330,6 @@ func EvaluateDetailed(p Policy, answers []Answer, endpoint string, model ...stri
 			trace.Status = "endpoint_skipped"
 			traces = append(traces, trace)
 			continue
-		}
-		requestModel := ""
-		if len(model) > 0 {
-			requestModel = model[0]
 		}
 		if !scene.AppliesToModel(requestModel) {
 			trace.Status = "model_skipped"
@@ -340,15 +362,35 @@ func EvaluateDetailed(p Policy, answers []Answer, endpoint string, model ...stri
 
 // ValidateAnswers checks that one classifier response has all eleven valid scores.
 func ValidateAnswers(answers []Answer) error {
-	_, err := checkedAnswers(answers)
+	keys := make([]string, 0, len(Questions))
+	for _, q := range Questions {
+		keys = append(keys, q.Key)
+	}
+	_, err := checkedAnswersFor(answers, keys, true)
 	return err
 }
 
-func checkedAnswers(answers []Answer) (map[string]Answer, error) {
+// ValidateAnswersFor requires exactly the scores requested from the classifier.
+func ValidateAnswersFor(answers []Answer, required []string) error {
+	if len(required) == 0 {
+		return errors.New("no classifier questions requested")
+	}
+	_, err := checkedAnswersFor(answers, required, true)
+	return err
+}
+
+func checkedAnswersFor(answers []Answer, required []string, exact bool) (map[string]Answer, error) {
 	byKey := make(map[string]Answer, len(answers))
 	known := map[string]Question{}
 	for _, q := range Questions {
 		known[q.Key] = q
+	}
+	wanted := make(map[string]bool, len(required))
+	for _, key := range required {
+		if _, ok := known[key]; !ok || wanted[key] {
+			return nil, fmt.Errorf("invalid requested question %q", key)
+		}
+		wanted[key] = true
 	}
 	for _, answer := range answers {
 		q, ok := known[answer.Question]
@@ -358,10 +400,15 @@ func checkedAnswers(answers []Answer) (map[string]Answer, error) {
 		if _, duplicate := byKey[answer.Question]; duplicate {
 			return nil, fmt.Errorf("duplicate answer for %s", answer.Question)
 		}
+		if exact && !wanted[answer.Question] {
+			return nil, fmt.Errorf("unexpected answer for %s", answer.Question)
+		}
 		byKey[answer.Question] = answer
 	}
-	if len(byKey) != len(Questions) {
-		return nil, errors.New("incomplete classifier answers")
+	for _, key := range required {
+		if _, ok := byKey[key]; !ok {
+			return nil, fmt.Errorf("missing classifier answer for %s", key)
+		}
 	}
 	return byKey, nil
 }

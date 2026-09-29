@@ -12,7 +12,6 @@ import type { PolicyResponse } from "./policy";
 afterEach(cleanup);
 const policy: PolicyResponse = {
   enabled: false,
-  version: 1,
   preview_chars: null,
   retention_days: null,
   questions: [
@@ -43,6 +42,14 @@ it("duplicates a scene as a draft and only publishes when saved", async () => {
     { question: "gore", threshold: 1.5 },
   ]);
   expect(saved.scenes[1].id).not.toBe("one");
+});
+
+it("defaults a newly created scene to matching any condition", () => {
+  render(<SettingsPage policy={policy} onSave={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: "新建场景" }));
+  expect(screen.getByRole("button", { name: "满足任一" }).className).toContain(
+    "selected",
+  );
 });
 
 it("saves endpoint selection and a paused scene without changing its threshold", async () => {
@@ -118,6 +125,11 @@ it("adds multiple model IDs and restores all-model scope by removing the list", 
     "claude-test",
   ]);
   fireEvent.click(screen.getByRole("button", { name: "移除模型 gpt-6-luna" }));
+  await waitFor(() =>
+    expect(
+      screen.getByRole("button", { name: "移除模型 claude-test" }),
+    ).toBeTruthy(),
+  );
   fireEvent.click(screen.getByRole("button", { name: "移除模型 claude-test" }));
   expect(screen.getByText("全部模型")).toBeTruthy();
 });

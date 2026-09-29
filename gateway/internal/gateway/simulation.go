@@ -48,11 +48,23 @@ func (s *Server) testPolicy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	required := policy.RequiredQuestions(p, input.Endpoint, input.Model)
+	if len(p.Scenes) == 0 {
+		for _, question := range policy.Questions {
+			required = append(required, question.Key)
+		}
+	}
 	scores := input.Scores
 	var elapsed int64
+	selectedResponse := false
 	if scores == nil {
 		if strings.TrimSpace(input.Text) == "" {
 			http.Error(w, "请输入测试文本", http.StatusBadRequest)
+			return
+		}
+		if len(required) == 0 {
+			decision, trace, _ := policy.EvaluateDetailed(p, nil, input.Endpoint, input.Model)
+			writeJSON(w, map[string]any{"scores": []policy.Answer{}, "decision": decision, "trace": trace, "policy_ready": true, "classifier_ms": 0})
 			return
 		}
 		settings, err := s.Store.Jev(r.Context())
@@ -80,13 +92,18 @@ func (s *Server) testPolicy(w http.ResponseWriter, r *http.Request) {
 		defer cancel()
 		started := time.Now()
 		if configured, ok := s.Classifier.(configuredClassifier); ok {
-			scores, err = configured.CheckConfigured(ctx, input.Text, settings)
+			selectedResponse = true
+			scores, err = configured.CheckConfigured(ctx, input.Text, settings, required)
 		} else {
 			scores, err = s.Classifier.Check(ctx, input.Text)
 		}
 		elapsed = time.Since(started).Milliseconds()
 		if err == nil {
-			err = policy.ValidateAnswers(scores)
+			if selectedResponse {
+				err = policy.ValidateAnswersFor(scores, required)
+			} else {
+				err = policy.ValidateAnswers(scores)
+			}
 			if err != nil {
 				err = fmt.Errorf("%w: %w", ErrInvalidClassifierResponse, err)
 			}
@@ -99,7 +116,7 @@ func (s *Server) testPolicy(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Jev 测试失败，请检查连接和返回结果", http.StatusBadGateway)
 			return
 		}
-	} else if err := policy.ValidateAnswers(scores); err != nil {
+	} else if _, _, err := policy.EvaluateDetailed(p, scores, input.Endpoint, input.Model); err != nil {
 		http.Error(w, "审核分数不完整或超出范围", http.StatusBadRequest)
 		return
 	}

@@ -24,8 +24,7 @@ import (
 )
 
 var (
-	// ErrConflict means a policy update used an outdated version.
-	ErrConflict = errors.New("policy version conflict")
+	ErrInvalidPolicy = errors.New("invalid policy update")
 	// ErrNotFound means the requested stored record does not exist.
 	ErrNotFound = errors.New("not found")
 	// ErrInvalidClassifierResponse means the returned measurements cannot be evaluated.
@@ -38,10 +37,10 @@ type Classifier interface {
 }
 
 type configuredClassifier interface {
-	CheckConfigured(context.Context, string, JevConfig) ([]policy.Answer, error)
+	CheckConfigured(context.Context, string, JevConfig, []string) ([]policy.Answer, error)
 }
 
-// Event records one hit or classifier failure with its policy version.
+// Event records one hit or classifier failure.
 type Event struct {
 	ReviewSource    string              `json:"review_source,omitempty"`
 	CredentialID    string              `json:"credential_id,omitempty"`
@@ -51,6 +50,8 @@ type Event struct {
 	ClientIP        string              `json:"client_ip,omitempty"`
 	UserAgent       string              `json:"user_agent,omitempty"`
 	SessionID       string              `json:"session_id,omitempty"`
+	SessionSource   string              `json:"session_source,omitempty"`
+	SessionRef      string              `json:"session_ref,omitempty"`
 	ClientRequestID string              `json:"client_request_id,omitempty"`
 	Parameters      protocol.Parameters `json:"parameters"`
 	ID              string              `json:"id"`
@@ -67,7 +68,6 @@ type Event struct {
 	Trace           []policy.SceneTrace `json:"trace,omitempty"`
 	Scores          []policy.Answer     `json:"scores,omitempty"`
 	Decision        policy.Decision     `json:"decision"`
-	PolicyVersion   int64               `json:"policy_version"`
 	ClassifierMS    int64               `json:"classifier_ms,omitempty"`
 	InputChars      int                 `json:"input_chars,omitempty"`
 	InputTokens     int                 `json:"input_tokens_estimated,omitempty"`
@@ -77,6 +77,10 @@ type Event struct {
 
 // Count classifies one incoming request for minute aggregation.
 type Count struct {
+	// UserInput is a runtime gate for ingress statistics. It is deliberately
+	// not persisted because the database only stores counts that passed this
+	// gate, and old rows must keep their original meaning.
+	UserInput        bool            `json:"-"`
 	CacheLookup      bool            `json:"cache_lookup,omitempty"`
 	CacheHit         bool            `json:"cache_hit,omitempty"`
 	ID               string          `json:"id"`
@@ -136,11 +140,10 @@ type EventFilter struct {
 
 // PolicyChange keeps the policy before and after a saved update.
 type PolicyChange struct {
-	Time    time.Time     `json:"time"`
-	Version int64         `json:"version"`
-	Actor   string        `json:"actor"`
-	Before  policy.Policy `json:"before"`
-	After   policy.Policy `json:"after"`
+	Time   time.Time     `json:"time"`
+	Actor  string        `json:"actor"`
+	Before policy.Policy `json:"before"`
+	After  policy.Policy `json:"after"`
 }
 
 // Store is the persistence boundary used by proxy and admin handlers.
@@ -150,7 +153,7 @@ type Store interface {
 	UpdateJev(context.Context, JevConfig) (JevConfig, error)
 	Upstream(context.Context) (UpstreamConfig, error)
 	UpdateUpstream(context.Context, UpstreamConfig) (UpstreamConfig, error)
-	UpdatePolicy(context.Context, int64, policy.Policy, string) (policy.Policy, error)
+	UpdatePolicy(context.Context, PolicyUpdate, string) (policy.Policy, error)
 	WriteEvent(context.Context, Event) error
 	Increment(context.Context, Count) error
 	Overview(context.Context, time.Time, time.Time) (Overview, error)
@@ -395,19 +398,35 @@ func (s *Server) proxyRequest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON request", http.StatusBadRequest)
 		return
 	}
+	count.UserInput = meta.Text != ""
 	meta.SessionID = requestSession(r, meta.SessionID)
 	s.observeIngress(r.Context(), count)
 	event := s.baseEvent(r, requestID, meta, p)
-	freezeKey := sessionBlockKey(r, meta.SessionID)
-	if (p.SessionBlockEnabled || p.SessionBlockOnBlockingReview || p.SessionBlockOnNonblockingReview) && meta.SessionID != "" && s.sessionBlocked(r.Context(), freezeKey) {
-		count.Outcome = "session_blocked"
-		event.Kind = "warning"
-		event.Decision = policy.Decision{Action: policy.Block}
-		event.ErrorKind = "session_blocked"
-		s.writeEvent(r.Context(), event)
-		s.recordCount(count)
-		writeBlock(w, meta.Protocol, requestID)
-		return
+	credential := ""
+	if state != nil {
+		credential = state.key
+	}
+	blockPlan := sessionPlanForRequest(r, credential, s.clientIP(r), body, meta.Protocol)
+	if meta.SessionID != "" {
+		event.SessionSource = "explicit"
+		event.SessionRef = shortSessionRef(meta.SessionID)
+	} else if blockPlan.transcript.exact != "" {
+		event.SessionSource = "history"
+		event.SessionRef = shortSessionRef(blockPlan.transcript.exact)
+	}
+	if p.SessionBlockEnabled || p.SessionBlockOnBlockingReview || p.SessionBlockOnNonblockingReview {
+		if blockedKey, source := s.sessionBlocked(r.Context(), blockPlan); blockedKey != "" {
+			event.SessionSource = source
+			event.SessionRef = shortSessionRef(blockedKey)
+			count.Outcome = "session_blocked"
+			event.Kind = "warning"
+			event.Decision = policy.Decision{Action: policy.Block}
+			event.ErrorKind = "session_blocked"
+			s.writeEvent(r.Context(), event)
+			s.recordCount(count)
+			writeBlock(w, meta.Protocol, requestID)
+			return
+		}
 	}
 	if meta.Text == "" {
 		count.Outcome = "no_text"
@@ -416,7 +435,7 @@ func (s *Server) proxyRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !slices.ContainsFunc(p.Scenes, func(scene policy.Scene) bool { return applies(scene) && scene.Action == policy.Block }) {
-		if !s.startReview(event, p, count, freezeKey) {
+		if !s.startReview(event, p, count, blockPlan) {
 			count.Outcome = "review_busy"
 			now := time.Now().Unix()
 			last := s.reviewBusyLoggedAt.Load()
@@ -434,12 +453,12 @@ func (s *Server) proxyRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if decision.Action == policy.Block {
-		if (p.SessionBlockEnabled || p.SessionBlockOnBlockingReview) && meta.SessionID != "" {
+		if p.SessionBlockEnabled || p.SessionBlockOnBlockingReview {
 			ttl := time.Duration(p.SessionBlockTTLSeconds) * time.Second
 			if ttl <= 0 {
 				ttl = time.Hour
 			}
-			s.rememberSessionBlock(r.Context(), freezeKey, ttl)
+			s.rememberSessionBlock(r.Context(), blockPlan, ttl)
 		}
 		writeBlock(w, meta.Protocol, requestID)
 		return
@@ -447,10 +466,17 @@ func (s *Server) proxyRequest(w http.ResponseWriter, r *http.Request) {
 	s.forward(w, r)
 }
 
+func shortSessionRef(value string) string {
+	if len(value) <= 12 {
+		return value
+	}
+	return value[:12]
+}
+
 func (s *Server) baseEvent(r *http.Request, requestID string, meta protocol.Request, p policy.Policy) Event {
 	event := Event{ID: newID(), Time: time.Now().UTC(), RequestID: requestID,
 		Protocol: meta.Protocol, EndpointGroup: protocol.Group(meta.Protocol), ImageOperation: protocol.ImageOperation(meta.Protocol), Endpoint: r.URL.Path, Model: meta.Model, Stream: meta.Stream,
-		HasNonText: meta.HasNonText, PolicyVersion: p.Version, Text: meta.Text,
+		HasNonText: meta.HasNonText, Text: meta.Text,
 		Parameters: meta.Parameters, ClientIP: s.clientIP(r), UserAgent: privacy.RedactText(r.UserAgent()),
 		SessionID: meta.SessionID, ClientRequestID: requestHeader(r, "X-Client-Request-Id", "X-Request-Id")}
 	if state, ok := r.Context().Value(forwardStateKey{}).(*forwardState); ok {
@@ -527,6 +553,7 @@ func requestHeader(r *http.Request, keys ...string) string {
 func writeBlock(w http.ResponseWriter, protocolName, requestID string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Request-Id", requestID)
+	w.Header().Set("X-Sael-Blocked", "prompt_guard")
 	if protocolName == "anthropic" {
 		w.Header().Set("Request-Id", requestID)
 	}

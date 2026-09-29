@@ -27,7 +27,7 @@ func TestResolveVersionPrefersTheInjectedValue(t *testing.T) {
 	// records the commit, not the tag, so a goreleaser build read through it would
 	// report "devel". It therefore has to win outright, whatever the build info
 	// happens to say about this test binary.
-	assert.Equal(t, "0.0.1-rc1", resolveVersion("0.0.1-rc1"))
+	assert.Equal(t, "0.0.1-rc2", resolveVersion("0.0.1-rc2"))
 	assert.Equal(t, "v1.2.3", resolveVersion("v1.2.3"))
 }
 

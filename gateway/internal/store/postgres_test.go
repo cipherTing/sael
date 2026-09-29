@@ -2,16 +2,60 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/cipherTing/sael/gateway/internal/gateway"
 	"github.com/cipherTing/sael/gateway/internal/policy"
 )
+
+func TestPostgresPolicyPatchesMergeConcurrentFields(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not set")
+	}
+	ctx := context.Background()
+	s, err := Open(ctx, dsn, filepath.Join(t.TempDir(), "spool.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	scene := policy.Scene{ID: "merge", Name: "merge", Conditions: []policy.Condition{{Question: "gore", Threshold: 1.5}}, Match: policy.Any, Action: policy.Block}
+	base := policy.Policy{Enabled: true, Scenes: []policy.Scene{scene}}
+	if _, err := s.UpdatePolicy(ctx, gateway.PolicyUpdate{Replace: &base}, "test"); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, err := s.UpdatePolicy(ctx, gateway.PolicyUpdate{Fields: map[string]json.RawMessage{"enabled": json.RawMessage(`false`)}}, "test")
+		errs <- err
+	}()
+	go func() {
+		defer wg.Done()
+		_, err := s.UpdatePolicy(ctx, gateway.PolicyUpdate{Fields: map[string]json.RawMessage{"trusted_key_idle_days": json.RawMessage(`45`)}}, "test")
+		errs <- err
+	}()
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.Policy(ctx)
+	if err != nil || got.Enabled || got.TrustedKeyIdleDays != 45 || len(got.Scenes) != 1 {
+		t.Fatalf("concurrent patches lost a field: %+v %v", got, err)
+	}
+}
 
 func TestPostgresPolicyEventsAndCounts(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
@@ -25,28 +69,25 @@ func TestPostgresPolicyEventsAndCounts(t *testing.T) {
 	}
 	defer s.Close()
 	_, _ = s.pool.Exec(ctx, "TRUNCATE audit_events, gateway_counts_minute, policy_changes")
-	_, _ = s.pool.Exec(ctx, `UPDATE gateway_policy SET version=1, body='{"enabled":false,"version":1,"thresholds":{},"scenes":[],"unmatched_action":""}' WHERE id=1`)
+	_, _ = s.pool.Exec(ctx, `UPDATE gateway_policy SET body='{"enabled":false,"scenes":[]}' WHERE id=1`)
 	empty, err := s.Overview(ctx, time.Now().Add(-time.Hour), time.Now())
 	if err != nil || empty.Total != 0 {
 		t.Fatalf("empty overview: %+v %v", empty, err)
 	}
 	p, err := s.Policy(ctx)
-	if err != nil || p.Enabled || p.Version != 1 {
+	if err != nil || p.Enabled {
 		t.Fatalf("initial policy: %+v %v", p, err)
 	}
 	preview, days := 0, 30
-	next := policy.Policy{Version: 1, Scenes: []policy.Scene{{ID: "scene", Name: "cyber", Conditions: []policy.Condition{{Question: "cyber_abuse", Threshold: 0.8}}, Match: policy.Any, Action: policy.Block}}, PreviewChars: &preview, RetentionDays: &days}
-	updated, err := s.UpdatePolicy(ctx, 1, next, "admin")
-	if err != nil || updated.Version != 2 {
+	next := policy.Policy{Scenes: []policy.Scene{{ID: "scene", Name: "cyber", Conditions: []policy.Condition{{Question: "cyber_abuse", Threshold: 0.8}}, Match: policy.Any, Action: policy.Block}}, PreviewChars: &preview, RetentionDays: &days}
+	updated, err := s.UpdatePolicy(ctx, gateway.PolicyUpdate{Replace: &next}, "admin")
+	if err != nil || len(updated.Scenes) != 1 {
 		t.Fatalf("update: %+v %v", updated, err)
-	}
-	if _, err := s.UpdatePolicy(ctx, 1, next, "admin"); !errors.Is(err, gateway.ErrConflict) {
-		t.Fatalf("stale update: %v", err)
 	}
 	if loaded, err := s.Policy(ctx); err != nil || loaded.Scenes[0].ID != "scene" {
 		t.Fatalf("reloaded: %+v %v", loaded, err)
 	}
-	if changes, err := s.Changes(ctx); err != nil || len(changes) != 1 || changes[0].Version != 2 {
+	if changes, err := s.Changes(ctx); err != nil || len(changes) != 1 || changes[0].Before.Enabled || len(changes[0].After.Scenes) != 1 {
 		t.Fatalf("changes: %+v %v", changes, err)
 	}
 	now := time.Now().UTC()
@@ -224,7 +265,7 @@ func TestPolicySnapshotRemainsAvailableDuringDatabaseOutage(t *testing.T) {
 	}
 	s.pool.Close()
 	p, err := s.Policy(context.Background())
-	if err != nil || p.Version < 1 {
+	if err != nil || p.Scenes == nil {
 		t.Fatalf("cached policy: %+v %v", p, err)
 	}
 }

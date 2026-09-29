@@ -11,7 +11,6 @@ import SettingsPage from "./SettingsPage";
 import type { PolicyResponse } from "./policy";
 const policy: PolicyResponse = {
   enabled: true,
-  version: 5,
   preview_chars: null,
   retention_days: 30,
   questions: [
@@ -85,6 +84,22 @@ it("retains edits when saving fails", async () => {
       }) as HTMLInputElement
     ).value,
   ).toBe("2.2");
+});
+it("keeps an unsaved scene edit when another setting changes", () => {
+  const save = vi.fn().mockResolvedValue(undefined);
+  const { rerender } = render(<SettingsPage policy={policy} onSave={save} />);
+  fireEvent.change(screen.getByRole("spinbutton", { name: "血腥程度阈值" }), {
+    target: { value: "2.2" },
+  });
+  rerender(<SettingsPage policy={{ ...policy, enabled: false }} onSave={save} />);
+  expect((screen.getByRole("spinbutton", { name: "血腥程度阈值" }) as HTMLInputElement).value).toBe("2.2");
+  fireEvent.click(screen.getByRole("button", { name: "保存并生效" }));
+  expect(save.mock.calls[0][0].scenes[0].conditions[0].threshold).toBe(2.2);
+});
+it("does not show a scene save for a change made only in global settings", () => {
+  const { rerender } = render(<SettingsPage policy={policy} onSave={vi.fn()} />);
+  rerender(<SettingsPage policy={{ ...policy, enabled: false }} onSave={vi.fn()} />);
+  expect(screen.queryByRole("button", { name: "保存并生效" })).toBeNull();
 });
 it("restores an unpublished draft when returning to the workspace", () => {
   sessionStorage.setItem(

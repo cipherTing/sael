@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -79,6 +80,104 @@ func TestSessionFreezeNeedsStableSessionAndOnlyBlocksMonitoredRequests(t *testin
 	}
 }
 
+func TestSessionFreezeMatchesAHistoryContinuationWithoutExplicitSessionID(t *testing.T) {
+	p := activePolicy()
+	p.SessionBlockOnBlockingReview, p.SessionBlockTTLSeconds = true, 60
+	c := &testClassifier{answers: fullAnswers(map[string]float64{"cyber_abuse": 0.9})}
+	s, store, upstream := makeServer(t, p, c)
+	first := authorizedRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"test","messages":[{"role":"user","content":"setup"},{"role":"assistant","content":"ready"},{"role":"user","content":"danger"}]}`))
+	first.Header.Set("User-Agent", "client/1.0")
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, first)
+	if w.Code != http.StatusForbidden || len(store.blocked) < 2 {
+		t.Fatalf("initial transcript hit did not create exact and scope blocks: status=%d blocks=%d", w.Code, len(store.blocked))
+	}
+	checks := c.calls
+	c.answers = fullAnswers(nil)
+	second := authorizedRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"test","messages":[{"role":"user","content":"setup"},{"role":"assistant","content":"ready"},{"role":"user","content":"danger"},{"role":"assistant","content":"denied"},{"role":"user","content":"continue"}]}`))
+	second.Header.Set("User-Agent", "client/1.9")
+	w = httptest.NewRecorder()
+	s.ServeHTTP(w, second)
+	if w.Code != http.StatusForbidden || c.calls != checks || *upstream != 0 {
+		t.Fatalf("history continuation was not frozen: status=%d classifier=%d upstream=%d", w.Code, c.calls, *upstream)
+	}
+}
+
+func TestSessionFreezeDoesNotBlockASeparateConversationWithSameOpening(t *testing.T) {
+	p := activePolicy()
+	p.SessionBlockOnBlockingReview, p.SessionBlockTTLSeconds = true, 60
+	c := &testClassifier{answers: fullAnswers(map[string]float64{"cyber_abuse": 0.9})}
+	s, store, _ := makeServer(t, p, c)
+	first := authorizedRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"test","messages":[{"role":"user","content":"setup"},{"role":"assistant","content":"ready"},{"role":"user","content":"danger"}]}`))
+	first.Header.Set("User-Agent", "client/1.0")
+	s.ServeHTTP(httptest.NewRecorder(), first)
+	c.answers = fullAnswers(nil)
+	separate := authorizedRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"test","messages":[{"role":"user","content":"setup"},{"role":"assistant","content":"ready"},{"role":"user","content":"different"}]}`))
+	separate.Header.Set("User-Agent", "other-client/1.0")
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, separate)
+	if w.Code != http.StatusCreated || len(store.events) != 1 {
+		t.Fatalf("separate conversation was blocked: status=%d events=%d", w.Code, len(store.events))
+	}
+}
+
+func TestSessionFreezeHistoryAssociationCoversAllMonitoredTextEndpoints(t *testing.T) {
+	cases := []struct {
+		name, path, first, next string
+	}{
+		{"chat", "/v1/chat/completions", `{"model":"test","messages":[{"role":"user","content":"setup"},{"role":"assistant","content":"ready"},{"role":"user","content":"danger"}]}`, `{"model":"test","messages":[{"role":"user","content":"setup"},{"role":"assistant","content":"ready"},{"role":"user","content":"danger"},{"role":"assistant","content":"denied"},{"role":"user","content":"continue"}]}`},
+		{"responses", "/v1/responses", `{"model":"test","input":[{"role":"user","content":"setup"},{"role":"assistant","content":"ready"},{"role":"user","content":"danger"}]}`, `{"model":"test","input":[{"role":"user","content":"setup"},{"role":"assistant","content":"ready"},{"role":"user","content":"danger"},{"role":"assistant","content":"denied"},{"role":"user","content":"continue"}]}`},
+		{"messages", "/v1/messages", `{"model":"test","messages":[{"role":"user","content":"setup"},{"role":"assistant","content":"ready"},{"role":"user","content":"danger"}]}`, `{"model":"test","messages":[{"role":"user","content":"setup"},{"role":"assistant","content":"ready"},{"role":"user","content":"danger"},{"role":"assistant","content":"denied"},{"role":"user","content":"continue"}]}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := activePolicy()
+			p.SessionBlockOnBlockingReview, p.SessionBlockTTLSeconds = true, 60
+			c := &testClassifier{answers: fullAnswers(map[string]float64{"cyber_abuse": 0.9})}
+			s, _, upstream := makeServer(t, p, c)
+			first := authorizedRequest("POST", tc.path, strings.NewReader(tc.first))
+			first.Header.Set("Authorization", "Bearer endpoint-key")
+			first.Header.Set("User-Agent", "client/1.0")
+			initial := httptest.NewRecorder()
+			s.ServeHTTP(initial, first)
+			if initial.Code != http.StatusForbidden {
+				t.Fatalf("initial request was not blocked")
+			}
+			calls := c.calls
+			c.answers = fullAnswers(nil)
+			next := authorizedRequest("POST", tc.path, strings.NewReader(tc.next))
+			next.Header.Set("Authorization", "Bearer endpoint-key")
+			next.Header.Set("User-Agent", "client/1.9")
+			w := httptest.NewRecorder()
+			s.ServeHTTP(w, next)
+			if w.Code != http.StatusForbidden || c.calls != calls || *upstream != 0 {
+				t.Fatalf("continuation escaped freeze: status=%d calls=%d upstream=%d", w.Code, c.calls, *upstream)
+			}
+		})
+	}
+}
+
+func TestSessionFreezeStorageFailureFailsOpenAndDoesNotPretendToFreeze(t *testing.T) {
+	p := activePolicy()
+	p.SessionBlockOnBlockingReview, p.SessionBlockTTLSeconds = true, 60
+	c := &testClassifier{answers: fullAnswers(map[string]float64{"cyber_abuse": 0.9})}
+	s, store, _ := makeServer(t, p, c)
+	store.sessionErr = errors.New("redis unavailable")
+	for i := 0; i < 2; i++ {
+		r := authorizedRequest("POST", "/v1/responses", strings.NewReader(`{"input":"danger"}`))
+		r.Header.Set("Authorization", "Bearer caller")
+		r.Header.Set("Session-Id", "session")
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, r)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("review result changed during storage failure: %d", w.Code)
+		}
+	}
+	if c.calls != 2 || len(store.blocked) != 0 {
+		t.Fatalf("storage failure fabricated a freeze: calls=%d blocks=%v", c.calls, store.blocked)
+	}
+}
+
 func TestBlockEnvelopesMatchSub2apiEndpointBranches(t *testing.T) {
 	for _, tc := range []struct{ endpoint, wantType string }{
 		{"openai_chat", "permission_error"}, {"openai_responses", "api_error"},
@@ -97,6 +196,9 @@ func TestBlockEnvelopesMatchSub2apiEndpointBranches(t *testing.T) {
 			}
 			if w.Code != 403 || response.Error.Type != tc.wantType || response.Error.Code != "prompt_guard_blocked" {
 				t.Fatalf("unexpected rejection: %d %s", w.Code, w.Body.String())
+			}
+			if got := w.Header().Get("X-Sael-Blocked"); got != "prompt_guard" {
+				t.Fatalf("missing Sael block marker: %q", got)
 			}
 			if (tc.endpoint == "anthropic") != (response.Type == "error") {
 				t.Fatal("wrong outer envelope")

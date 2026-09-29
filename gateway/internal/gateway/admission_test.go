@@ -383,12 +383,11 @@ func TestTrustedBearerIsNotChangedByUnusedCredentialHeader(t *testing.T) {
 	}
 }
 
-func TestUnavailableCredentialStoreStillCountsIngress(t *testing.T) {
+func TestUnavailableCredentialStoreDoesNotCountUnknownIngress(t *testing.T) {
 	status := 200
 	c := &testClassifier{}
 	s, st := securityServer(t, activePolicy(), c, &status)
 	st.trustErr = errors.New("unavailable")
-	st.counted = make(chan Count, 1)
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, admissionRequest(`{"input":"hello"}`))
 	if w.Code != 503 || c.calls != 0 {
@@ -396,10 +395,7 @@ func TestUnavailableCredentialStoreStillCountsIngress(t *testing.T) {
 	}
 	select {
 	case count := <-st.counted:
-		if count.Outcome != "gateway_error" {
-			t.Fatal("wrong ingress outcome", count.Outcome)
-		}
+		t.Fatalf("unknown ingress was counted: %+v", count)
 	default:
-		t.Fatal("rejected ingress missing from counters")
 	}
 }

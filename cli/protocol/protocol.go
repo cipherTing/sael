@@ -4,7 +4,7 @@ package protocol
 import "time"
 
 // Version identifies compatible startup handshakes and request formats.
-const Version = 1
+const Version = 2
 
 // Ready is written once to the owning process, never to application logs.
 type Ready struct {
@@ -15,11 +15,12 @@ type Ready struct {
 
 // Request carries an immutable configuration snapshot and an absolute deadline.
 type Request struct {
-	Text     string    `json:"text"`
-	BaseURL  string    `json:"base_url"`
-	APIKey   string    `json:"api_key"`
-	Model    string    `json:"model"`
-	Deadline time.Time `json:"deadline"`
+	Text      string    `json:"text"`
+	Questions []string  `json:"questions"`
+	BaseURL   string    `json:"base_url"`
+	APIKey    string    `json:"api_key"`
+	Model     string    `json:"model"`
+	Deadline  time.Time `json:"deadline"`
 }
 
 // Answer preserves the original probability or graded score.

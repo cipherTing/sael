@@ -17,7 +17,6 @@ export type Scene = {
 export type Policy = {
   trusted_key_idle_days?: number;
   enabled: boolean;
-  version: number;
   scenes: Scene[];
   preview_chars: number | null;
   retention_days: number | null;
@@ -28,6 +27,4 @@ export type Policy = {
 };
 export type PolicyResponse = Policy & { questions: Question[] };
 
-export type PolicyPatch = Partial<Omit<Policy, "version">> & {
-  version: number;
-};
+export type PolicyPatch = Partial<Policy>;

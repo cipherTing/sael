@@ -134,7 +134,7 @@ function SceneRoute({
   onReload,
 }: {
   policy: PolicyResponse;
-  onSave: (p: Policy) => Promise<void>;
+  onSave: (p: Pick<Policy, "scenes">) => Promise<void>;
   onReload: () => void;
 }) {
   const [params] = useSearchParams(),
@@ -425,7 +425,6 @@ function Console() {
                         policy={policy.data}
                         onSave={(next) =>
                           savePolicy({
-                            version: next.version,
                             scenes: next.scenes,
                           })
                         }
