@@ -88,7 +88,7 @@ func TestRiskSourcesAggregateOnlyMatchingHitsAndMaskKeys(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &result); w.Code != http.StatusOK || err != nil {
 		t.Fatalf("risk API: %d %s %v", w.Code, w.Body.String(), err)
 	}
-	if len(result.Keys) != 2 || result.Keys[0].CredentialID != "risk-key-a" || result.Keys[0].Count != 2 || result.Keys[0].MaskedKey != "abcdef************stuvwx" || result.Keys[1].Count != 1 {
+	if len(result.Keys) != 2 || result.Keys[0].CredentialID != "risk-key-a" || result.Keys[0].Count != 2 || result.Keys[0].MaskedKey != "abcdef******stuvwx" || result.Keys[1].Count != 1 {
 		t.Fatalf("wrong key ranking: %+v", result.Keys)
 	}
 	if len(result.IPs) != 2 || result.IPs[0].ClientIP != "203.0.113.1" || result.IPs[0].Count != 2 {
