@@ -18,8 +18,14 @@ export type RequestParameters = {
   thinking_budget?: number;
   previous_response_id?: string;
   conversation_id?: string;
+  image_size?: string;
+  image_quality?: string;
+  image_count?: number;
+  image_output_format?: string;
 };
 export type Event = {
+  content_type?: string;
+  request_bytes?: number;
   credential_id?: string;
   masked_key?: string;
   review_source?: "jev" | "cache";

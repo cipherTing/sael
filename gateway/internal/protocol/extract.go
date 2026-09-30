@@ -126,12 +126,13 @@ func ExtractWithContentType(path, contentType string, body []byte) (Request, err
 		out.HasNonText = true
 		out.Text = strings.TrimSpace(root.Prompt)
 		if strings.HasPrefix(strings.ToLower(contentType), "multipart/") {
-			model, prompt, stream := multipartImageFields(contentType, body)
+			model, prompt, stream, parameters := multipartImageFields(contentType, body)
 			if model != "" {
 				out.Model = model
 			}
 			out.Text = prompt
 			out.Stream = stream
+			out.Parameters = parameters
 		}
 		if path == "/v1/images/variations" {
 			out.Text = ""
@@ -144,10 +145,10 @@ func ExtractWithContentType(path, contentType string, body []byte) (Request, err
 	return out, nil
 }
 
-func multipartImageFields(contentType string, body []byte) (model, prompt string, stream bool) {
+func multipartImageFields(contentType string, body []byte) (model, prompt string, stream bool, options Parameters) {
 	mediaType, params, err := mime.ParseMediaType(contentType)
 	if err != nil || mediaType != "multipart/form-data" || params["boundary"] == "" {
-		return "", "", false
+		return "", "", false, options
 	}
 	reader := multipart.NewReader(bytes.NewReader(body), params["boundary"])
 	for {
@@ -156,7 +157,7 @@ func multipartImageFields(contentType string, body []byte) (model, prompt string
 			break
 		}
 		name := part.FormName()
-		if (name != "model" && name != "prompt" && name != "stream") || part.FileName() != "" {
+		if (name != "model" && name != "prompt" && name != "stream" && name != "size" && name != "quality" && name != "n" && name != "output_format") || part.FileName() != "" {
 			continue
 		}
 		data, readErr := io.ReadAll(part)
@@ -171,9 +172,19 @@ func multipartImageFields(contentType string, body []byte) (model, prompt string
 			prompt = strings.TrimSpace(value)
 		case "stream":
 			stream, _ = strconv.ParseBool(strings.TrimSpace(value))
+		case "size":
+			options.ImageSize = strings.TrimSpace(value)
+		case "quality":
+			options.ImageQuality = strings.TrimSpace(value)
+		case "n":
+			if count, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64); err == nil {
+				options.ImageCount = &count
+			}
+		case "output_format":
+			options.ImageOutputFormat = strings.TrimSpace(value)
 		}
 	}
-	return model, prompt, stream
+	return model, prompt, stream, options
 }
 
 func geminiModel(path string) string {

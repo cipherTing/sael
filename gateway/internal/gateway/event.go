@@ -35,7 +35,7 @@ func textPreview(text string) string {
 func (e *Event) Redact() {
 	e.Text = privacy.RedactText(e.Text)
 	e.TextPreview = privacy.RedactText(e.TextPreview)
-	for _, value := range []*string{&e.UserAgent, &e.SessionID, &e.ClientRequestID, &e.Parameters.ReasoningEffort, &e.Parameters.ServiceTier, &e.Parameters.ToolChoice, &e.Parameters.ResponseFormat, &e.Parameters.ThinkingType, &e.Parameters.PreviousResponseID, &e.Parameters.ConversationID} {
+	for _, value := range []*string{&e.UserAgent, &e.SessionID, &e.ClientRequestID, &e.Parameters.ReasoningEffort, &e.Parameters.ServiceTier, &e.Parameters.ToolChoice, &e.Parameters.ResponseFormat, &e.Parameters.ThinkingType, &e.Parameters.PreviousResponseID, &e.Parameters.ConversationID, &e.Parameters.ImageSize, &e.Parameters.ImageQuality, &e.Parameters.ImageOutputFormat} {
 		*value = privacy.RedactText(*value)
 	}
 }

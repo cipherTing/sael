@@ -23,6 +23,10 @@ type Parameters struct {
 	ThinkingBudget      *int64   `json:"thinking_budget,omitempty"`
 	PreviousResponseID  string   `json:"previous_response_id,omitempty"`
 	ConversationID      string   `json:"conversation_id,omitempty"`
+	ImageSize           string   `json:"image_size,omitempty"`
+	ImageQuality        string   `json:"image_quality,omitempty"`
+	ImageCount          *int64   `json:"image_count,omitempty"`
+	ImageOutputFormat   string   `json:"image_output_format,omitempty"`
 }
 
 func extractParameters(path string, body []byte) Parameters {
@@ -92,6 +96,11 @@ func extractParameters(path string, body []byte) Parameters {
 		}
 		_ = json.Unmarshal(root["output_config"], &output)
 		p.ReasoningEffort = output.Effort
+	case "/v1/images/generations", "/v1/images/edits":
+		_ = json.Unmarshal(root["size"], &p.ImageSize)
+		_ = json.Unmarshal(root["quality"], &p.ImageQuality)
+		p.ImageCount = optionalNumber[int64](root["n"])
+		_ = json.Unmarshal(root["output_format"], &p.ImageOutputFormat)
 	}
 	return p
 }

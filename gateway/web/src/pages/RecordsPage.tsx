@@ -13,7 +13,6 @@ import {
   ArrowLeft,
   ArrowRight,
   Columns3,
-  ChevronDown,
   Clock3,
   Database,
   FlaskConical,
@@ -73,7 +72,6 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
     [model, setModel] = useState(params.get("model") || ""),
     [expandedTextId, setExpandedTextId] = useState(""),
     [visibility, setVisibility] = useState<VisibilityState>({
-      request_id: false,
       session_id: false,
       user_agent: false,
       reasoning_effort: false,
@@ -97,6 +95,13 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
       request<Event>(`/admin/events/${encodeURIComponent(selected)}`),
     enabled: Boolean(selected),
   });
+  const current = detail.data?.id === selected ? detail.data : undefined;
+  const previewChars = Array.from(current?.text_preview || "").length;
+  const canLoadFullText = Boolean(
+    current?.text_available &&
+    current.text_chars !== undefined &&
+    current.text_chars > previewChars,
+  );
   const fullText = useQuery({
     queryKey: ["event-text", selected],
     queryFn: ({ signal }) =>
@@ -104,7 +109,7 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
         `/admin/events/${encodeURIComponent(selected)}/text`,
         { signal },
       ),
-    enabled: Boolean(selected) && expandedTextId === selected,
+    enabled: canLoadFullText && expandedTextId === selected,
     staleTime: Infinity,
     retry: false,
   });
@@ -113,9 +118,9 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
     if (detail.error) notifyRetry(detail.error, () => void detail.refetch());
   }, [result.error, result.refetch, detail.error, detail.refetch]);
   useEffect(() => {
-    if (fullText.error)
+    if (fullText.error && canLoadFullText)
       notifyRetry(fullText.error, () => void fullText.refetch());
-  }, [fullText.error, fullText.refetch]);
+  }, [fullText.error, fullText.refetch, canLoadFullText]);
   useEffect(() => {
     setSearch(params.get("search") || "");
     setClientIP(params.get("client_ip") || "");
@@ -260,7 +265,13 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
           {
             id: "reasoning_effort",
             header: "推理强度",
-            cell: ({ row }) => row.original.parameters?.reasoning_effort || "—",
+            cell: ({ row }) =>
+              row.original.parameters?.reasoning_effort
+                ? formatParameter(
+                    "reasoning_effort",
+                    row.original.parameters.reasoning_effort,
+                  )
+                : "—",
           },
           {
             id: "scene",
@@ -316,13 +327,6 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
               </span>
             ),
           },
-          {
-            id: "request_id",
-            header: "请求 ID",
-            cell: ({ row }) => (
-              <span className="record-id">{row.original.request_id}</span>
-            ),
-          },
         ] satisfies ColumnDef<Event>[]
       ).filter((column) => kind === "hit" || column.id !== "risk"),
     [kind],
@@ -334,20 +338,39 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
     state: { columnVisibility: visibility },
     onColumnVisibilityChange: setVisibility,
   });
-  const current = detail.data?.id === selected ? detail.data : undefined;
-  const showingFullText = expandedTextId === selected && Boolean(fullText.data);
+  const showingFullText =
+    canLoadFullText && expandedTextId === selected && Boolean(fullText.data);
   const displayedText = showingFullText
     ? fullText.data!.text
     : current?.text_preview || "";
+  const visibleTextChars = showingFullText
+    ? (current?.text_chars ?? Array.from(displayedText).length)
+    : previewChars;
+  const showFullTextCount =
+    showingFullText ||
+    !!(
+      current?.text_available &&
+      current.text_chars !== undefined &&
+      current.text_chars !== previewChars
+    );
+  const showOriginalInputCount =
+    current?.input_chars !== undefined &&
+    current.input_chars !== visibleTextChars &&
+    (!showFullTextCount || current.input_chars !== current.text_chars);
   const requestParameters = Object.entries(current?.parameters || {}).filter(
     ([key, value]) =>
       value !== undefined &&
+      value !== null &&
       value !== "" &&
-      parameterLabels[key] &&
-      !(
-        key === "conversation_id" &&
-        (value === current?.session_id || value === current?.session_ref)
-      ),
+      parameterLabels[key],
+  );
+  const hasMoreInformation = Boolean(
+    current?.user_agent ||
+    typeof current?.stream === "boolean" ||
+    current?.has_non_text_input === true ||
+    current?.content_type ||
+    current?.request_bytes !== undefined ||
+    requestParameters.length,
   );
   return (
     <>
@@ -393,7 +416,7 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
             <span>关键词</span>
             <Input
               aria-label="搜索记录"
-              placeholder="文本、模型或请求 ID"
+              placeholder="文本或模型"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
@@ -749,7 +772,9 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
                   <EndpointLabel
                     id={current.endpoint_group || current.protocol}
                   />
-                  <span className="record-model">{current.model || "—"}</span>
+                  {current.model && (
+                    <span className="record-model">{current.model}</span>
+                  )}
                   {(current.image_operation ||
                     current.protocol.startsWith("openai_images")) && (
                     <span className="subtle-badge">
@@ -761,21 +786,86 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
                   )}
                   <time>{fullDate(current.time)}</time>
                 </div>
+                {(current.masked_key ||
+                  current.client_ip ||
+                  current.session_id ||
+                  current.session_ref) && (
+                  <dl className="record-core-facts">
+                    {current.masked_key && (
+                      <div>
+                        <dt>调用密钥</dt>
+                        <dd>
+                          <code>{current.masked_key}</code>
+                          <CopyButton
+                            value={current.masked_key}
+                            label="复制调用密钥"
+                          />
+                        </dd>
+                      </div>
+                    )}
+                    {current.client_ip && (
+                      <div>
+                        <dt>来源 IP</dt>
+                        <dd>
+                          <span>{current.client_ip}</span>
+                          <CopyButton
+                            value={current.client_ip}
+                            label="复制来源 IP"
+                          />
+                        </dd>
+                      </div>
+                    )}
+                    {(current.session_id || current.session_ref) && (
+                      <div>
+                        <dt>
+                          {current.session_source === "history"
+                            ? "会话"
+                            : "会话 ID"}
+                        </dt>
+                        <dd>
+                          {current.session_source === "history" ? (
+                            <span>{`历史关联 · ${(current.session_ref || current.session_id || "").slice(0, 12)}`}</span>
+                          ) : (
+                            <>
+                              <span>
+                                {current.session_id || current.session_ref}
+                              </span>
+                              <CopyButton
+                                value={
+                                  current.session_id ||
+                                  current.session_ref ||
+                                  ""
+                                }
+                                label="复制会话 ID"
+                              />
+                            </>
+                          )}
+                        </dd>
+                      </div>
+                    )}
+                  </dl>
+                )}
               </section>
               <section className="record-input-panel" aria-label="用户输入">
                 <div className="record-input-header">
                   <div className="record-input-heading">
                     <h3>{showingFullText ? "用户输入全文" : "用户输入预览"}</h3>
                     <div className="prompt-text-meta">
-                      {!showingFullText &&
-                        `预览 ${count(Array.from(current.text_preview || "").length)} 字`}
-                      {current.text_available &&
-                        current.text_chars !== undefined && (
-                          <span>
-                            {!showingFullText && " · "}全文{" "}
-                            <b>{count(current.text_chars)} 字</b>
-                          </span>
-                        )}
+                      {!showingFullText && `预览 ${count(previewChars)} 字`}
+                      {showFullTextCount && (
+                        <span>
+                          {!showingFullText && " · "}全文{" "}
+                          <b>
+                            {count(current.text_chars ?? visibleTextChars)} 字
+                          </b>
+                        </span>
+                      )}
+                      {showOriginalInputCount && (
+                        <span>
+                          {(showFullTextCount || !showingFullText) && " · "}
+                          原始输入 {count(current.input_chars!)} 字
+                        </span>
+                      )}
                       {!current.text_available && current.text_preview && (
                         <span className="subtle-badge">仅保留预览</span>
                       )}
@@ -785,13 +875,13 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
                     {displayedText && (
                       <CopyButton value={displayedText} label="复制用户输入" />
                     )}
-                    {current.text_available && (
+                    {canLoadFullText && (
                       <Button
                         variant="outline"
                         size="sm"
                         disabled={fullText.isFetching}
                         onClick={() => {
-                          if (fullText.isFetching) return;
+                          if (!canLoadFullText || fullText.isFetching) return;
                           if (showingFullText) setExpandedTextId("");
                           else if (fullText.isError) {
                             setExpandedTextId(selected);
@@ -851,122 +941,52 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
                   }
                 />
               )}
-              <section className="record-detail-source" aria-label="请求来源">
-                <h3>请求来源</h3>
-                <dl className="record-source-facts">
-                  <div>
-                    <dt>调用密钥</dt>
-                    <dd>
-                      {current.masked_key ? (
-                        <span className="detail-value-actions">
-                          <code>{current.masked_key}</code>
-                          <CopyButton
-                            value={current.masked_key}
-                            label="复制调用密钥"
-                          />
-                        </span>
-                      ) : (
-                        "—"
-                      )}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>来源 IP</dt>
-                    <dd>
-                      {current.client_ip ? (
-                        <span className="detail-value-actions">
-                          <span>{current.client_ip}</span>
-                          <CopyButton
-                            value={current.client_ip}
-                            label="复制来源 IP"
-                          />
-                        </span>
-                      ) : (
-                        "—"
-                      )}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>
-                      {current.session_source === "history"
-                        ? "会话"
-                        : "会话 ID"}
-                    </dt>
-                    <dd>
-                      {current.session_source === "history" ? (
-                        `历史关联 · ${(current.session_ref || current.session_id || "—").slice(0, 12)}`
-                      ) : current.session_id ? (
-                        <span className="detail-value-actions">
-                          <span>{current.session_id}</span>
-                          <CopyButton
-                            value={current.session_id}
-                            label="复制会话 ID"
-                          />
-                        </span>
-                      ) : (
-                        "—"
-                      )}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>请求 ID</dt>
-                    <dd>
-                      <span className="detail-value-actions">
-                        <code>{current.request_id}</code>
-                        <CopyButton
-                          value={current.request_id}
-                          label="复制请求 ID"
-                        />
-                      </span>
-                    </dd>
-                  </div>
-                  {current.client_request_id && (
-                    <div className="full-fact">
-                      <dt>客户端请求 ID</dt>
-                      <dd>{current.client_request_id}</dd>
-                    </div>
-                  )}
-                  <div className="full-fact">
-                    <dt>客户端</dt>
-                    <dd>{current.user_agent || "—"}</dd>
-                  </div>
-                </dl>
-              </section>
-              <details className="record-detail-parameters">
-                <summary>
-                  <ChevronDown size={13} />
-                  请求参数<span>{requestParameters.length + 2} 项</span>
-                </summary>
-                <dl className="detail-facts">
-                  <div className="full-fact">
-                    <dt>端点</dt>
-                    <dd>
-                      {current.endpoint ||
-                        endpoints.find(
-                          (endpoint) => endpoint.id === current.protocol,
-                        )?.path ||
-                        "—"}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>响应方式</dt>
-                    <dd>{current.stream ? "流式" : "非流式"}</dd>
-                  </div>
-                  {requestParameters.map(([key, value]) => (
-                    <div
-                      key={key}
-                      className={key.includes("_id") ? "full-fact" : ""}
-                    >
-                      <dt>{parameterLabels[key]}</dt>
-                      <dd>
-                        {typeof value === "number"
-                          ? count(value)
-                          : String(value)}
-                      </dd>
-                    </div>
-                  ))}
-                </dl>
-              </details>
+              {hasMoreInformation && (
+                <section className="record-more-info" aria-label="更多信息">
+                  <h3>更多信息</h3>
+                  <dl className="record-secondary-facts">
+                    {current.content_type && (
+                      <div>
+                        <dt>内容类型</dt>
+                        <dd>{current.content_type}</dd>
+                      </div>
+                    )}
+                    {current.request_bytes !== undefined && (
+                      <div>
+                        <dt>请求体大小</dt>
+                        <dd>{formatRequestBytes(current.request_bytes)}</dd>
+                      </div>
+                    )}
+                    {current.user_agent && (
+                      <div className="full-fact">
+                        <dt>客户端</dt>
+                        <dd>{current.user_agent}</dd>
+                      </div>
+                    )}
+                    {typeof current.stream === "boolean" && (
+                      <div>
+                        <dt>响应方式</dt>
+                        <dd>{current.stream ? "流式" : "非流式"}</dd>
+                      </div>
+                    )}
+                    {current.has_non_text_input === true && (
+                      <div>
+                        <dt>输入内容</dt>
+                        <dd>包含非文本输入</dd>
+                      </div>
+                    )}
+                    {requestParameters.map(([key, value]) => (
+                      <div
+                        key={key}
+                        className={key.includes("_id") ? "full-fact" : ""}
+                      >
+                        <dt>{parameterLabels[key]}</dt>
+                        <dd>{formatParameter(key, value)}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </section>
+              )}
             </div>
           )}
         </SheetContent>
@@ -989,6 +1009,55 @@ const parameterLabels: Record<string, string> = {
   response_format: "输出格式",
   thinking_type: "思考模式",
   thinking_budget: "思考预算",
-  previous_response_id: "前序响应 ID",
-  conversation_id: "对话 ID",
+  image_size: "图片尺寸",
+  image_quality: "图片质量",
+  image_count: "图片数量",
+  image_output_format: "图片格式",
 };
+
+const parameterValueNames: Record<string, Record<string, string>> = {
+  reasoning_effort: {
+    none: "无",
+    minimal: "最低",
+    low: "低",
+    medium: "中",
+    high: "高",
+    xhigh: "极高",
+  },
+  service_tier: {
+    auto: "自动",
+    default: "标准",
+    flex: "弹性",
+    priority: "优先",
+  },
+  tool_choice: { auto: "自动", none: "不调用", required: "必须调用" },
+  response_format: {
+    text: "文本",
+    json_object: "JSON 对象",
+    json_schema: "结构化 JSON",
+  },
+  thinking_type: { enabled: "已开启", disabled: "已关闭", adaptive: "自适应" },
+  image_quality: {
+    auto: "自动",
+    standard: "标准",
+    hd: "高清",
+    low: "低",
+    medium: "中",
+    high: "高",
+  },
+  image_size: { auto: "自动" },
+  image_output_format: { png: "PNG", jpeg: "JPEG", webp: "WebP" },
+};
+function formatParameter(key: string, value: string | number) {
+  if (typeof value === "number") {
+    const formatted = Number.isInteger(value) ? count(value) : String(value);
+    return key === "image_count" ? `${formatted} 张` : formatted;
+  }
+  return parameterValueNames[key]?.[value] || value;
+}
+function formatRequestBytes(bytes: number) {
+  if (bytes < 1024) return `${count(bytes)} B`;
+  const units = ["KiB", "MiB", "GiB"];
+  const exponent = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), 3);
+  return `${new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 2 }).format(bytes / 1024 ** exponent)} ${units[exponent - 1]}`;
+}

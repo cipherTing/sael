@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"mime"
 	"net/http"
 	"net/http/httputil"
 	"net/netip"
@@ -17,6 +18,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/cipherTing/sael/gateway/internal/policy"
 	"github.com/cipherTing/sael/gateway/internal/privacy"
@@ -43,6 +45,8 @@ type configuredClassifier interface {
 
 // Event records one hit or classifier failure.
 type Event struct {
+	ContentType     string              `json:"content_type,omitempty"`
+	RequestBytes    int64               `json:"request_bytes,omitempty"`
 	ReviewSource    string              `json:"review_source,omitempty"`
 	CredentialID    string              `json:"credential_id,omitempty"`
 	MaskedKey       string              `json:"masked_key,omitempty"`
@@ -473,9 +477,11 @@ func shortSessionRef(value string) string {
 }
 
 func (s *Server) baseEvent(r *http.Request, requestID string, meta protocol.Request, p policy.Policy) Event {
+	contentType, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	event := Event{ID: newID(), Time: time.Now().UTC(), RequestID: requestID,
 		Protocol: meta.Protocol, EndpointGroup: protocol.Group(meta.Protocol), ImageOperation: protocol.ImageOperation(meta.Protocol), Endpoint: r.URL.Path, Model: meta.Model, Stream: meta.Stream,
-		HasNonText: meta.HasNonText, Text: meta.Text,
+		HasNonText: meta.HasNonText, Text: meta.Text, InputChars: utf8.RuneCountInString(meta.Text),
+		ContentType: contentType, RequestBytes: r.ContentLength,
 		Parameters: meta.Parameters, ClientIP: s.clientIP(r), UserAgent: privacy.RedactText(r.UserAgent()),
 		SessionID: meta.SessionID, ClientRequestID: requestHeader(r, "X-Client-Request-Id", "X-Request-Id")}
 	if state, ok := r.Context().Value(forwardStateKey{}).(*forwardState); ok {

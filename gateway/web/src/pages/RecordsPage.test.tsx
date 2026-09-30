@@ -223,7 +223,7 @@ it("shows request context and keeps below-threshold scores collapsed", async () 
   expect(screen.getAllByRole("button", { name: "复制会话 ID" })).toHaveLength(
     1,
   );
-  expect(screen.getByText("high")).toBeTruthy();
+  expect(screen.getByText("高")).toBeTruthy();
   expect(screen.getByText("2,048")).toBeTruthy();
   const hidden = screen
     .getByText("未达到阈值", { exact: false })
@@ -246,7 +246,7 @@ it("shows request context and keeps below-threshold scores collapsed", async () 
   );
 });
 
-it("puts the prompt before risk and source information with the testing action in its fixed header", async () => {
+it("keeps core caller information before input and scores with secondary details below and testing in the fixed header", async () => {
   const item = {
     ...event,
     masked_key: "sk-a********9876",
@@ -271,16 +271,286 @@ it("puts the prompt before risk and source information with the testing action i
   );
   expect(
     headings.findIndex((text) => text?.startsWith("达到阈值")),
-  ).toBeLessThan(headings.indexOf("请求来源"));
+  ).toBeLessThan(headings.indexOf("更多信息"));
+  const core = within(dialog).getByRole("region", { name: "处理摘要" });
+  expect(within(core).getByText("sk-a********9876")).toBeTruthy();
+  expect(within(core).getByText("203.0.113.7")).toBeTruthy();
+  expect(within(core).getByText("session-123")).toBeTruthy();
   expect(
     within(dialog)
       .getByRole("link", { name: "用此记录试算" })
       .closest("[data-slot=sheet-header]"),
   ).toBeTruthy();
   expect(within(dialog).getAllByText("session-123")).toHaveLength(1);
-  const parameters = within(dialog).getByText("请求参数").closest("details")!;
-  expect(parameters.open).toBe(false);
-  expect(parameters.textContent).not.toContain("session-123");
+  const secondary = within(dialog).getByRole("region", { name: "更多信息" });
+  expect(secondary.closest("details")).toBeNull();
+  expect(secondary.textContent).not.toContain("session-123");
+  expect(within(dialog).queryByText("请求来源")).toBeNull();
+  expect(within(dialog).queryByText("请求参数")).toBeNull();
+});
+
+it("removes both request IDs from details, optional columns and the visible search hint", async () => {
+  const item = { ...event, client_request_id: "client-request-secret" };
+  vi.mocked(request).mockImplementation(async (path) =>
+    path === "/admin/events/event-1" ? item : [item],
+  );
+  mount();
+  fireEvent.click(
+    await screen.findByRole("row", { name: "查看请求 request-1" }),
+  );
+  const dialog = await screen.findByRole("dialog");
+  await within(dialog).findByText("current user text");
+  expect(within(dialog).queryByText("request-1")).toBeNull();
+  expect(within(dialog).queryByText("client-request-secret")).toBeNull();
+  expect(within(dialog).queryByText("请求 ID")).toBeNull();
+  expect(
+    within(dialog).queryByRole("button", { name: "复制请求 ID" }),
+  ).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Close" }));
+  expect(
+    (screen.getByRole("textbox", { name: "搜索记录" }) as HTMLInputElement)
+      .placeholder,
+  ).not.toContain("请求 ID");
+  fireEvent.keyDown(screen.getByRole("button", { name: "显示列" }), {
+    key: "Enter",
+  });
+  await screen.findByRole("menuitemcheckbox", { name: "客户端" });
+  expect(
+    screen.queryByRole("menuitemcheckbox", { name: "请求 ID" }),
+  ).toBeNull();
+});
+
+it("shows meaningful inbound parameters by default with Chinese known enums and exact decimals", async () => {
+  const item = {
+    ...event,
+    has_non_text_input: true,
+    user_agent: "codex-test/1",
+    parameters: {
+      reasoning_effort: "high",
+      service_tier: "priority",
+      max_output_tokens: 2048,
+      temperature: 0.123456789,
+      top_p: 0,
+      tool_count: 2,
+      tool_choice: "required",
+      response_format: "json_schema",
+      thinking_type: "enabled",
+      thinking_budget: 4096,
+    },
+  };
+  vi.mocked(request).mockImplementation(async (path) =>
+    path === "/admin/events/event-1" ? item : [item],
+  );
+  mount();
+  fireEvent.click(
+    await screen.findByRole("row", { name: "查看请求 request-1" }),
+  );
+  const more = await screen.findByRole("region", { name: "更多信息" });
+  expect(within(more).getByText("高")).toBeTruthy();
+  expect(within(more).getByText("优先")).toBeTruthy();
+  expect(within(more).getByText("2,048")).toBeTruthy();
+  expect(within(more).getByText("0.123456789")).toBeTruthy();
+  expect(within(more).getByText("0")).toBeTruthy();
+  expect(within(more).getByText("必须调用")).toBeTruthy();
+  expect(within(more).getByText("结构化 JSON")).toBeTruthy();
+  expect(within(more).getByText("已开启")).toBeTruthy();
+  expect(within(more).getByText("包含非文本输入")).toBeTruthy();
+  expect(within(more).getByText("codex-test/1")).toBeTruthy();
+});
+
+it("preserves future enum values and omits missing fields rather than inferring them", async () => {
+  const item = {
+    ...event,
+    stream: undefined,
+    has_non_text_input: undefined,
+    user_agent: undefined,
+    client_ip: undefined,
+    masked_key: undefined,
+    session_id: undefined,
+    parameters: {
+      reasoning_effort: "future-effort",
+      service_tier: "future-tier",
+      previous_response_id: "resp-old",
+    },
+  } as unknown as Event;
+  vi.mocked(request).mockImplementation(async (path) =>
+    path === "/admin/events/event-1" ? item : [item],
+  );
+  mount();
+  fireEvent.click(
+    await screen.findByRole("row", { name: "查看请求 request-1" }),
+  );
+  const dialog = await screen.findByRole("dialog");
+  const more = await within(dialog).findByRole("region", { name: "更多信息" });
+  expect(within(more).getByText("future-effort")).toBeTruthy();
+  expect(within(more).getByText("future-tier")).toBeTruthy();
+  expect(within(more).queryByText("resp-old")).toBeNull();
+  for (const label of [
+    "响应方式",
+    "客户端",
+    "非文本输入",
+    "调用密钥",
+    "来源 IP",
+    "会话 ID",
+  ])
+    expect(within(dialog).queryByText(label)).toBeNull();
+  expect(within(more).queryByText("模型")).toBeNull();
+  expect(within(more).queryByText("请求时间")).toBeNull();
+  expect(within(more).queryByText("端点")).toBeNull();
+});
+
+it("shows only explicitly supplied image settings with readable real values", async () => {
+  const item = {
+    ...event,
+    protocol: "openai_images",
+    endpoint: "/v1/images/edits",
+    image_operation: "edit" as const,
+    parameters: {
+      image_size: "1536x1024",
+      image_quality: "high",
+      image_count: 2,
+      image_output_format: "png",
+    },
+  };
+  vi.mocked(request).mockImplementation(async (path) =>
+    path === "/admin/events/event-1" ? item : [item],
+  );
+  mount();
+  fireEvent.click(
+    await screen.findByRole("row", { name: "查看请求 request-1" }),
+  );
+  const more = await screen.findByRole("region", { name: "更多信息" });
+  expect(within(more).getByText("1536x1024")).toBeTruthy();
+  expect(within(more).getByText("高")).toBeTruthy();
+  expect(within(more).getByText("2 张")).toBeTruthy();
+  expect(within(more).getByText("PNG")).toBeTruthy();
+  expect(within(more).queryByText("采样温度")).toBeNull();
+});
+
+it("does not supply image defaults absent from an earlier record", async () => {
+  const item = {
+    ...event,
+    protocol: "openai_images",
+    image_operation: "generation" as const,
+    parameters: {},
+  };
+  vi.mocked(request).mockImplementation(async (path) =>
+    path === "/admin/events/event-1" ? item : [item],
+  );
+  mount();
+  fireEvent.click(
+    await screen.findByRole("row", { name: "查看请求 request-1" }),
+  );
+  const more = await screen.findByRole("region", { name: "更多信息" });
+  for (const label of ["图片尺寸", "图片质量", "图片数量", "图片格式"])
+    expect(within(more).queryByText(label)).toBeNull();
+});
+
+it("omits an empty additional-information section when nothing was recorded", async () => {
+  const item = {
+    ...event,
+    stream: undefined,
+    has_non_text_input: undefined,
+    user_agent: undefined,
+    parameters: undefined,
+  } as unknown as Event;
+  vi.mocked(request).mockImplementation(async (path) =>
+    path === "/admin/events/event-1" ? item : [item],
+  );
+  mount();
+  fireEvent.click(
+    await screen.findByRole("row", { name: "查看请求 request-1" }),
+  );
+  const dialog = await screen.findByRole("dialog");
+  await within(dialog).findByText("current user text");
+  expect(within(dialog).queryByRole("region", { name: "更多信息" })).toBeNull();
+});
+
+it("shows long client and request parameter values fully by default without disclosure controls", async () => {
+  const client = `long-client/1 ${"framework-detail ".repeat(20)}`;
+  const outputFormat = `resp-${"r".repeat(180)}`;
+  const contentType = `multipart/form-data; boundary=${"a".repeat(130)}`;
+  const item = {
+    ...event,
+    user_agent: client,
+    content_type: contentType,
+    parameters: {
+      max_output_tokens: 2048,
+      response_format: outputFormat,
+    },
+  };
+  vi.mocked(request).mockImplementation(async (path) =>
+    path === "/admin/events/event-1" ? item : [item],
+  );
+  mount();
+  fireEvent.click(
+    await screen.findByRole("row", { name: "查看请求 request-1" }),
+  );
+  const more = await screen.findByRole("region", { name: "更多信息" });
+  expect(within(more).getByText(client.trim()).closest("details")).toBeNull();
+  expect(within(more).getByText(outputFormat).closest("details")).toBeNull();
+  expect(within(more).getByText(contentType).closest("details")).toBeNull();
+  expect(within(more).getByText("2,048").closest("details")).toBeNull();
+  expect(within(more).queryByLabelText("展开客户端")).toBeNull();
+});
+
+it("shows recorded inbound body size and content type without inventing absent request metadata", async () => {
+  const item = {
+    ...event,
+    content_type: "application/json; charset=utf-8",
+    request_bytes: 1536,
+  };
+  vi.mocked(request).mockImplementation(async (path) =>
+    path === "/admin/events/event-1" ? item : [item],
+  );
+  mount();
+  fireEvent.click(
+    await screen.findByRole("row", { name: "查看请求 request-1" }),
+  );
+  const more = await screen.findByRole("region", { name: "更多信息" });
+  expect(
+    within(more).getByText("application/json; charset=utf-8"),
+  ).toBeTruthy();
+  expect(within(more).getByText("1.5 KiB")).toBeTruthy();
+  expect(within(more).queryByText("请求 ID")).toBeNull();
+});
+
+it("shows original input length next to the preview only when it differs from the displayed counts", async () => {
+  const item = {
+    ...event,
+    text_preview: "短预览",
+    text_chars: 200,
+    input_chars: 500,
+  };
+  vi.mocked(request).mockImplementation(async (path) =>
+    path === "/admin/events/event-1" ? item : [item],
+  );
+  mount();
+  fireEvent.click(
+    await screen.findByRole("row", { name: "查看请求 request-1" }),
+  );
+  const input = await screen.findByRole("region", { name: "用户输入" });
+  expect(within(input).getByText(/原始输入 500 字/)).toBeTruthy();
+  expect(within(input).getByText("200 字")).toBeTruthy();
+});
+
+it("does not duplicate the original input count when it already matches the full-text count", async () => {
+  const item = {
+    ...event,
+    text_preview: "短预览",
+    text_chars: 200,
+    input_chars: 200,
+  };
+  vi.mocked(request).mockImplementation(async (path) =>
+    path === "/admin/events/event-1" ? item : [item],
+  );
+  mount();
+  fireEvent.click(
+    await screen.findByRole("row", { name: "查看请求 request-1" }),
+  );
+  const input = await screen.findByRole("region", { name: "用户输入" });
+  expect(within(input).getByText("200 字")).toBeTruthy();
+  expect(within(input).queryByText(/原始输入/)).toBeNull();
 });
 
 it("shows a single short historical conversation reference without exposing its hash or algorithm", async () => {
@@ -334,11 +604,14 @@ it("keeps cache records without samples free of invented risk scores and Jev dur
 });
 
 it("copies the currently displayed text and never shows an earlier record's full text in another detail", async () => {
+  const fullText = "current user text，第一条完整内容";
+  const first = { ...event, text_chars: Array.from(fullText).length };
   const another = {
     ...event,
     id: "event-2",
     request_id: "request-2",
     text_preview: "另一条预览",
+    text_chars: 5,
   };
   const writeText = vi.fn().mockResolvedValue(undefined);
   Object.defineProperty(navigator, "clipboard", {
@@ -346,11 +619,10 @@ it("copies the currently displayed text and never shows an earlier record's full
     value: { writeText },
   });
   vi.mocked(request).mockImplementation(async (path) => {
-    if (path === "/admin/events/event-1/text")
-      return { text: "第一条完整内容" };
-    if (path === "/admin/events/event-1") return event;
+    if (path === "/admin/events/event-1/text") return { text: fullText };
+    if (path === "/admin/events/event-1") return first;
     if (path === "/admin/events/event-2") return another;
-    return [event, another];
+    return [first, another];
   });
   mount();
   fireEvent.click(
@@ -361,15 +633,13 @@ it("copies the currently displayed text and never shows an earlier record's full
     expect(writeText).toHaveBeenLastCalledWith("current user text"),
   );
   fireEvent.click(screen.getByRole("button", { name: "查看全文" }));
-  await screen.findByText("第一条完整内容");
+  await screen.findByText(fullText);
   fireEvent.click(screen.getByRole("button", { name: "复制用户输入" }));
-  await waitFor(() =>
-    expect(writeText).toHaveBeenLastCalledWith("第一条完整内容"),
-  );
+  await waitFor(() => expect(writeText).toHaveBeenLastCalledWith(fullText));
   fireEvent.click(screen.getByRole("button", { name: "Close" }));
   fireEvent.click(screen.getByRole("row", { name: "查看请求 request-2" }));
   await screen.findByText("另一条预览");
-  expect(screen.queryByText("第一条完整内容")).toBeNull();
+  expect(screen.queryByText(fullText)).toBeNull();
   expect(
     vi
       .mocked(request)
@@ -398,6 +668,8 @@ it("shows the masked caller key in both list and cache detail without fake score
 });
 
 it("loads the redacted full text only on request and can return to the explicit preview", async () => {
+  const preview = "前 500 字预览" + "字".repeat(491);
+  const fullValue = preview + "完整的已去敏用户输入 [REDACTED]";
   let resolveText!: (value: { text: string }) => void;
   const full = new Promise<{ text: string }>((resolve) => {
     resolveText = resolve;
@@ -407,9 +679,9 @@ it("loads the redacted full text only on request and can return to the explicit 
     kind: "warning" as const,
     error_kind: "classifier_input_too_long",
     text: undefined,
-    text_preview: "前 500 字预览",
+    text_preview: preview,
     text_available: true,
-    text_chars: 750000,
+    text_chars: Array.from(fullValue).length,
     input_chars: 750000,
     input_tokens_estimated: 618802,
     jev_input_limit: 60000,
@@ -424,7 +696,7 @@ it("loads the redacted full text only on request and can return to the explicit 
     await screen.findByRole("row", { name: "查看请求 request-1" }),
   );
   await screen.findByRole("heading", { name: "用户输入预览" });
-  expect(screen.getByText("750,000 字")).toBeTruthy();
+  expect(screen.getByText(/原始输入 750,000 字/)).toBeTruthy();
   expect(screen.getByText("618,802 Token")).toBeTruthy();
   expect(vi.mocked(request).mock.calls.some(([p]) => p.endsWith("/text"))).toBe(
     false,
@@ -444,14 +716,14 @@ it("loads the redacted full text only on request and can return to the explicit 
       vi.mocked(request).mock.calls.filter(([p]) => p.endsWith("/text")),
     ).toHaveLength(1),
   );
-  resolveText({ text: "完整的已去敏用户输入 [REDACTED]" });
-  await screen.findByText("完整的已去敏用户输入 [REDACTED]");
+  resolveText({ text: fullValue });
+  await screen.findByText(fullValue);
   expect(screen.getByRole("heading", { name: "用户输入全文" })).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "返回预览" }));
-  expect(screen.getByText("前 500 字预览")).toBeTruthy();
-  expect(screen.queryByText("完整的已去敏用户输入 [REDACTED]")).toBeNull();
+  expect(screen.getByText(preview)).toBeTruthy();
+  expect(screen.queryByText(fullValue)).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "查看全文" }));
-  await screen.findByText("完整的已去敏用户输入 [REDACTED]");
+  await screen.findByText(fullValue);
   expect(
     vi.mocked(request).mock.calls.filter(([p]) => p.endsWith("/text")),
   ).toHaveLength(1);
@@ -480,14 +752,115 @@ it("identifies legacy preview-only records without offering a false full-text ac
   expect(screen.queryByRole("link", { name: "用此记录试算" })).toBeNull();
 });
 
+it.each([
+  { name: "short text", preview: "简短输入", chars: 4, inputChars: 4 },
+  {
+    name: "exactly 500 Unicode characters with emoji",
+    preview: "🙂".repeat(250) + "字".repeat(250),
+    chars: 500,
+    inputChars: 500,
+  },
+  {
+    name: "redacted input shortened to its complete preview",
+    preview: "[REDACTED]",
+    chars: 10,
+    inputChars: 5000,
+  },
+  {
+    name: "missing full-text length metadata",
+    preview: "历史完整输入",
+    chars: undefined,
+    inputChars: 6000,
+  },
+])(
+  "does not offer or fetch full text for $name",
+  async ({ preview, chars, inputChars }) => {
+    const item = {
+      ...event,
+      text_preview: preview,
+      text_chars: chars,
+      input_chars: inputChars,
+    };
+    vi.mocked(request).mockImplementation(async (path) =>
+      path === "/admin/events/event-1" ? item : [item],
+    );
+    mount();
+    fireEvent.click(
+      await screen.findByRole("row", { name: "查看请求 request-1" }),
+    );
+    await screen.findByRole("heading", { name: "用户输入预览" });
+    expect(screen.queryByRole("button", { name: "查看全文" })).toBeNull();
+    expect(
+      vi.mocked(request).mock.calls.some(([path]) => path.endsWith("/text")),
+    ).toBe(false);
+  },
+);
+
+it("loads a genuinely truncated emoji preview using Unicode character counts", async () => {
+  const preview = "🙂".repeat(500);
+  const fullValue = preview + "补";
+  const item = {
+    ...event,
+    text_preview: preview,
+    text_chars: 501,
+    input_chars: 501,
+  };
+  vi.mocked(request).mockImplementation(async (path) =>
+    path.endsWith("/text")
+      ? { text: fullValue }
+      : path === "/admin/events/event-1"
+        ? item
+        : [item],
+  );
+  mount();
+  fireEvent.click(
+    await screen.findByRole("row", { name: "查看请求 request-1" }),
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "查看全文" }));
+  await screen.findByText(fullValue);
+  expect(screen.getByRole("button", { name: "返回预览" })).toBeTruthy();
+});
+
+it("never renders response or conversation association IDs from request parameters", async () => {
+  const item = {
+    ...event,
+    session_id: "actual-session",
+    parameters: {
+      previous_response_id: "resp-hidden-private",
+      conversation_id: "conv-hidden-private",
+      reasoning_effort: "high",
+    },
+  };
+  vi.mocked(request).mockImplementation(async (path) =>
+    path === "/admin/events/event-1" ? item : [item],
+  );
+  mount();
+  fireEvent.click(
+    await screen.findByRole("row", { name: "查看请求 request-1" }),
+  );
+  const dialog = await screen.findByRole("dialog");
+  await within(dialog).findByText("current user text");
+  expect(within(dialog).queryByText("resp-hidden-private")).toBeNull();
+  expect(within(dialog).queryByText("conv-hidden-private")).toBeNull();
+  expect(within(dialog).queryByText("前序响应 ID")).toBeNull();
+  expect(within(dialog).queryByText("对话 ID")).toBeNull();
+  expect(within(dialog).getByText("actual-session")).toBeTruthy();
+  expect(within(dialog).getByText("高")).toBeTruthy();
+});
+
 it("keeps the preview and offers a toast retry when loading the full text fails", async () => {
   const notify = vi.spyOn(toast, "error").mockReturnValue("toast-id");
-  const item = { ...event, text_preview: "保留的预览" };
+  const fullValue = "保留的预览，已加载的完整文本";
+  const item = {
+    ...event,
+    text_preview: "保留的预览",
+    text_chars: Array.from(fullValue).length,
+  };
   let failed = true;
   vi.mocked(request).mockImplementation(async (path) => {
     if (path.endsWith("/text")) {
       if (failed) throw new Error("全文暂不可用");
-      return { text: "已加载的完整文本" };
+      return { text: fullValue };
     }
     return path === "/admin/events/event-1" ? item : [item];
   });
@@ -506,7 +879,7 @@ it("keeps the preview and offers a toast retry when loading the full text fails"
   );
   failed = false;
   fireEvent.click(screen.getByRole("button", { name: "重试全文" }));
-  await screen.findByText("已加载的完整文本");
+  await screen.findByText(fullValue);
   expect(screen.getByRole("button", { name: "返回预览" })).toBeTruthy();
   notify.mockRestore();
 });
