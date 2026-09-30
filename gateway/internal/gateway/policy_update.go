@@ -14,6 +14,7 @@ type PolicyUpdate struct {
 	Fields  map[string]json.RawMessage
 }
 
+// Apply merges the update into the saved configuration and validates the result.
 func (u PolicyUpdate) Apply(current policy.Policy) (policy.Policy, error) {
 	var next policy.Policy
 	if u.Replace != nil {
@@ -36,12 +37,12 @@ func (u PolicyUpdate) Apply(current policy.Policy) (policy.Policy, error) {
 			return next, err
 		}
 		if err := json.Unmarshal(raw, &next); err != nil {
-			return next, fmt.Errorf("%w: %v", ErrInvalidPolicy, err)
+			return next, fmt.Errorf("%w: %w", ErrInvalidPolicy, err)
 		}
 	}
 	policy.UpgradeLegacy(&next)
 	if err := policy.Validate(next); err != nil {
-		return next, fmt.Errorf("%w: %v", ErrInvalidPolicy, err)
+		return next, fmt.Errorf("%w: %w", ErrInvalidPolicy, err)
 	}
 	return next, nil
 }

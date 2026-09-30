@@ -9,7 +9,6 @@ require (
 )
 
 require (
-	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dlclark/regexp2/v2 v2.5.1 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
@@ -22,7 +21,6 @@ require (
 
 require (
 	github.com/cipherTing/sael/cli v0.0.1-rc2
-	github.com/cipherTing/sael/sdk v0.0.1-rc2
 	golang.org/x/sync v0.17.0
 )
 

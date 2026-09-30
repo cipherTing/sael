@@ -36,6 +36,19 @@ afterEach(() => {
   sessionStorage.clear();
   vi.restoreAllMocks();
 });
+
+it("shows the bottom saving actions only while the scene draft has changes", () => {
+  render(<SettingsPage policy={policy} onSave={vi.fn()} />);
+  expect(screen.queryByText("场景已生效")).toBeNull();
+  expect(screen.queryByRole("button", { name: "保存并生效" })).toBeNull();
+  fireEvent.change(screen.getByRole("textbox", { name: "场景名称" }), {
+    target: { value: "临时修改" },
+  });
+  expect(screen.getByRole("button", { name: "保存并生效" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "放弃修改" }));
+  expect(screen.queryByText("场景已生效")).toBeNull();
+  expect(screen.queryByRole("button", { name: "保存并生效" })).toBeNull();
+});
 it("saves original-scale thresholds independently inside a scene", async () => {
   const save = vi.fn().mockResolvedValue(undefined);
   render(<SettingsPage policy={policy} onSave={save} />);
@@ -127,9 +140,11 @@ it("restores an unpublished draft when returning to the workspace", () => {
   );
 });
 it("edits a copied condition without modifying the original scene", async () => {
+  const success = vi.spyOn(toast, "success").mockImplementation(() => "toast");
   const save = vi.fn().mockResolvedValue(undefined);
   render(<SettingsPage policy={policy} onSave={save} />);
   fireEvent.click(screen.getByRole("button", { name: "复制场景" }));
+  expect(success).toHaveBeenCalledWith("场景已复制");
   fireEvent.change(screen.getByRole("spinbutton", { name: "血腥程度阈值" }), {
     target: { value: "2" },
   });

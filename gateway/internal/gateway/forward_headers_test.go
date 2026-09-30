@@ -61,7 +61,7 @@ func TestRelayForwardsOnlyVerifiedClientContext(t *testing.T) {
 			if tc.trusted {
 				s.TrustedProxies = []netip.Prefix{netip.MustParsePrefix("10.0.0.2/32")}
 			}
-			r := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+			r := httptest.NewRequest(http.MethodGet, "/v1/models", http.NoBody)
 			r.RemoteAddr = tc.remote
 			r.Host = "gateway.local:8081"
 			r.Header = tc.incoming.Clone()

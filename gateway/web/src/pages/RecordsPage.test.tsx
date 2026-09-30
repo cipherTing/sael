@@ -4,6 +4,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router";
@@ -62,6 +63,34 @@ function mount(initialEntry = "/") {
     </QueryClientProvider>,
   );
 }
+
+it("copies the masked key and IP directly from a record row without opening its details", async () => {
+  const item = {
+    ...event,
+    masked_key: "sk-prefix******suffix",
+    client_ip: "203.0.113.7",
+  };
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText },
+  });
+  vi.mocked(request).mockResolvedValue([item]);
+  mount();
+  const row = await screen.findByRole("row", { name: "查看请求 request-1" });
+  fireEvent.click(within(row).getByRole("button", { name: "复制调用密钥" }));
+  await waitFor(() =>
+    expect(writeText).toHaveBeenCalledWith("sk-prefix******suffix"),
+  );
+  fireEvent.click(within(row).getByRole("button", { name: "复制来源 IP" }));
+  await waitFor(() => expect(writeText).toHaveBeenCalledWith("203.0.113.7"));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(
+    vi
+      .mocked(request)
+      .mock.calls.some(([path]) => path === "/admin/events/event-1"),
+  ).toBe(false);
+});
 
 it("provides the caller key ID required by the visible record filter", async () => {
   const item = {

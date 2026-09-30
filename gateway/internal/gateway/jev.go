@@ -26,7 +26,7 @@ func (c JevConfig) timeout() time.Duration {
 
 func (c JevConfig) validate() error {
 	if strings.TrimSpace(c.APIKey) == "" || strings.TrimSpace(c.Model) == "" || strings.TrimSpace(c.BaseURL) == "" {
-		return errors.New("Jev 接口地址、模型和 API Key 均不能为空")
+		return errors.New("请填写 Jev 接口地址、模型和 API Key")
 	}
 	if c.TimeoutMS < 0 || c.TimeoutMS > 120000 {
 		return errors.New("分类器超时须在 1–120000 毫秒之间")
@@ -36,7 +36,7 @@ func (c JevConfig) validate() error {
 	}
 	u, err := url.Parse(c.BaseURL)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return errors.New("Jev 接口地址必须是有效的 HTTP(S) URL，不能包含凭证、查询参数或片段")
+		return errors.New("请填写有效的 Jev HTTP(S) 接口地址，不能包含凭证、查询参数或片段")
 	}
 	return nil
 }

@@ -26,7 +26,6 @@ import {
   FileCheck2,
   Search,
   RotateCcw,
-  Check,
   Loader2,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -412,6 +411,7 @@ export default function SettingsPage({
     };
     setDraft((p) => ({ ...p, scenes: [...p.scenes, next] }));
     setSelected(next.id);
+    toast.success("场景已复制");
   }
   function remove() {
     if (!scene) return;
@@ -872,43 +872,38 @@ export default function SettingsPage({
           )}
         </TabsContent>
       </Tabs>
-      <div
-        className={`scene-page-save-bar ${dirty ? "dirty" : "saved"}`}
-        role="status"
-      >
-        <span className="scene-save-status">
-          {saving ? (
-            <Loader2 size={15} className="animate-spin" />
-          ) : dirty ? (
-            <span className="scene-draft-dot" />
-          ) : (
-            <Check size={15} />
-          )}
-          <span>
-            {saving ? "正在保存" : dirty ? "有未保存的修改" : "场景已生效"}
+      {(dirty || saving) && (
+        <div className="scene-page-save-bar dirty" role="status">
+          <span className="scene-save-status">
+            {saving ? (
+              <Loader2 size={15} className="animate-spin" />
+            ) : (
+              <span className="scene-draft-dot" />
+            )}
+            <span>{saving ? "正在保存" : "有未保存的修改"}</span>
           </span>
-        </span>
-        {dirty && (
-          <div className="scene-save-actions">
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={saving}
-              onClick={() => {
-                setDraft(copyPolicy(policy));
-                setBaseScenes(structuredClone(policy.scenes));
-                setAttempted(false);
-              }}
-            >
-              <RotateCcw size={13} />
-              放弃修改
-            </Button>
-            <Button size="sm" disabled={saving} onClick={() => void save()}>
-              {saving ? "保存中…" : "保存并生效"}
-            </Button>
-          </div>
-        )}
-      </div>
+          {dirty && (
+            <div className="scene-save-actions">
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={saving}
+                onClick={() => {
+                  setDraft(copyPolicy(policy));
+                  setBaseScenes(structuredClone(policy.scenes));
+                  setAttempted(false);
+                }}
+              >
+                <RotateCcw size={13} />
+                放弃修改
+              </Button>
+              <Button size="sm" disabled={saving} onClick={() => void save()}>
+                {saving ? "保存中…" : "保存并生效"}
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

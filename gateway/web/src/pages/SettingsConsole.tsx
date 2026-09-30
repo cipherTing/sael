@@ -14,7 +14,13 @@ import "../newsettings-workbench.css";
 import type { Policy, PolicyPatch, PolicyResponse } from "../policy";
 import { request } from "../api";
 import { notifyError, notifyRetry } from "../notifications";
-import { PageHeading, Panel, Loading, Empty } from "../components/common";
+import {
+  PageHeading,
+  Panel,
+  Loading,
+  Empty,
+  CopyButton,
+} from "../components/common";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Textarea } from "../components/ui/textarea";
@@ -370,7 +376,17 @@ function TrustedKeys() {
                 {data.items.map((item) => (
                   <tr key={item.id}>
                     <td>
-                      <code>{item.masked_key || "—"}</code>
+                      <div className="copyable-value">
+                        <code className="record-key" title={item.masked_key}>
+                          {item.masked_key || "—"}
+                        </code>
+                        {item.masked_key && (
+                          <CopyButton
+                            value={item.masked_key}
+                            label="复制调用密钥"
+                          />
+                        )}
+                      </div>
                     </td>
                     <td className="credential-upstream" title={item.upstream}>
                       {item.upstream || "—"}

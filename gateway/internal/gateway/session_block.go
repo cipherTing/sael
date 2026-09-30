@@ -27,19 +27,6 @@ type sessionBlockPlan struct {
 	transcript transcriptPlan
 }
 
-// sessionBlockKey isolates a stable client session by the credential forwarded upstream.
-// Credentials and raw session identifiers are never persisted as freeze keys.
-func sessionBlockKey(r *http.Request, session string) string {
-	credential := strings.TrimSpace(r.Header.Get("X-Api-Key"))
-	if credential == "" {
-		parts := strings.Fields(r.Header.Get("Authorization"))
-		if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
-			credential = parts[1]
-		}
-	}
-	return hashSessionKey(credential, session)
-}
-
 func hashSessionKey(credential, session string) string {
 	credential, session = strings.TrimSpace(credential), sanitizeSessionID(session)
 	if credential == "" || session == "" {
@@ -284,7 +271,7 @@ func sanitizeSessionID(raw string) string {
 	return trimmed
 }
 
-func (s *Server) sessionBlocked(ctx context.Context, plan sessionBlockPlan) (string, string) {
+func (s *Server) sessionBlocked(ctx context.Context, plan sessionBlockPlan) (key, source string) {
 	if plan.explicit != "" && s.sessionBlockActive(ctx, plan.explicit) {
 		return plan.explicit, "explicit"
 	}
@@ -328,11 +315,8 @@ func (s *Server) rememberSessionBlock(ctx context.Context, plan sessionBlockPlan
 	if plan.transcript.preLatest != "" && plan.transcript.preLatest != plan.transcript.exact {
 		keys = append(keys, plan.transcript.preLatest)
 	}
-	if plan.transcript.scope != "" {
-		// The scope marker is written only after all exact keys succeed. This is
-		// the same ordering used by sub2api: a scope without its exact blocks
-		// would turn a storage partial failure into a broad overflow block.
-	}
+	// Write the scope marker only after all exact keys succeed. A scope without
+	// its exact blocks could turn a storage failure into a broad overflow block.
 	scope := plan.transcript.scope
 	writeFailed := false
 	for _, key := range keys {

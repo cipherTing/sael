@@ -24,6 +24,7 @@ import (
 )
 
 var (
+	// ErrInvalidPolicy means a configuration update failed validation.
 	ErrInvalidPolicy = errors.New("invalid policy update")
 	// ErrNotFound means the requested stored record does not exist.
 	ErrNotFound = errors.New("not found")

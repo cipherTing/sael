@@ -25,6 +25,41 @@ const policy: PolicyResponse = {
   retention_days: 30,
 };
 
+it("copies a masked key from the trusted-key list", async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText },
+  });
+  vi.mocked(request).mockResolvedValue({
+    items: [
+      {
+        id: "key-one",
+        masked_key: "sk-prefix******suffix",
+        upstream: "https://example.test",
+        first_seen_at: "2026-09-30T00:00:00Z",
+        last_seen_at: "2026-09-30T01:00:00Z",
+      },
+    ],
+    total: 1,
+  });
+  render(
+    <QueryClientProvider
+      client={
+        new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      }
+    >
+      <MemoryRouter initialEntries={["/settings?tab=keys"]}>
+        <SettingsConsole policy={policy} onSave={vi.fn()} jev={null} />
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "复制调用密钥" }));
+  await waitFor(() =>
+    expect(writeText).toHaveBeenCalledWith("sk-prefix******suffix"),
+  );
+});
+
 it("previews the rendered block message and saves only that setting", async () => {
   const onSave = vi.fn().mockResolvedValue(undefined);
   render(

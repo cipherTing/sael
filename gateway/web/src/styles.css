@@ -1823,6 +1823,9 @@ table {
 @media(max-width:640px) { .cache-metrics {grid-template-columns:repeat(2,minmax(0,1fr));} .settings-tabs {width:100%;} .settings-inline-form .field {flex:1 1 140px;} }
 @media(max-width:900px) { .block-message-settings { grid-template-columns: 1fr; } }
 .record-key { font-size:11px; white-space:nowrap; }
+.copyable-value { display:inline-flex; align-items:center; gap:6px; max-width:100%; }
+.copyable-value > code { max-width:240px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.copyable-value > button { flex-shrink:0; }
 .record-credential-filter { padding:8px 16px; display:flex; align-items:center; gap:10px; font-size:12px; border-bottom:1px solid #edf0f5; }
 @media(max-width:640px) {
   .settings-console .session-settings-row {gap:14px;}

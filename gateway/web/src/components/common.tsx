@@ -146,15 +146,22 @@ export function CopyButton({
   const [copied, setCopied] = useState(false);
   return (
     <Button
+      type="button"
       size="icon-sm"
       variant="ghost"
       aria-label={label}
-      onClick={async () => {
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") event.stopPropagation();
+      }}
+      onClick={async (event) => {
+        event.stopPropagation();
         try {
           await navigator.clipboard.writeText(value);
           setCopied(true);
+          toast.success("已复制");
           setTimeout(() => setCopied(false), 1500);
         } catch {
+          setCopied(false);
           toast.error("复制失败");
         }
       }}

@@ -11,7 +11,10 @@ import { Choice, CopyButton } from "./common";
 
 vi.mock("sonner", async () => {
   const actual = await vi.importActual<typeof import("sonner")>("sonner");
-  return { ...actual, toast: { ...actual.toast, error: vi.fn() } };
+  return {
+    ...actual,
+    toast: { ...actual.toast, error: vi.fn(), success: vi.fn() },
+  };
 });
 
 afterEach(() => {
@@ -51,4 +54,30 @@ it("shows a toast when the browser rejects clipboard access", async () => {
   fireEvent.click(screen.getByRole("button", { name: "复制密钥" }));
 
   await waitFor(() => expect(toast.error).toHaveBeenCalledWith("复制失败"));
+});
+
+it("reports success only after clipboard writing completes and keeps the parent action inactive", async () => {
+  let finish!: () => void;
+  const writeText = vi.fn(
+    () =>
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+  );
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText },
+  });
+  const parentClick = vi.fn();
+  render(
+    <div onClick={parentClick}>
+      <CopyButton value="sk-test******tail" label="复制调用密钥" />
+    </div>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "复制调用密钥" }));
+  expect(writeText).toHaveBeenCalledWith("sk-test******tail");
+  expect(parentClick).not.toHaveBeenCalled();
+  expect(toast.success).not.toHaveBeenCalled();
+  finish();
+  await waitFor(() => expect(toast.success).toHaveBeenCalledWith("已复制"));
 });

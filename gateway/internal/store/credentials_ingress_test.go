@@ -110,11 +110,11 @@ func TestIngressLearnsEncryptedCredentialAndRecordsEachCachedHit(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if len(events) != 2 || events[0].MaskedKey != "test-f*************y-9876" || events[0].ReviewSource != "cache" || events[0].CredentialID == "" || len(events[0].Scores) != 0 {
+	if len(events) != 2 || events[0].MaskedKey != "test-f******y-9876" || events[0].ReviewSource != "cache" || events[0].CredentialID == "" || len(events[0].Scores) != 0 {
 		t.Fatalf("cache event %+v", events)
 	}
 	list, err := runtime.TrustedCredentials(ctx, 30*24*time.Hour, 0, 50)
-	if err != nil || list.Total != 1 || list.Items[0].MaskedKey != "test-f*************y-9876" {
+	if err != nil || list.Total != 1 || list.Items[0].MaskedKey != "test-f******y-9876" {
 		t.Fatalf("trusted list %+v %v", list, err)
 	}
 	var raw string

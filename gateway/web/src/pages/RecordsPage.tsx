@@ -207,16 +207,32 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
             id: "credential",
             header: "调用密钥",
             cell: ({ row }) => (
-              <code className="record-key">
-                {row.original.masked_key || "—"}
-              </code>
+              <div className="copyable-value">
+                <code className="record-key" title={row.original.masked_key}>
+                  {row.original.masked_key || "—"}
+                </code>
+                {row.original.masked_key && (
+                  <CopyButton
+                    value={row.original.masked_key}
+                    label="复制调用密钥"
+                  />
+                )}
+              </div>
             ),
           },
           {
             id: "client_ip",
             header: "来源 IP",
             cell: ({ row }) => (
-              <span className="tabular">{row.original.client_ip || "—"}</span>
+              <div className="copyable-value">
+                <span className="tabular">{row.original.client_ip || "—"}</span>
+                {row.original.client_ip && (
+                  <CopyButton
+                    value={row.original.client_ip}
+                    label="复制来源 IP"
+                  />
+                )}
+              </div>
             ),
           },
           {

@@ -122,6 +122,7 @@ type Policy struct {
 	BlockMessage       string             `json:"block_message,omitempty"`
 }
 
+// DefaultBlockMessage is the client-facing text used when no template is configured.
 const DefaultBlockMessage = "Request denied."
 
 var blockMessagePlaceholders = regexp.MustCompile(`\{[^{}]*\}`)

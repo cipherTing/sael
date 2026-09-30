@@ -47,7 +47,7 @@ func maskCredential(raw string) string {
 	r := []rune(raw)
 	hidden := (len(r) + 1) / 2
 	left := (len(r) - hidden) / 2
-	return string(r[:left]) + strings.Repeat("*", hidden) + string(r[left+hidden:])
+	return string(r[:left]) + strings.Repeat("*", min(hidden, 6)) + string(r[left+hidden:])
 }
 
 // InitCredentials verifies the persistent key before accepting any requests.
