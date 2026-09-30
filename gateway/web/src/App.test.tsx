@@ -63,6 +63,16 @@ it("logs in and exposes four pages with access inside settings", async () => {
   await screen.findByRole("heading", { name: "总览" }, { timeout: 10000 });
   for (const label of ["总览", "场景", "记录", "设置"])
     expect(screen.getByRole("link", { name: label })).toBeTruthy();
+  const repository = screen.getByRole("link", { name: "GitHub 仓库" });
+  expect(repository.getAttribute("href")).toBe(
+    "https://github.com/cipherTing/sael",
+  );
+  expect(repository.getAttribute("target")).toBe("_blank");
+  expect(repository.getAttribute("rel")).toContain("noopener");
+  expect(repository.querySelector("img")?.getAttribute("src")).toBe(
+    "/brands/github.svg",
+  );
+  expect(screen.queryByRole("link", { name: "接入配置" })).toBeNull();
 }, 30000);
 it("preserves endpoint, error and exact time filters on the next records page", async () => {
   window.history.pushState(

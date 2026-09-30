@@ -16,7 +16,6 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import {
-  Activity,
   ChevronRight,
   LayoutDashboard,
   ListFilter,
@@ -464,10 +463,17 @@ function Console() {
             <strong>{title}</strong>
           </div>
           <div className="topbar-actions">
-            <Activity size={14} color="#9aa8c0" />
-            <Link className="small muted" to="/settings?tab=access">
-              接入配置
-            </Link>
+            <a
+              className="small muted inline-flex items-center gap-2"
+              href="https://github.com/cipherTing/sael"
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="GitHub 仓库"
+              title="cipherTing/sael"
+            >
+              <img src="/brands/github.svg" width={16} height={16} alt="" />
+              GitHub
+            </a>
           </div>
         </header>
         <main className="content">

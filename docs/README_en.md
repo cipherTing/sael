@@ -20,7 +20,7 @@ A text review gateway between your clients and AI services, with a visual operat
 
 ## What is Sael?
 
-Sael adds text safety review to existing AI services. Clients use the Sael ingress address with their existing API key. The gateway applies scenarios to the current user input, blocks or records matches, and forwards requests to your configured AI service. Classification is provided by [Jev](https://docs.typesafe.ai/models).
+Sael adds text safety review to existing AI services. Clients use the Sael ingress address with their existing API key. The gateway reviews the current user input against your scenarios, blocks or records matches, and forwards allowed requests to your configured AI service. Classification is provided by [Jev](https://docs.typesafe.ai/models).
 
 Configure rules in the console, compare a draft with the active policy, and follow dashboard data into individual problem requests. Sael supports OpenAI and Anthropic request formats while preserving request bodies, credentials and streaming responses.
 
@@ -28,24 +28,26 @@ Configure rules in the console, compare a draft with the active policy, and foll
 | --- | --- |
 | Different rules for different APIs and models | Scenario scopes, any/all conditions, raw score thresholds and drag ordering |
 | Validate a rule before saving it | Text testing, active/draft comparison and templates from existing scenarios |
-| See how review is running | Live RPM, traffic and hit trends, outcome composition, latency distribution and cache efficiency |
+| See how review is running | User input counts, RPM for the last minute, hit and block trends, latency distribution and cache efficiency |
 | Locate concentrated risk | Scenario, credential and source IP rankings with filtered record drilldown |
-| Investigate a request | Redacted text previews and full text, masked keys, conversation association and matched scores |
+| Investigate a request | User input, matched scores, masked keys, source IP and request parameters |
 | Handle repeated violations | Reused review decisions and optional session freezes per scenario |
 
 ## Organize rules as scenarios
 
-Each scenario owns its thresholds and action. Select endpoints and models, combine conditions, and drag scenarios to set priority. Sliders and numeric inputs support both quick adjustments and exact values. Testing lives in the editor, so you can compare active and draft results before saving.
+Each scenario includes an endpoint scope, model scope, review conditions and action. Combine conditions with any/all matching, and drag scenarios to set priority. Sliders and numeric inputs support both quick adjustments and exact values. Testing lives in the same workspace, so you can compare active and draft results before saving.
 
 ![Scenario workspace: score controls, scope, actions and policy testing](images/scenes.png)
 
 ## From an overview to a problem request
 
-Trends, composition, distributions and rankings show review activity together. Time range and time granularity are separate controls. Endpoint, model and other filters carry through to request records.
+The overview centers on user input, combining trends, composition, latency distributions and risk rankings. Time range and time granularity are separate controls. Opening records from a metric preserves its filter scope.
 
 ![Review record: request metadata, redacted text and matched scores](images/record.png)
 
-Individual records contain scenario hits, classifier failures and gateway warnings. Clean requests do not store individual prompt bodies. Recorded text is redacted; API keys are stored encrypted and displayed only as masked values. The console currently uses Chinese labels.
+Records place the request summary and user input first, followed by matched scores and request parameters. Masked keys, IP addresses, sessions and client information help identify the source. Long text opens as a redacted preview; the full text can be loaded on demand.
+
+Individual records contain only scenario hits, classifier failures and gateway warnings. Clean requests do not store individual prompt bodies. API keys are stored encrypted and displayed only as masked values. The console currently uses Chinese labels.
 
 Screenshots show the local console with sample data.
 

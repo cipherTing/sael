@@ -1,3 +1,6 @@
 OpenAI and Anthropic SVG assets from @lobehub/icons-static-svg 1.95.1 (LobeHub), MIT licensed.
 Source: https://github.com/lobehub/lobe-icons
+GitHub mark from GitHub Octicons (GitHub Inc.), MIT licensed.
+Source: https://github.com/primer/octicons/blob/main/icons/mark-github-16.svg
+License: LICENSE.octicons.txt
 Brand marks belong to their respective owners.
