@@ -54,10 +54,13 @@ export type Event = {
   stream: boolean;
   has_non_text_input: boolean;
   text_preview: string;
+  text_available?: boolean;
+  text_chars?: number;
   scores?: Answer[];
   classifier_ms?: number;
   error_kind?: string;
   input_tokens_estimated?: number;
+  input_chars?: number;
   jev_input_limit?: number;
   decision: {
     action: Action;

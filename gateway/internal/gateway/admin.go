@@ -214,9 +214,18 @@ func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "events unavailable", http.StatusServiceUnavailable)
 			return
 		}
-		writeJSON(w, items)
+		previews := make([]Event, len(items))
+		for i, item := range items {
+			previews[i] = previewEvent(item)
+		}
+		writeJSON(w, previews)
 	case strings.HasPrefix(r.URL.Path, "/admin/events/") && r.Method == http.MethodGet:
-		item, err := s.Store.Event(r.Context(), strings.TrimPrefix(r.URL.Path, "/admin/events/"))
+		id := strings.TrimPrefix(r.URL.Path, "/admin/events/")
+		fullText := strings.HasSuffix(id, "/text")
+		if fullText {
+			id = strings.TrimSuffix(id, "/text")
+		}
+		item, err := s.Store.Event(r.Context(), id)
 		if errors.Is(err, ErrNotFound) {
 			http.NotFound(w, r)
 			return
@@ -225,7 +234,15 @@ func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "event unavailable", http.StatusServiceUnavailable)
 			return
 		}
-		writeJSON(w, item)
+		if fullText {
+			if item.Text == "" {
+				http.NotFound(w, r)
+				return
+			}
+			writeJSON(w, map[string]string{"text": item.Text})
+			return
+		}
+		writeJSON(w, previewEvent(item))
 	case r.URL.Path == "/admin/policy-changes" && r.Method == http.MethodGet:
 		items, err := s.Store.Changes(r.Context())
 		if err != nil {

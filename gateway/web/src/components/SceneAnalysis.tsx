@@ -124,6 +124,7 @@ export function SceneAnalysis({
       <div className="filterbar">
         <Choice
           label="分析时段"
+          visibleLabel="时间范围"
           value={minutes}
           onChange={setMinutes}
           options={[
@@ -134,6 +135,7 @@ export function SceneAnalysis({
         />
         <Choice
           label="分析端点"
+          visibleLabel="端点"
           value={endpoint}
           onChange={setScope}
           options={[
@@ -162,6 +164,7 @@ export function SceneAnalysis({
         </h3>
         <Choice
           label="分布审核项"
+          visibleLabel="审核项"
           value={condition?.question || ""}
           onChange={setSelected}
           options={scene.conditions.map((c) => ({

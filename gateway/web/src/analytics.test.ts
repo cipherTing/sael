@@ -5,6 +5,9 @@ import {
   groupTraffic,
   drilldownQuery,
   latencySeries,
+  averageReview,
+  averageReviewSeries,
+  duration,
 } from "./analytics";
 import type { Analytics } from "./analytics";
 
@@ -57,6 +60,47 @@ const data: Analytics = {
 };
 
 describe("dashboard metric definitions", () => {
+  it.each([
+    [423.534, "423.5 ms"],
+    [12.04, "12 ms"],
+    [0.25, "0.25 ms"],
+    [0.256, "0.26 ms"],
+    [1234.56, "1.23 s"],
+    [null, "—"],
+  ])(
+    "formats latency %s without excess decimals or hiding submillisecond values",
+    (value, expected) => {
+      expect(duration(value)).toBe(expected);
+    },
+  );
+  it("uses actual duration sums and samples for the mean without including cached requests", () => {
+    const points = [
+      {
+        ...data.traffic[0],
+        count: 2,
+        classifier_calls: 2,
+        classifier_sum_ms: 70,
+      },
+      {
+        ...data.traffic[0],
+        count: 500,
+        classifier_calls: 0,
+        classifier_sum_ms: 0,
+      },
+      {
+        ...data.traffic[1],
+        count: 1,
+        classifier_calls: 1,
+        classifier_sum_ms: 80,
+      },
+    ];
+    expect(averageReview(points)).toBe(50);
+    expect(averageReview([])).toBeNull();
+    expect(averageReview(data.traffic)).toBeNull();
+    expect(
+      averageReviewSeries({ ...data, traffic: points }, groupTraffic(data)),
+    ).toEqual([50, null, null]);
+  });
   it("keeps preflight skips and frozen sessions out of Jev denominators", () => {
     const extra = [
       { ...data.traffic[0], outcome: "input_too_long", count: 4 },

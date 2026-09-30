@@ -161,115 +161,118 @@ export function TimeRangePicker({
     choose(calendarRange(key));
   }
   return (
-    <Popover
-      open={open}
-      onOpenChange={(next) => {
-        if (next && value.start && value.end) {
-          const from = new Date(value.start),
-            to = new Date(Date.parse(value.end) - 60000);
-          setStart(dateText(from));
-          setStartTime(format(from, "HH:mm"));
-          setEnd(dateText(to));
-          setEndTime(format(to, "HH:mm"));
-        }
-        setOpen(next);
-      }}
-    >
-      <PopoverTrigger asChild>
-        <Button
-          variant="outline"
-          className="time-trigger"
-          aria-label={`时间范围：${value.label}`}
-        >
-          <CalendarDays size={15} />
-          {value.label}
-          <ChevronDown size={13} />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent
-        align="end"
-        className="time-popover p-0"
-        collisionPadding={12}
+    <div className="control-field time-range-control">
+      <span className="control-field-label">时间范围</span>
+      <Popover
+        open={open}
+        onOpenChange={(next) => {
+          if (next && value.start && value.end) {
+            const from = new Date(value.start),
+              to = new Date(Date.parse(value.end) - 60000);
+            setStart(dateText(from));
+            setStartTime(format(from, "HH:mm"));
+            setEnd(dateText(to));
+            setEndTime(format(to, "HH:mm"));
+          }
+          setOpen(next);
+        }}
       >
-        <div className="time-presets">
-          {relative.map((item) => (
-            <Button
-              key={item.key}
-              variant={value.key === item.key ? "secondary" : "ghost"}
-              size="sm"
-              onClick={() => choose(item)}
-            >
-              {item.label}
-            </Button>
-          ))}
-          <div className="preset-divider" />
-          {[
-            { key: "today", label: "今天" },
-            { key: "yesterday", label: "昨天" },
-            { key: "week", label: "本周" },
-            { key: "month", label: "本月" },
-            { key: "lastMonth", label: "上月" },
-          ].map((item) => (
-            <Button
-              key={item.key}
-              variant={value.key === item.key ? "secondary" : "ghost"}
-              size="sm"
-              onClick={() => calendarPreset(item.key)}
-            >
-              {item.label}
-            </Button>
-          ))}
-        </div>
-        <div className="time-calendar">
-          <Calendar
-            locale={zhCN}
-            defaultMonth={start ? new Date(`${start}T00:00`) : undefined}
-            mode="range"
-            numberOfMonths={2}
-            selected={{
-              from: start ? new Date(`${start}T00:00`) : undefined,
-              to: end ? new Date(`${end}T00:00`) : undefined,
-            }}
-            onSelect={(range) => {
-              setStart(range?.from ? dateText(range.from) : "");
-              setEnd(range?.to ? dateText(range.to) : "");
-            }}
-          />
-          <div className="date-apply">
-            <label>
-              开始
-              <Input
-                aria-label="开始日期"
-                type="date"
-                value={start}
-                onChange={(e) => setStart(e.target.value)}
-              />
-              <Input
-                aria-label="开始时间"
-                type="time"
-                value={startTime}
-                onChange={(e) => setStartTime(e.target.value)}
-              />
-            </label>
-            <label>
-              结束
-              <Input
-                aria-label="结束日期"
-                type="date"
-                value={end}
-                onChange={(e) => setEnd(e.target.value)}
-              />
-              <Input
-                aria-label="结束时间"
-                type="time"
-                value={endTime}
-                onChange={(e) => setEndTime(e.target.value)}
-              />
-            </label>
-            <Button onClick={apply}>应用</Button>
+        <PopoverTrigger asChild>
+          <Button
+            variant="outline"
+            className="time-trigger"
+            aria-label={`时间范围：${value.label}`}
+          >
+            <CalendarDays size={15} />
+            {value.label}
+            <ChevronDown size={13} />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent
+          align="end"
+          className="time-popover p-0"
+          collisionPadding={12}
+        >
+          <div className="time-presets">
+            {relative.map((item) => (
+              <Button
+                key={item.key}
+                variant={value.key === item.key ? "secondary" : "ghost"}
+                size="sm"
+                onClick={() => choose(item)}
+              >
+                {item.label}
+              </Button>
+            ))}
+            <div className="preset-divider" />
+            {[
+              { key: "today", label: "今天" },
+              { key: "yesterday", label: "昨天" },
+              { key: "week", label: "本周" },
+              { key: "month", label: "本月" },
+              { key: "lastMonth", label: "上月" },
+            ].map((item) => (
+              <Button
+                key={item.key}
+                variant={value.key === item.key ? "secondary" : "ghost"}
+                size="sm"
+                onClick={() => calendarPreset(item.key)}
+              >
+                {item.label}
+              </Button>
+            ))}
           </div>
-        </div>
-      </PopoverContent>
-    </Popover>
+          <div className="time-calendar">
+            <Calendar
+              locale={zhCN}
+              defaultMonth={start ? new Date(`${start}T00:00`) : undefined}
+              mode="range"
+              numberOfMonths={2}
+              selected={{
+                from: start ? new Date(`${start}T00:00`) : undefined,
+                to: end ? new Date(`${end}T00:00`) : undefined,
+              }}
+              onSelect={(range) => {
+                setStart(range?.from ? dateText(range.from) : "");
+                setEnd(range?.to ? dateText(range.to) : "");
+              }}
+            />
+            <div className="date-apply">
+              <label>
+                开始
+                <Input
+                  aria-label="开始日期"
+                  type="date"
+                  value={start}
+                  onChange={(e) => setStart(e.target.value)}
+                />
+                <Input
+                  aria-label="开始时间"
+                  type="time"
+                  value={startTime}
+                  onChange={(e) => setStartTime(e.target.value)}
+                />
+              </label>
+              <label>
+                结束
+                <Input
+                  aria-label="结束日期"
+                  type="date"
+                  value={end}
+                  onChange={(e) => setEnd(e.target.value)}
+                />
+                <Input
+                  aria-label="结束时间"
+                  type="time"
+                  value={endTime}
+                  onChange={(e) => setEndTime(e.target.value)}
+                />
+              </label>
+              <Button onClick={apply}>应用</Button>
+            </div>
+          </div>
+        </PopoverContent>
+      </Popover>
+    </div>
   );
 }

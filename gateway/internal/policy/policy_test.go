@@ -1,6 +1,9 @@
 package policy
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func answers(values map[string]float64) []Answer {
 	out := make([]Answer, 0, len(Questions))
@@ -106,25 +109,39 @@ func TestEnabledPolicyRequiresValidSceneConditions(t *testing.T) {
 	}
 }
 
-func TestSessionFreezeSettingsValidate(t *testing.T) {
-	p := Policy{Enabled: true, SessionBlockEnabled: true, SessionBlockTTLSeconds: 600, Scenes: []Scene{{ID: "a", Name: "场景", Match: Any, Action: Block, Conditions: []Condition{{Question: "gore", Threshold: 1}}}}}
-	if err := Validate(p); err != nil {
+func TestSceneFreezeDefaultsOffAndValidatesItsOwnDuration(t *testing.T) {
+	var p Policy
+	if err := json.Unmarshal([]byte(`{"enabled":true,"scenes":[{"id":"one","name":"one","match":"any","action":"block","conditions":[{"question":"gore","threshold":1}]}]}`), &p); err != nil {
 		t.Fatal(err)
 	}
-	p.SessionBlockTTLSeconds = 0
+	if err := Validate(p); err != nil {
+		t.Fatalf("new scenes must not require a freeze duration: %v", err)
+	}
+	if err := json.Unmarshal([]byte(`{"session_block_enabled":true,"session_block_ttl_seconds":0}`), &p.Scenes[0]); err != nil {
+		t.Fatal(err)
+	}
 	if err := Validate(p); err == nil {
-		t.Fatal("enabled session freeze requires a positive TTL")
+		t.Fatal("enabled scene freeze accepted a missing duration")
 	}
 }
 
-func TestLegacySessionFreezeMapsToBlockingReviewOnly(t *testing.T) {
-	p := Policy{SessionBlockEnabled: true, Scenes: []Scene{{ID: "a", Name: "场景", Match: Any, Action: Block, Conditions: []Condition{{Question: "gore", Threshold: 1}}}}}
-	UpgradeLegacy(&p)
-	if !p.SessionBlockOnBlockingReview || p.SessionBlockOnNonblockingReview || p.SessionBlockEnabled {
-		t.Fatalf("legacy freeze mapping: %+v", p)
+func TestBlockMessageTemplateUsesOnlySafeRequestContext(t *testing.T) {
+	var p Policy
+	if err := json.Unmarshal([]byte(`{"block_message":"Blocked {request_id} on {endpoint} ({model})"}`), &p); err != nil {
+		t.Fatal(err)
 	}
-	if p.SessionBlockTTLSeconds != 3600 {
-		t.Fatalf("legacy freeze default ttl: %d", p.SessionBlockTTLSeconds)
+	if got := p.FormatBlockMessage("req-123", "/v1/messages", "claude-test"); got != "Blocked req-123 on /v1/messages (claude-test)" {
+		t.Fatalf("unexpected rendered message: %q", got)
+	}
+	p.BlockMessage = "The {scene} rule matched"
+	if err := Validate(p); err == nil {
+		t.Fatal("template exposed an unsupported internal placeholder")
+	}
+	for _, message := range []string{"Blocked {Scene}", "Blocked {scene-name}", "Blocked {request_id"} {
+		p.BlockMessage = message
+		if err := Validate(p); err == nil {
+			t.Fatalf("accepted malformed placeholder %q", message)
+		}
 	}
 }
 

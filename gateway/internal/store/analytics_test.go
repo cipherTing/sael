@@ -90,6 +90,57 @@ func TestAnalyticsKeepsOnlyHitScoresAndFiltersEndpoints(t *testing.T) {
 	}
 }
 
+func TestAnalyticsTrafficReturnsClassifierSumForRealSamplesOnly(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not set")
+	}
+	ctx := context.Background()
+	s, err := Open(ctx, dsn, filepath.Join(t.TempDir(), "spool"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.pool.Exec(ctx, "TRUNCATE gateway_counts_minute, gateway_measurements_minute, gateway_scene_matches_minute, gateway_jev_errors_minute"); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 30, 10, 0, 0, 0, time.UTC)
+	for _, count := range []gateway.Count{
+		{ID: "latency-sample-20", Time: now, Protocol: "openai_chat", Model: "latency", Outcome: "clean", ClassifierSample: true, ClassifierMS: 20},
+		{ID: "latency-sample-50", Time: now, Protocol: "openai_chat", Model: "latency", Outcome: "hit_allowed", ClassifierSample: true, ClassifierMS: 50},
+		{ID: "latency-cache-hit", Time: now, Protocol: "openai_chat", Model: "latency", Outcome: "hit_allowed", CacheLookup: true, CacheHit: true, ClassifierMS: 5000},
+		{ID: "latency-other-endpoint", Time: now, Protocol: "anthropic", Model: "latency", Outcome: "clean", ClassifierSample: true, ClassifierMS: 9000},
+		{ID: "latency-other-model", Time: now, Protocol: "openai_chat", Model: "other", Outcome: "clean", ClassifierSample: true, ClassifierMS: 9000},
+		{ID: "latency-after-window", Time: now.Add(time.Minute), Protocol: "openai_chat", Model: "latency", Outcome: "clean", ClassifierSample: true, ClassifierMS: 9000},
+	} {
+		if err := s.Increment(ctx, count); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err := s.Analytics(ctx, gateway.AnalyticsFilter{Since: now, Until: now.Add(time.Minute), Endpoint: "openai_chat", Model: "latency", Granularity: "1m", Timezone: "UTC"})
+	if err != nil || len(result.Traffic) != 2 {
+		t.Fatalf("traffic: %v %+v", err, result.Traffic)
+	}
+	raw, _ := json.Marshal(result.Traffic)
+	var points []struct {
+		Sum   int64 `json:"classifier_sum_ms"`
+		Calls int64 `json:"classifier_calls"`
+		Count int64 `json:"count"`
+	}
+	if err := json.Unmarshal(raw, &points); err != nil {
+		t.Fatal(err)
+	}
+	var sum, calls, total int64
+	for _, point := range points {
+		sum += point.Sum
+		calls += point.Calls
+		total += point.Count
+	}
+	if sum != 70 || calls != 2 || total != 3 {
+		t.Fatalf("classifier aggregate sum=%d calls=%d total=%d traffic=%+v", sum, calls, total, result.Traffic)
+	}
+}
+
 func TestEventsRespectEndTimeEndpointAndScene(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {

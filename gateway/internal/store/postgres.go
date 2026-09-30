@@ -52,7 +52,7 @@ func Open(ctx context.Context, dsn, spoolPath string) (*PG, error) {
 		pool.Close()
 		return nil, err
 	}
-	for _, name := range []string{"migrations/001_init.sql", "migrations/002_jev.sql", "migrations/003_metrics.sql", "migrations/004_connections.sql", "migrations/005_remove_upstream_errors.sql", "migrations/006_analytics.sql", "migrations/007_session_blocks.sql", "migrations/008_jev_input_limits.sql", "migrations/009_ingest_cursor.sql", "migrations/010_review_cache_credentials.sql", "migrations/011_remove_policy_version.sql"} {
+	for _, name := range []string{"migrations/001_init.sql", "migrations/002_jev.sql", "migrations/003_metrics.sql", "migrations/004_connections.sql", "migrations/005_remove_upstream_errors.sql", "migrations/006_analytics.sql", "migrations/007_session_blocks.sql", "migrations/008_jev_input_limits.sql", "migrations/009_ingest_cursor.sql", "migrations/010_review_cache_credentials.sql", "migrations/011_remove_policy_version.sql", "migrations/012_risk_source_fields.sql"} {
 		sql, err := migrations.ReadFile(name)
 		if err != nil {
 			pool.Close()
@@ -502,7 +502,11 @@ func (s *PG) Events(ctx context.Context, f gateway.EventFilter) ([]gateway.Event
 	if f.Limit < 1 || f.Limit > 100 {
 		f.Limit = 50
 	}
-	rows, err := s.pool.Query(ctx, `SELECT body FROM audit_events WHERE time >= $1
+	rows, err := s.pool.Query(ctx, `SELECT (body - 'text') || jsonb_build_object(
+		'text_available', coalesce(body->>'text','') <> '',
+		'text_chars', char_length(coalesce(body->>'text','')),
+		'text_preview', left(coalesce(nullif(body->>'text',''),body->>'text_preview',''),500)
+	) FROM audit_events WHERE time >= $1
 		AND ($2='' OR kind=$2) AND ($3='' OR action=$3)
 		AND ($7::timestamptz IS NULL OR time < $7) AND ($8='' OR body->>'protocol'=$8 OR ($8='openai_images' AND body->>'protocol' IN ('openai_images_generations','openai_images_edits')))
         AND ($9='' OR body->>'model'=$9) AND ($10='' OR body->'decision'->>'scene_id'=$10)

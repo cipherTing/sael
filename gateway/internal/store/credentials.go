@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -44,10 +45,9 @@ func openCredential(c cipher.AEAD, id string, nonce, sealed []byte) (string, err
 }
 func maskCredential(raw string) string {
 	r := []rune(raw)
-	if len(r) <= 8 {
-		return "********"
-	}
-	return string(r[:4]) + "********" + string(r[len(r)-4:])
+	hidden := (len(r) + 1) / 2
+	left := (len(r) - hidden) / 2
+	return string(r[:left]) + strings.Repeat("*", hidden) + string(r[left+hidden:])
 }
 
 // InitCredentials verifies the persistent key before accepting any requests.

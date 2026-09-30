@@ -1,5 +1,6 @@
 export type TrafficPoint = {
   classifier_calls?: number;
+  classifier_sum_ms?: number;
   time: string;
   endpoint: string;
   model: string;
@@ -229,7 +230,7 @@ export function duration(value: number | null) {
   return value === null
     ? "—"
     : value < 1000
-      ? `${count(value)} ms`
+      ? `${new Intl.NumberFormat("zh-CN", { maximumFractionDigits: value < 1 ? 2 : 1 }).format(value)} ms`
       : `${new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 2 }).format(value / 1000)} s`;
 }
 export function latencySeries(
@@ -248,6 +249,29 @@ export function latencySeries(
   }
   return buckets.map((bucket) =>
     quantile(groups.get(Date.parse(bucket.time)) || [], q),
+  );
+}
+export function averageReview(points: TrafficPoint[]): number | null {
+  let samples = 0,
+    total = 0;
+  for (const point of points) {
+    if (point.classifier_sum_ms === undefined || !point.classifier_calls)
+      continue;
+    total += point.classifier_sum_ms;
+    samples += point.classifier_calls;
+  }
+  return samples ? total / samples : null;
+}
+export function averageReviewSeries(data: Analytics, buckets: Bucket[]) {
+  const groups = new Map<number, TrafficPoint[]>();
+  for (const point of data.traffic) {
+    const time = Date.parse(point.time);
+    const list = groups.get(time) || [];
+    list.push(point);
+    groups.set(time, list);
+  }
+  return buckets.map((bucket) =>
+    averageReview(groups.get(Date.parse(bucket.time)) || []),
   );
 }
 export function sceneStats(data: Analytics) {

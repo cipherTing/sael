@@ -15,12 +15,13 @@ import (
 
 func (s *Server) testPolicy(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		Text       string          `json:"text"`
-		Endpoint   string          `json:"endpoint"`
-		Model      string          `json:"model"`
-		Policy     *policy.Policy  `json:"policy,omitempty"`
-		Scores     []policy.Answer `json:"scores,omitempty"`
-		Connection *JevConfig      `json:"connection,omitempty"`
+		Text          string          `json:"text"`
+		Endpoint      string          `json:"endpoint"`
+		Model         string          `json:"model"`
+		Policy        *policy.Policy  `json:"policy,omitempty"`
+		ComparePolicy *policy.Policy  `json:"compare_policy,omitempty"`
+		Scores        []policy.Answer `json:"scores,omitempty"`
+		Connection    *JevConfig      `json:"connection,omitempty"`
 	}
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
@@ -49,9 +50,28 @@ func (s *Server) testPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	required := policy.RequiredQuestions(p, input.Endpoint, input.Model)
-	if len(p.Scenes) == 0 {
+	if len(p.Scenes) == 0 && input.ComparePolicy == nil {
 		for _, question := range policy.Questions {
 			required = append(required, question.Key)
+		}
+	}
+	if input.ComparePolicy != nil {
+		if err := policy.Validate(*input.ComparePolicy); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		needed := make(map[string]bool, len(required))
+		for _, key := range required {
+			needed[key] = true
+		}
+		for _, key := range policy.RequiredQuestions(*input.ComparePolicy, input.Endpoint, input.Model) {
+			needed[key] = true
+		}
+		required = nil
+		for _, question := range policy.Questions {
+			if needed[question.Key] {
+				required = append(required, question.Key)
+			}
 		}
 	}
 	scores := input.Scores

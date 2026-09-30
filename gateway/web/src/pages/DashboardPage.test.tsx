@@ -5,6 +5,7 @@ import {
   fireEvent,
   waitFor,
   act,
+  within,
 } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { toast } from "sonner";
@@ -14,6 +15,141 @@ import DashboardPage from "./DashboardPage";
 import type { Analytics } from "../analytics";
 import { request } from "../api";
 vi.mock("../api", () => ({ request: vi.fn() }));
+
+it("uses endpoint and mutually exclusive outcome rings with a separate real-sample latency distribution", async () => {
+  vi.mocked(request).mockImplementation(async (url) =>
+    String(url).includes("risk-sources")
+      ? { keys: [], ips: [] }
+      : {
+          ...data,
+          traffic: [
+            ...data.traffic,
+            {
+              time: data.since,
+              endpoint: "openai_chat",
+              model: "gpt-test",
+              outcome: "hit_allowed",
+              count: 3,
+            },
+          ],
+          distributions: [
+            {
+              time: data.since,
+              endpoint: "openai_chat",
+              metric: "review_ms",
+              upper: 300,
+              count: 2,
+            },
+            {
+              time: data.since,
+              endpoint: "openai_chat",
+              metric: "review_ms",
+              upper: 1000,
+              count: 3,
+            },
+            {
+              time: data.since,
+              endpoint: "openai_chat",
+              metric: "cache_hit",
+              upper: 0,
+              count: 7,
+            },
+          ],
+        },
+  );
+  mount();
+  expect(await screen.findByRole("img", { name: "端点构成" })).toBeTruthy();
+  expect(screen.getByRole("img", { name: "命中处置构成" })).toBeTruthy();
+  expect(screen.getByRole("img", { name: "审查耗时分布" })).toBeTruthy();
+  expect(screen.queryByRole("table", { name: "耗时区间明细" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "查看耗时区间明细" }));
+  const distribution = screen.getByRole("table", { name: "耗时区间明细" });
+  expect(
+    within(distribution).getByRole("row", { name: /≤ 300 ms.*2.*40%/ }),
+  ).toBeTruthy();
+  expect(
+    within(distribution).getByRole("row", { name: /300 ms–1 s.*3.*60%/ }),
+  ).toBeTruthy();
+  const allowed = screen.getByRole("link", { name: "查看记录放行记录" });
+  const q = new URL(allowed.getAttribute("href")!, "http://localhost")
+    .searchParams;
+  expect(q.get("kind")).toBe("hit");
+  expect(q.get("action")).toBe("allow");
+  expect(q.get("start")).toBe(data.since);
+  expect(
+    screen.getByRole("region", { name: "核心指标" }).children,
+  ).toHaveLength(4);
+  expect(screen.getByText("时间范围")).toBeTruthy();
+  expect(screen.getByText("时间粒度")).toBeTruthy();
+});
+
+it("shows no latency samples instead of a zero-valued distribution for cache-only requests", async () => {
+  vi.mocked(request).mockImplementation(async (url) =>
+    String(url).includes("risk-sources")
+      ? { keys: [], ips: [] }
+      : {
+          ...data,
+          distributions: [
+            {
+              time: data.since,
+              endpoint: "openai_chat",
+              metric: "cache_hit",
+              upper: 0,
+              count: 5,
+            },
+          ],
+        },
+  );
+  mount();
+  const distribution = await screen.findByRole("region", {
+    name: "构成与分布",
+  });
+  expect(
+    within(distribution).getByRole("heading", { name: "耗时分布" }),
+  ).toBeTruthy();
+  expect(
+    within(distribution).queryByRole("img", { name: "审查耗时分布" }),
+  ).toBeNull();
+  expect(within(distribution).getByText("暂无数据")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "查看耗时区间明细" })).toBeNull();
+});
+
+it("keeps scene volume drilldowns scoped after integrating the ranking into the table", async () => {
+  vi.mocked(request).mockImplementation(async (url) =>
+    String(url).includes("risk-sources")
+      ? { keys: [], ips: [] }
+      : {
+          ...data,
+          scenes: [
+            {
+              time: data.since,
+              endpoint: "openai_chat",
+              scene_id: "risk-1",
+              name: "高风险",
+              action: "block",
+              winner_id: "risk-1",
+              winner_name: "高风险",
+              count: 5,
+            },
+          ],
+        },
+  );
+  mount("/?endpoint=openai_chat&model=gpt-test");
+  const link = await screen.findByRole("link", {
+    name: "查看 高风险 生效记录",
+  });
+  expect(link.textContent).toContain("5");
+  const query = new URL(link.getAttribute("href")!, "http://localhost")
+    .searchParams;
+  expect(Object.fromEntries(query)).toEqual({
+    endpoint: "openai_chat",
+    model: "gpt-test",
+    start: data.since,
+    end: data.until,
+    scene: "risk-1",
+    kind: "hit",
+  });
+});
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
@@ -23,10 +159,11 @@ afterEach(() => {
 it("refreshes the displayed RPM every thirty seconds", async () => {
   vi.useFakeTimers();
   let responses = 100;
-  vi.mocked(request).mockImplementation(async () => ({
-    ...data,
-    current_rpm: ++responses,
-  }));
+  vi.mocked(request).mockImplementation(async (url) =>
+    String(url).includes("risk-sources")
+      ? { keys: [], ips: [] }
+      : { ...data, current_rpm: ++responses },
+  );
   await act(async () => {
     mount();
   });
@@ -58,6 +195,8 @@ const data: Analytics = {
       model: "gpt-test",
       outcome: "blocked",
       count: 5,
+      classifier_calls: 5,
+      classifier_sum_ms: 1000,
     },
     {
       time: "2026-09-24T00:00:00Z",
@@ -65,6 +204,8 @@ const data: Analytics = {
       model: "gpt-test",
       outcome: "clean",
       count: 95,
+      classifier_calls: 95,
+      classifier_sum_ms: 19000,
     },
   ],
   previous: [],
@@ -98,6 +239,42 @@ it("links blocked requests to records with the same resolved time window", async
     expect(url.searchParams.get("action")).toBe("block");
   }
   expect(screen.getAllByText("5%").length).toBeGreaterThan(0);
+});
+
+it("starts with one average latency line and lets the operator switch to slow requests", async () => {
+  vi.mocked(request).mockResolvedValue({
+    ...data,
+    distributions: [
+      {
+        time: data.since,
+        endpoint: "openai_chat",
+        metric: "review_ms",
+        upper: 300,
+        count: 100,
+      },
+    ],
+  });
+  mount();
+  const controls = within(
+    await screen.findByRole("group", { name: "耗时指标" }),
+  );
+  expect(
+    controls
+      .getByRole("button", { name: "平均耗时" })
+      .getAttribute("aria-pressed"),
+  ).toBe("true");
+  expect(screen.queryByRole("button", { name: "慢请求耗时" })).toBeNull();
+  fireEvent.click(controls.getByRole("button", { name: /^慢请求$/ }));
+  expect(
+    await screen.findByRole("button", { name: "慢请求耗时" }),
+  ).toBeTruthy();
+  expect(
+    controls
+      .getByRole("button", { name: /^慢请求$/ })
+      .getAttribute("aria-pressed"),
+  ).toBe("true");
+  fireEvent.click(controls.getByRole("button", { name: "平均耗时" }));
+  expect(screen.queryByRole("button", { name: "慢请求耗时" })).toBeNull();
 });
 
 it("preserves a chosen minute granularity when changing to a three-day range", async () => {
@@ -209,14 +386,13 @@ it("changes the requested granularity and includes the browser time zone", async
   ).toBe(true);
 });
 
-it("shows actions as shares of problem requests, without clean traffic diluting the bar", async () => {
+it("shows outcome shares of hit requests without clean traffic diluting the ring", async () => {
   vi.mocked(request).mockResolvedValue(data);
   mount();
   const links = await screen.findAllByRole("link", { name: "查看拦截记录" });
-  const segment = links.find(
-    (link) => link.parentElement?.className === "outcome-strip",
-  );
-  expect(segment?.style.width).toBe("100%");
+  const segment = links.find((link) => link.className === "composition-row");
+  expect(segment?.textContent).toContain("100%");
+  expect(segment?.textContent).toContain("5");
 });
 
 it("shows the recent minute RPM independently of the selected historical window", async () => {
@@ -284,12 +460,77 @@ it("shows cache reuse and its rate for the selected traffic scope", async () => 
     label.parentElement?.querySelector(".metric-detail")?.textContent,
   ).toBe("命中率 30%");
   const query = new URL(
-    String(vi.mocked(request).mock.lastCall?.[0]),
+    String(
+      vi
+        .mocked(request)
+        .mock.calls.find(([url]) =>
+          String(url).startsWith("/admin/analytics"),
+        )?.[0],
+    ),
     "http://localhost",
   ).searchParams;
   expect(query.get("endpoint")).toBe("openai_chat");
   expect(query.get("model")).toBe("gpt-test");
   expect(query.get("minutes")).toBe("60");
+});
+
+it("keeps source ranking drilldowns scoped to the resolved range, endpoint, model and selected credential", async () => {
+  vi.mocked(request).mockImplementation(async (url) =>
+    String(url).includes("risk-sources")
+      ? {
+          keys: [
+            {
+              credential_id: "credential-1",
+              masked_key: "sk-abc******def",
+              count: 5,
+            },
+          ],
+          ips: [{ client_ip: "203.0.113.9", count: 3 }],
+        }
+      : data,
+  );
+  mount("/?endpoint=openai_chat&model=gpt-test&minutes=60");
+  const keyLink = await screen.findByRole("link", {
+    name: "查看 sk-abc******def 命中记录",
+  });
+  const query = new URL(keyLink.getAttribute("href")!, "http://localhost")
+    .searchParams;
+  expect(Object.fromEntries(query)).toEqual({
+    endpoint: "openai_chat",
+    model: "gpt-test",
+    start: data.since,
+    end: data.until,
+    kind: "hit",
+    credential_id: "credential-1",
+  });
+  fireEvent.click(screen.getByRole("button", { name: /^IP$/ }));
+  const ipLink = await screen.findByRole("link", {
+    name: "查看 203.0.113.9 命中记录",
+  });
+  const ipQuery = new URL(ipLink.getAttribute("href")!, "http://localhost")
+    .searchParams;
+  expect(ipQuery.get("client_ip")).toBe("203.0.113.9");
+  expect(ipQuery.get("credential_id")).toBeNull();
+  expect(ipQuery.get("start")).toBe(data.since);
+});
+
+it("shows a missing masked credential as a placeholder while preserving its record drilldown", async () => {
+  vi.mocked(request).mockImplementation(async (url) =>
+    String(url).includes("risk-sources")
+      ? {
+          keys: [{ credential_id: "legacy-key", masked_key: "", count: 5 }],
+          ips: [],
+        }
+      : data,
+  );
+  mount();
+  const link = await screen.findByRole("link", { name: "查看 — 命中记录" });
+  expect(within(link).getByText("—")).toBeTruthy();
+  const query = new URL(link.getAttribute("href")!, "http://localhost")
+    .searchParams;
+  expect(query.get("credential_id")).toBe("legacy-key");
+  expect(query.get("kind")).toBe("hit");
+  expect(query.get("start")).toBe(data.since);
 });
 
 it("does not invent a cache hit rate when there have been no lookups", async () => {

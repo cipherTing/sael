@@ -4,109 +4,103 @@
 
 # Sael
 
-**可视化配置安全规则的 AI 中转网关**
+**让 AI 请求的安全规则可配置、可验证、可追踪**
 
-按端点和模型配置文本审查，支持前置拦截与非阻塞记录。
+部署在客户端与 AI 服务之间的文本审查网关，配备可视化运维控制台。
 
 [![CI](https://github.com/cipherTing/sael/actions/workflows/ci.yml/badge.svg)](https://github.com/cipherTing/sael/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/cipherTing/sael/sdk.svg)](https://pkg.go.dev/github.com/cipherTing/sael/sdk)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-[快速启动](#快速启动) · [部署与配置](gateway/README.md) · [CLI 与 SDK](docs/cli.md)
+[快速启动](#快速启动) · [部署文档](gateway/README.md) · [CLI 与 SDK](docs/cli.md) · [贡献指南](CONTRIBUTING.md)
 
 </div>
 
-![Sael 运维总览：请求趋势、命中比例、审查耗时和端点分布](docs/images/overview.png)
+![Sael 总览：用户输入、命中拦截与审查耗时趋势](docs/images/overview.png)
 
-## Sael 做什么
+## Sael 是什么
 
-把 Sael 放在客户端与 AI 服务之间：客户端使用网关地址和原有凭据，Sael 将当前用户文本交给 **Jev 分类器**，支持**阻塞性审查**与**非阻塞性审查**：前者在转发前决定是否拦截，后者与转发并行、记录命中。未匹配的请求正常转发。
+Sael 为现有 AI 服务增加一层文本安全审查。客户端使用 Sael 的进网地址和原有 API Key；网关按场景判断当前用户输入，执行拦截或记录，并转发到你配置的 AI 服务。分类能力由 [Jev](https://docs.typesafe.ai/models) 提供。
 
-安全规则集中在控制台维护。你可以让某条规则只对指定模型和端点生效，组合多个风险条件，拖拽调整优先级，用真实文本试算后再开启审查。
+你可以在控制台配置规则、比较草稿与正在使用的策略，再从总览定位到具体的问题请求。支持 OpenAI 与 Anthropic 请求格式，保留原请求正文、认证信息和流式响应。
 
-| 你要解决的问题 | Sael 提供的能力 |
+| 你需要做的事 | Sael 提供的能力 |
 | --- | --- |
-| 不同模型、接口需要不同规则 | 按端点和模型限定场景；条件支持“任一项”或“全部项” |
-| 调规则之前想知道会影响什么 | 草稿试算、分类分数、逐场景匹配过程、从已有场景创建 |
-| 想看审查是否健康、哪些规则经常命中 | 请求趋势、实时 RPM、命中率、拦截率、Jev 失败率与耗时、场景排行 |
-| 需要定位一次拦截 | 请求端点、模型、IP、显式会话 ID、去敏文本、命中条件与分数 |
-| 重复违规文本造成重复送审 | 按场景条件和提示词复用判定，缓存命中直接执行当前动作 |
-| 想定位问题请求使用了哪个密钥 | 完整密钥加密存储，可信列表和请求详情显示掩码密钥 |
-| 同一会话反复触发拦截 | 可选会话冻结，设置时长，到期自动恢复 |
+| 为不同接口和模型制定规则 | 场景范围、任一／全部条件、原始分数阈值和拖拽排序 |
+| 改规则前验证影响 | 真实文本试算、线上与草稿对照、复用已有场景 |
+| 观察审查运行情况 | 实时 RPM、流量与命中趋势、处理结果构成、耗时分布、缓存效率 |
+| 找到风险集中在哪里 | 场景、密钥和来源 IP 排行，筛选后下钻请求记录 |
+| 查看一次请求发生了什么 | 去敏文本预览与全文、掩码密钥、会话关联、命中项与原始分数 |
+| 处理重复违规请求 | 审核判定复用、可选的场景级会话冻结 |
 
-## 规则由场景定义
+## 用场景组织规则
 
-例如，某个场景可以要求 **血腥程度 > 1.5 且自伤风险 > 0.8** 才拦截；另一个场景只记录命中并继续转发。阈值属于各自场景，首个匹配场景决定动作。
+阈值和处理动作属于各自场景。选择端点与模型，组合条件，拖拽调整优先级；滑杆和数值输入同时支持粗调与精确设置。试算放在同一编辑器里，保存前即可比较当前策略与草稿结果。
 
-![场景编辑器：端点、模型、组合条件和处理动作](docs/images/scenes.png)
+![场景工作台：条件刻度、范围选择、处理动作和策略试算](docs/images/scenes.png)
 
-Jev 提供 11 个审核项：9 个 0–1 概率判断，以及色情、血腥两项 0–3 程度评分。控制台使用中文名称，量表说明收在问号中。
+## 从总览走到问题请求
 
-## 从趋势回到具体请求
+趋势、构成、分布和排行共同呈现审查情况。时间范围与时间粒度独立选择，端点、模型等筛选可继续带入记录页面。
 
-总览把流量、决策比例和 Jev 健康放在同一视图。按时间、端点和模型筛选后，可以继续下钻到命中、Jev 失败或网关警告记录。
+![审核记录：请求信息、去敏文本和命中分数](docs/images/record.png)
 
-![请求详情：去敏后的当前文本、请求上下文和命中分数](docs/images/record.png)
+截图来自本地控制台，使用示例数据。
 
-命中项优先展示，其余分数默认折叠。正常请求只保留计数和耗时聚合，不保存逐条记录、正文或分数分布。截图使用虚构样例数据，展示实际控制台。
+逐条记录只保留场景命中、分类器失败和网关警告。正常请求不保存逐条正文；记录中的文本先去敏，调用密钥加密存储后仅以掩码展示。
 
-## 如何工作
+## 架构
 
 ```mermaid
 flowchart LR
-    Client[客户端] --> Gateway[Sael 进网端口]
-    Gateway --> Scope{场景适用且密钥可信?}
-    Scope -- 否 --> Upstream[你的 AI 服务]
-    Scope -- 是 --> Mode{包含阻塞场景?}
-    Mode -- 是 --> Review[查询场景判定缓存]
-    Review -- 命中 --> Rules[按当前顺序匹配场景]
-    Review -- 缺失 --> Jev[Jev → 场景判定]
-    Jev --> Rules
-    Rules -- 放行 --> Upstream
-    Rules -- 拦截 --> Deny[按端点格式返回 403]
-    Mode -- 否 --> Upstream
-    Mode -- 并行审查 --> Async[场景缓存 / Jev → 命中记录]
-    Async -.-> Console[独立端口的运维控制台]
-    Rules -. 命中与决策 .-> Console
+    Client[客户端] --> Proxy[反向代理]
+    Proxy --> Gateway[Sael 网关]
+    Gateway --> Upstream[你的 AI 服务]
+    Admin[运维控制台] --> Gateway
+    Gateway --> CLI[常驻 Sael CLI]
+    CLI --> Jev[Jev 分类器]
+    Gateway --> Store[(PostgreSQL / Redis)]
 ```
 
-- **监控端点**：OpenAI Chat Completions、Responses、Anthropic Messages，以及 OpenAI Images 的 generations、edits。生成和编辑统一为 Images，只审 `prompt`；variations 直接透传。
-- **可信密钥**：受监控业务请求首次成功后才启用该密钥的审查，首次请求不补审；默认闲置 30 天清除，可在设置中调整。
-- **转发边界**：其他路径直接转发；保留原请求正文、认证信息和流式响应。历史对话、图片、音频与工具返回值不送给 Jev。
-- **异常处理**：Jev 失败时记录并放行；输入超限时跳过 Jev、记录警告并放行。上游服务的错误不计为审核故障。
-- **部署方式**：Go 网关、React 控制台、PostgreSQL 和 Redis，Docker Compose 启动。管理页面和业务进网使用不同端口。
-- **分类执行**：网关启动并复用一个常驻 CLI 进程，由 CLI 调用 Jev；并发请求使用各自配置，网关退出时 CLI 一同关闭。
+业务进网与运维控制台分开监听。Docker Compose 同时启动网关、PostgreSQL 和 Redis，出站地址与审查配置在控制台维护。
 
 ## 快速启动
+
+准备好 Docker Compose，以及可用 Jev 服务的地址、模型和密钥。
 
 ```sh
 git clone https://github.com/cipherTing/sael.git
 cd sael/gateway/deploy
 cp .env.example .env
-# 在 .env 中填写密码，并用 openssl rand -base64 32 生成 CREDENTIAL_ENCRYPTION_KEY
-docker compose up --build -d
+openssl rand -base64 32
 ```
 
-也可以在仓库根目录用 npm 管理容器（`.env` 仍放在 `gateway/deploy`）：
+编辑 `.env`，填写管理员、PostgreSQL 和两套 Redis 的密码，将上面生成的主密钥填入 `CREDENTIAL_ENCRYPTION_KEY` 并保留备份。控制台没有默认登录密码。
 
 ```sh
-cp gateway/deploy/.env.example gateway/deploy/.env
-# 编辑 gateway/deploy/.env
-npm run docker:up          # 启动并等待服务就绪
-npm run docker:rebuild     # 重建并更新网关容器
+docker compose up --build -d --wait
 ```
 
-`docker:ps`、`docker:logs` 和 `docker:down` 分别用于查看状态、跟踪网关日志和停止服务；`docker:down` 保留数据卷。
+| 入口 | 默认地址 |
+| --- | --- |
+| 运维控制台 | `http://localhost:8080` |
+| 客户端进网 | `http://localhost:8081` |
 
-默认管理地址 **http://localhost:8080**，客户端进网地址 **http://localhost:8081**。客户端的 API 根地址通常填写 `http://localhost:8081/v1`，凭据继续使用上游原有密钥。
+首次启动审查关闭，登录密码是 `.env` 中设置的 `ADMIN_PASSWORD`。端口可通过 `.env` 修改；默认仅绑定宿主回环地址，外网接入使用反向代理。
 
-首次启动审查关闭。登录后，在 **设置 → 接入**填写出站地址，在 **设置 → Jev 分类器**配置并测试连接，再到 **场景**添加规则和试算，最后在 **设置 → 审查**开启。宿主端口可在 `.env` 中调整。
+1. 在 **设置 → 接入**填写 AI 服务的出站 Base URL。
+2. 在 **设置 → Jev 分类器**配置连接并测试。
+3. 在 **场景**创建规则，用文本试算。
+4. 在 **设置 → 审查**开启全局审查。
+5. 将客户端 API 地址改为进网地址，继续使用原有密钥；从总览和记录查看结果。
 
-完整步骤见 [网关部署文档](gateway/README.md)。
+调用密钥首次经上游验证成功后进入可信列表，后续请求按场景审查。OpenAI 客户端的 API 根地址通常填写 `http://localhost:8081/v1`。
+
+在仓库根目录也可使用 `npm run docker:up`、`docker:rebuild`、`docker:ps`、`docker:logs`、`docker:down` 管理容器。完整部署和配置说明见[网关文档](gateway/README.md)。
 
 ## CLI、SDK 与开发
 
-只需要分类能力时，可以单独使用 CLI 或 Go SDK；它们返回分数，由调用方决定后续动作。
+CLI 可独立进行文本审核；Go SDK 是独立的 Jev API 调用器，不依赖网关。
 
 ```sh
 sael check "需要审查的文本"
@@ -114,14 +108,14 @@ sael check --questions gore,self_harm "只审指定审核项"
 cat prompt.txt | sael check --json
 ```
 
-| 入口 | 内容 |
+| 文档 | 内容 |
 | --- | --- |
-| [CLI 与 SDK](docs/cli.md) | 安装、命令行用法、Go 示例和分类器配置 |
-| [网关部署与开发](gateway/README.md) | Docker、环境变量、审核边界、测试命令 |
-| [贡献指南](CONTRIBUTING.md) | 本地开发与提交约定 |
+| [CLI 与 SDK](docs/cli.md) | 安装、终端配置、命令和 Go 示例 |
+| [网关文档](gateway/README.md) | 部署、配置、记录边界、本地开发和测试 |
+| [贡献指南](CONTRIBUTING.md) | 开发约定与提交检查 |
 | [安全说明](SECURITY.md) | 安全问题反馈 |
 
-日志使用正则规则去除常见凭据和个人信息；分类器与上游仍收到原始文本。去敏无法覆盖所有敏感信息格式，部署前请了解[记录边界](gateway/README.md#请求记录与去敏)。
+普通问题和功能建议可提交到 [GitHub Issues](https://github.com/cipherTing/sael/issues)。
 
 ## 许可
 

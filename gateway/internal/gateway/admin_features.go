@@ -26,7 +26,7 @@ func (s *Server) policyInput(r *http.Request) (PolicyUpdate, error) {
 	if len(patch) == 0 {
 		return update, errors.New("没有要保存的配置")
 	}
-	allowed := map[string]bool{"scenes": true, "enabled": true, "trusted_key_idle_days": true, "preview_chars": true, "retention_days": true, "session_block_enabled": true, "session_block_on_blocking_review": true, "session_block_on_nonblocking_review": true, "session_block_ttl_seconds": true}
+	allowed := map[string]bool{"scenes": true, "enabled": true, "trusted_key_idle_days": true, "preview_chars": true, "retention_days": true, "block_message": true}
 	for k := range patch {
 		if !allowed[k] {
 			return update, errors.New("不支持的策略配置字段")
@@ -62,6 +62,24 @@ func (s *Server) adminFeatures(w http.ResponseWriter, r *http.Request) bool {
 			return true
 		}
 		writeJSON(w, list)
+		return true
+	case r.URL.Path == "/admin/risk-sources" && r.Method == http.MethodGet:
+		filter, err := analyticsFilter(r.URL.Query())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return true
+		}
+		reader, ok := s.Store.(RiskSourceReader)
+		if !ok {
+			http.Error(w, "风险来源统计暂不可用", http.StatusServiceUnavailable)
+			return true
+		}
+		result, err := reader.RiskSources(r.Context(), filter)
+		if err != nil {
+			http.Error(w, "风险来源统计读取失败", http.StatusServiceUnavailable)
+			return true
+		}
+		writeJSON(w, result)
 		return true
 	case r.URL.Path == "/admin/review-cache" && (r.Method == http.MethodGet || r.Method == http.MethodPut):
 		manager, ok := s.ReviewCache.(ReviewCacheAdmin)

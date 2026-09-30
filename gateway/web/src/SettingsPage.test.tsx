@@ -91,14 +91,26 @@ it("keeps an unsaved scene edit when another setting changes", () => {
   fireEvent.change(screen.getByRole("spinbutton", { name: "血腥程度阈值" }), {
     target: { value: "2.2" },
   });
-  rerender(<SettingsPage policy={{ ...policy, enabled: false }} onSave={save} />);
-  expect((screen.getByRole("spinbutton", { name: "血腥程度阈值" }) as HTMLInputElement).value).toBe("2.2");
+  rerender(
+    <SettingsPage policy={{ ...policy, enabled: false }} onSave={save} />,
+  );
+  expect(
+    (
+      screen.getByRole("spinbutton", {
+        name: "血腥程度阈值",
+      }) as HTMLInputElement
+    ).value,
+  ).toBe("2.2");
   fireEvent.click(screen.getByRole("button", { name: "保存并生效" }));
   expect(save.mock.calls[0][0].scenes[0].conditions[0].threshold).toBe(2.2);
 });
 it("does not show a scene save for a change made only in global settings", () => {
-  const { rerender } = render(<SettingsPage policy={policy} onSave={vi.fn()} />);
-  rerender(<SettingsPage policy={{ ...policy, enabled: false }} onSave={vi.fn()} />);
+  const { rerender } = render(
+    <SettingsPage policy={policy} onSave={vi.fn()} />,
+  );
+  rerender(
+    <SettingsPage policy={{ ...policy, enabled: false }} onSave={vi.fn()} />,
+  );
   expect(screen.queryByRole("button", { name: "保存并生效" })).toBeNull();
 });
 it("restores an unpublished draft when returning to the workspace", () => {
@@ -125,4 +137,43 @@ it("edits a copied condition without modifying the original scene", async () => 
   await waitFor(() => expect(save).toHaveBeenCalledOnce());
   expect(save.mock.calls[0][0].scenes[0].conditions[0].threshold).toBe(1.5);
   expect(save.mock.calls[0][0].scenes[1].conditions[0].threshold).toBe(2);
+});
+
+it("puts draft testing in the second scene tab without a header shortcut", () => {
+  render(<SettingsPage policy={policy} onSave={vi.fn()} />);
+  expect(screen.queryByRole("button", { name: "试算" })).toBeNull();
+  expect(screen.queryByRole("textbox", { name: "测试文本" })).toBeNull();
+  fireEvent.mouseDown(screen.getByRole("tab", { name: "试算" }), { button: 0 });
+  expect(screen.getByRole("textbox", { name: "测试文本" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "草稿试算" })).toBeNull();
+});
+
+it("defaults a new scene's session freeze to off", () => {
+  render(<SettingsPage policy={policy} onSave={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: "新建场景" }));
+  expect(
+    screen
+      .getByRole("switch", { name: "命中后冻结会话" })
+      .getAttribute("aria-checked"),
+  ).toBe("false");
+});
+
+it("saves freeze settings on the selected scene", async () => {
+  const save = vi.fn().mockResolvedValue(undefined);
+  render(<SettingsPage policy={policy} onSave={save} />);
+  const freeze = screen.getByRole("switch", { name: "命中后冻结会话" });
+  expect(freeze.getAttribute("aria-checked")).toBe("false");
+  fireEvent.click(screen.getByRole("switch", { name: "命中后冻结会话" }));
+  fireEvent.change(
+    screen.getByRole("spinbutton", { name: "冻结时长（分钟）" }),
+    {
+      target: { value: "120" },
+    },
+  );
+  fireEvent.click(screen.getByRole("button", { name: "保存并生效" }));
+  await waitFor(() => expect(save).toHaveBeenCalledOnce());
+  expect(save.mock.calls[0][0].scenes[0]).toMatchObject({
+    session_block_enabled: true,
+    session_block_ttl_seconds: 7200,
+  });
 });

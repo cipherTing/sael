@@ -26,7 +26,7 @@ func TestCredentialEncryptionAuthenticatesIdentityAndMasksAfterDecrypt(t *testin
 		t.Fatal("plaintext stored")
 	}
 	plaintext, err := openCredential(c, "identity", nonce, sealed)
-	if err != nil || plaintext != "sk-secret-value-5678" || maskCredential(plaintext) != "sk-s********5678" {
+	if err != nil || plaintext != "sk-secret-value-5678" || maskCredential(plaintext) != "sk-se**********-5678" {
 		t.Fatal("credential did not roundtrip or was not masked", err)
 	}
 	if _, err := openCredential(c, "other", nonce, sealed); err == nil {
@@ -36,11 +36,34 @@ func TestCredentialEncryptionAuthenticatesIdentityAndMasksAfterDecrypt(t *testin
 	if _, err := openCredential(c, "identity", nonce, sealed); err == nil {
 		t.Fatal("tampering accepted")
 	}
-	if maskCredential("short") != "********" {
-		t.Fatal("short key leaked")
-	}
 	if _, err := newCredentialCipher(""); err == nil {
 		t.Fatal("missing master key accepted")
+	}
+}
+
+func TestCredentialMaskHidesMiddleHalf(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{name: "empty", raw: "", want: ""},
+		{name: "single character", raw: "a", want: "*"},
+		{name: "two characters", raw: "ab", want: "*b"},
+		{name: "three characters", raw: "abc", want: "**c"},
+		{name: "four characters", raw: "abcd", want: "a**d"},
+		{name: "odd hidden half", raw: "short", want: "s***t"},
+		{name: "extra visible character on right", raw: "abcdef", want: "a***ef"},
+		{name: "eight characters", raw: "abcdefgh", want: "ab****gh"},
+		{name: "long key", raw: "test-full-client-key-9876", want: "test-f*************y-9876"},
+		{name: "unicode", raw: "甲乙丙丁戊己庚辛", want: "甲乙****庚辛"},
+		{name: "odd unicode length", raw: "甲乙丙丁戊己庚", want: "甲****己庚"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := maskCredential(tc.raw); got != tc.want {
+				t.Fatalf("maskCredential(%q) = %q, want %q", tc.raw, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -60,7 +83,7 @@ func TestTrustedCredentialsSurviveExpiryForHistoricalEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	list, err := s.TrustedCredentials(ctx, idle, 0, 50)
-	if err != nil || list.Total != 1 || len(list.Items) != 1 || list.Items[0].MaskedKey != "sk-c********5678" {
+	if err != nil || list.Total != 1 || len(list.Items) != 1 || list.Items[0].MaskedKey != "sk-co************t-5678" {
 		t.Fatalf("list %+v %v", list, err)
 	}
 	event := gateway.Event{ID: "credential-event", RequestID: "request", Time: time.Now().UTC(), Kind: "hit", CredentialID: "credential-id", Decision: policy.Decision{Action: policy.Block}}
@@ -68,7 +91,7 @@ func TestTrustedCredentialsSurviveExpiryForHistoricalEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := p.Event(ctx, event.ID)
-	if err != nil || got.MaskedKey != "sk-c********5678" {
+	if err != nil || got.MaskedKey != "sk-co************t-5678" {
 		t.Fatal("missing event key", err)
 	}
 	rows, err := p.Events(ctx, gateway.EventFilter{Since: event.Time.Add(-time.Minute), CredentialID: "credential-id"})
@@ -113,7 +136,7 @@ func TestSuccessfulRevalidationRestoresCredentialAfterCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	list, err := s.TrustedCredentials(ctx, idle, 0, 50)
-	if err != nil || len(list.Items) != 1 || list.Items[0].MaskedKey != "secr********9876" {
+	if err != nil || len(list.Items) != 1 || list.Items[0].MaskedKey != "secre***********y-9876" {
 		t.Fatal("stale marker suppressed ciphertext recovery", list, err)
 	}
 }

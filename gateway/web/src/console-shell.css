@@ -1,0 +1,105 @@
+:root {
+  color: #253249;
+  background: #f4f6fa;
+  --foreground: #253249;
+  --muted-foreground: #68778d;
+  --border: #e3e8f0;
+  --accent: #edf2fb;
+}
+.sidebar {
+  width: 196px;
+  background: #fcfdff;
+  border-right-color: #e4e9f1;
+}
+.shell-main {
+  margin-left: 196px;
+}
+.brand {
+  height: 68px;
+  font-size: 23px;
+}
+.nav-item {
+  color: #65748c;
+  transition:
+    background 140ms,
+    color 140ms;
+}
+.nav-item.active {
+  background: #eaf0ff;
+  color: #3f5dc8;
+}
+.topbar {
+  height: 50px;
+  padding-inline: 24px;
+  background: #ffffffed;
+  border-bottom-color: #e7ebf2;
+}
+.content {
+  padding: 22px 24px 32px;
+}
+.page-heading h1 {
+  color: #273449;
+  letter-spacing: -0.4px;
+}
+.data-table th {
+  color: #637188;
+}
+.data-table td {
+  color: #35455e;
+}
+.data-table tbody tr {
+  transition: background 120ms;
+}
+.muted {
+  color: #718096;
+}
+.control-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+}
+.control-field-label {
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+  color: #53627a;
+}
+.control-field > [data-slot="select-trigger"],
+.control-field > .time-trigger {
+  max-width: 100%;
+}
+.filterbar,
+.records-select-toolbar,
+.page-heading .heading-actions {
+  align-items: flex-end;
+}
+.refresh-control {
+  align-self: flex-end;
+}
+@media (max-width: 900px) {
+  .sidebar {
+    width: 180px;
+  }
+  .shell-main {
+    margin-left: 180px;
+  }
+  .topbar {
+    padding-inline: 20px;
+  }
+  .content {
+    padding: 20px;
+  }
+}
+@media (max-width: 640px) {
+  .shell-main {
+    margin-left: 0;
+  }
+  .topbar {
+    padding-inline: 16px;
+  }
+  .content {
+    padding: 18px 16px 28px;
+  }
+}

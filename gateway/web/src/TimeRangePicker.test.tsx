@@ -15,6 +15,7 @@ const current: TimeRangeValue = { key: "24h", label: "近 24 小时", hours: 24 
 it("applies a quick range immediately when it is clicked", () => {
   const onChange = vi.fn();
   render(<TimeRangePicker value={current} onChange={onChange} />);
+  expect(screen.getByText("时间范围")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "时间范围：近 24 小时" }));
   fireEvent.click(screen.getByRole("button", { name: "近 7 天" }));
   expect(onChange).toHaveBeenCalledWith(

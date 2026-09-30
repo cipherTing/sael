@@ -1,14 +1,23 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowUpRight, ShieldCheck } from "lucide-react";
+import {
+  ArrowUpRight,
+  Database,
+  KeyRound,
+  Network,
+  PlugZap,
+  ShieldCheck,
+} from "lucide-react";
+import "../newsettings-workbench.css";
 import type { Policy, PolicyPatch, PolicyResponse } from "../policy";
 import { request } from "../api";
 import { notifyError, notifyRetry } from "../notifications";
 import { PageHeading, Panel, Loading, Empty } from "../components/common";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import { Textarea } from "../components/ui/textarea";
 import { Switch } from "../components/ui/switch";
 import {
   Tabs,
@@ -18,7 +27,6 @@ import {
 } from "../components/ui/tabs";
 import { RefreshButton } from "../components/RefreshButton";
 import { TrustedKeySettings } from "../components/TrustedKeySettings";
-import { SessionFreezeSettings } from "../components/SessionFreezeSettings";
 import AccessSettings from "../components/AccessSettings";
 import { fullDate, count } from "../analytics";
 
@@ -28,15 +36,15 @@ type Props = {
   jev: ReactNode;
 };
 const tabs = [
-  ["review", "审查"],
-  ["jev", "Jev 分类器"],
-  ["access", "接入"],
-  ["keys", "可信密钥"],
-  ["cache", "审核缓存"],
+  { id: "review", label: "审查", icon: ShieldCheck },
+  { id: "jev", label: "Jev 分类器", icon: PlugZap },
+  { id: "access", label: "接入", icon: Network },
+  { id: "keys", label: "可信密钥", icon: KeyRound },
+  { id: "cache", label: "审核缓存", icon: Database },
 ];
 export default function SettingsConsole({ policy, onSave, jev }: Props) {
   const [params, setParams] = useSearchParams();
-  const tab = tabs.some(([id]) => id === params.get("tab"))
+  const tab = tabs.some(({ id }) => id === params.get("tab"))
     ? params.get("tab")!
     : "review";
   return (
@@ -48,8 +56,9 @@ export default function SettingsConsole({ policy, onSave, jev }: Props) {
         className="settings-console"
       >
         <TabsList className="settings-tabs">
-          {tabs.map(([id, label]) => (
+          {tabs.map(({ id, label, icon: Icon }) => (
             <TabsTrigger key={id} value={id}>
+              <Icon size={14} />
               {label}
             </TabsTrigger>
           ))}
@@ -62,15 +71,17 @@ export default function SettingsConsole({ policy, onSave, jev }: Props) {
           <AccessSettings />
         </TabsContent>
         <TabsContent value="keys">
-          <TrustedKeySettings
-            policy={policy}
-            onSave={(next) =>
-              onSave({
-                trusted_key_idle_days: next.trusted_key_idle_days,
-              })
-            }
-          />
-          <TrustedKeys />
+          <div className="settings-stack settings-keys-stack">
+            <TrustedKeySettings
+              policy={policy}
+              onSave={(next) =>
+                onSave({
+                  trusted_key_idle_days: next.trusted_key_idle_days,
+                })
+              }
+            />
+            <TrustedKeys />
+          </div>
         </TabsContent>
         <TabsContent value="cache">
           <CacheSettings />
@@ -119,7 +130,7 @@ function ReviewSettings({
     }
   }
   return (
-    <div className="settings-stack">
+    <div className="settings-stack review-settings-grid">
       <Panel title="请求审查">
         <div className="review-switch-row">
           <div className="review-switch-label">
@@ -139,18 +150,6 @@ function ReviewSettings({
           />
         </div>
       </Panel>
-      <SessionFreezeSettings
-        policy={policy}
-        onSave={(next) =>
-          onSave({
-            session_block_on_blocking_review:
-              next.session_block_on_blocking_review,
-            session_block_on_nonblocking_review:
-              next.session_block_on_nonblocking_review,
-            session_block_ttl_seconds: next.session_block_ttl_seconds,
-          })
-        }
-      />
       <Panel title="记录保留">
         <form
           className="settings-inline-form"
@@ -184,7 +183,139 @@ function ReviewSettings({
           </Button>
         </form>
       </Panel>
+      <BlockMessageSettings policy={policy} onSave={onSave} />
     </div>
+  );
+}
+
+const defaultBlockMessage = "Request denied.";
+const blockMessageVariables = [
+  { value: "{request_id}", label: "请求 ID", example: "req-preview" },
+  { value: "{endpoint}", label: "请求路径", example: "/v1/responses" },
+  { value: "{model}", label: "模型", example: "gpt-4.1" },
+] as const;
+
+function BlockMessageSettings({
+  policy,
+  onSave,
+}: {
+  policy: Policy;
+  onSave: Props["onSave"];
+}) {
+  const saved = policy.block_message?.trim()
+    ? policy.block_message
+    : defaultBlockMessage;
+  const [message, setMessage] = useState(saved);
+  const [saving, setSaving] = useState(false);
+  const editor = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => setMessage(saved), [saved]);
+  const unknown = [...message.matchAll(/\{[^{}]*\}/g)]
+    .map(([token]) => token)
+    .find(
+      (token) => !blockMessageVariables.some((item) => item.value === token),
+    );
+  const error = !message.trim()
+    ? "请输入拦截提示"
+    : message.length > 500
+      ? "最多 500 字"
+      : unknown
+        ? `不支持占位符 ${unknown}`
+        : /[{}]/.test(message.replace(/\{[^{}]*\}/g, ""))
+          ? "占位符不完整"
+          : "";
+  const preview = message.replace(
+    /\{request_id\}|\{endpoint\}|\{model\}/g,
+    (token) =>
+      blockMessageVariables.find((item) => item.value === token)?.example ||
+      token,
+  );
+
+  function insert(value: string) {
+    const start = editor.current?.selectionStart ?? message.length;
+    const end = editor.current?.selectionEnd ?? message.length;
+    setMessage(message.slice(0, start) + value + message.slice(end));
+    requestAnimationFrame(() => {
+      editor.current?.focus();
+      editor.current?.setSelectionRange(
+        start + value.length,
+        start + value.length,
+      );
+    });
+  }
+
+  async function save() {
+    if (saving || error || message === saved) return;
+    setSaving(true);
+    try {
+      await onSave({ block_message: message });
+      toast.success("拦截提示已保存");
+    } catch (err) {
+      notifyError(err);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Panel title="拦截提示" className="block-message-panel">
+      <div className="block-message-settings">
+        <div className="block-message-editor">
+          <label className="field">
+            <span>发送给客户端的错误信息</span>
+            <Textarea
+              ref={editor}
+              aria-label="拦截提示"
+              rows={3}
+              maxLength={500}
+              value={message}
+              onChange={(event) => setMessage(event.target.value)}
+              aria-invalid={Boolean(error)}
+            />
+          </label>
+          <div className="block-message-variables">
+            {blockMessageVariables.map((item) => (
+              <button
+                key={item.value}
+                type="button"
+                aria-label={`插入${item.label}`}
+                onClick={() => insert(item.value)}
+              >
+                <code>{item.value}</code>
+                <span>{item.label}</span>
+              </button>
+            ))}
+          </div>
+          <p className="small muted">
+            点击变量插入光标处，发送 403 时会替换成当前请求的值。
+          </p>
+          {error && <p className="small block-message-error">{error}</p>}
+          <div className="heading-actions">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={saving || message === defaultBlockMessage}
+              onClick={() => setMessage(defaultBlockMessage)}
+            >
+              恢复默认
+            </Button>
+            <Button
+              size="sm"
+              disabled={saving || Boolean(error) || message === saved}
+              onClick={() => void save()}
+            >
+              {saving ? "保存中…" : "保存拦截提示"}
+            </Button>
+          </div>
+        </div>
+        <div className="block-message-preview">
+          <span className="small muted">预览</span>
+          <div className="block-message-preview-body">
+            <span>403</span>
+            <p>{preview || "—"}</p>
+          </div>
+        </div>
+      </div>
+    </Panel>
   );
 }
 type Credential = {
@@ -256,7 +387,7 @@ function TrustedKeys() {
                         <Link
                           to={`/events?credential_id=${encodeURIComponent(item.id)}`}
                         >
-                          记录
+                          查看记录
                           <ArrowUpRight size={13} />
                         </Link>
                       </Button>
@@ -321,6 +452,12 @@ function CacheSettings() {
     if (result.error) notifyRetry(result.error, () => void result.refetch());
   }, [result.error, result.refetch]);
   const data = result.data;
+  const usage = data?.effective_max_bytes
+    ? Math.max(
+        0,
+        Math.min(100, (data.used_bytes / data.effective_max_bytes) * 100),
+      )
+    : 0;
   const valid =
     Number.isInteger(Number(days)) &&
     Number(days) >= 1 &&
@@ -348,7 +485,7 @@ function CacheSettings() {
     }
   }
   return (
-    <div className="settings-stack">
+    <div className="cache-settings-grid">
       <Panel
         title="审核缓存"
         extra={
@@ -368,7 +505,7 @@ function CacheSettings() {
           <Loading />
         ) : (
           <>
-            <div className="cache-metrics">
+            <section className="cache-metrics" aria-label="缓存复用统计">
               <div>
                 <span>复用次数</span>
                 <strong>{data ? count(data.hits) : "—"}</strong>
@@ -382,34 +519,40 @@ function CacheSettings() {
                 </strong>
               </div>
               <div>
-                <span>判定条目</span>
+                <span>缓存条目</span>
                 <strong>{data ? count(data.entries) : "—"}</strong>
               </div>
-              <div>
-                <span>已用容量</span>
+            </section>
+            <div className="cache-capacity">
+              <div className="cache-capacity-heading">
+                <span>容量使用</span>
                 <strong>
-                  {data ? `${(data.used_bytes / mib).toFixed(1)} MiB` : "—"}
+                  {data?.effective_max_bytes ? `${usage.toFixed(1)}%` : "—"}
                 </strong>
               </div>
-            </div>
-            <div className="cache-capacity">
-              <div className="capacity-track">
-                <span
-                  style={{
-                    width: `${data && data.effective_max_bytes ? Math.min(100, (data.used_bytes / data.effective_max_bytes) * 100) : 0}%`,
-                  }}
-                />
+              <div
+                className="capacity-track"
+                role="meter"
+                aria-label="缓存容量使用"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={usage}
+              >
+                <span style={{ width: `${usage}%` }} />
               </div>
-              <span>
-                {data?.effective_max_bytes
-                  ? `容量上限 ${count(data.effective_max_bytes / mib)} MiB`
-                  : "—"}
-              </span>
+              <div className="cache-capacity-values">
+                <span>
+                  {data?.effective_max_bytes
+                    ? `${(data.used_bytes / mib).toFixed(1)} / ${count(data.effective_max_bytes / mib)} MiB`
+                    : "—"}
+                </span>
+                <span>实际容量</span>
+              </div>
             </div>
           </>
         )}
       </Panel>
-      <Panel title="缓存配置">
+      <Panel title="缓存配置" className="cache-configuration">
         <form
           className="settings-inline-form"
           onSubmit={(e) => {
@@ -449,7 +592,7 @@ function CacheSettings() {
                 Number(capacity) * mib === data.max_bytes)
             }
           >
-            {saving ? "保存中…" : "保存"}
+            {saving ? "保存中…" : "保存缓存配置"}
           </Button>
         </form>
       </Panel>

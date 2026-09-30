@@ -100,15 +100,17 @@ export function Choice({
   onChange,
   options,
   label,
+  visibleLabel,
   className = "",
 }: {
   value: string;
   onChange: (v: string) => void;
   options: { value: string; label: ReactNode }[];
   label: string;
+  visibleLabel?: string;
   className?: string;
 }) {
-  return (
+  const select = (
     <Select
       value={value || "__all"}
       onValueChange={(value) => onChange(value === "__all" ? "" : value)}
@@ -124,6 +126,14 @@ export function Choice({
         ))}
       </SelectContent>
     </Select>
+  );
+  return visibleLabel ? (
+    <label className="control-field">
+      <span className="control-field-label">{visibleLabel}</span>
+      {select}
+    </label>
+  ) : (
+    select
   );
 }
 export function CopyButton({

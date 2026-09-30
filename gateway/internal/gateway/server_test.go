@@ -291,8 +291,8 @@ func TestPromptOverConfiguredJevLimitIsWarnedAndForwarded(t *testing.T) {
 
 func TestBlockedSessionIsRejectedBeforeClassifier(t *testing.T) {
 	p := activePolicy()
-	p.SessionBlockOnBlockingReview = true
-	p.SessionBlockTTLSeconds = 600
+	p.Scenes[0].SessionBlockEnabled = true
+	p.Scenes[0].SessionBlockTTLSeconds = 600
 	c := &testClassifier{answers: fullAnswers(map[string]float64{"cyber_abuse": 0.9})}
 	s, store, calls := makeServer(t, p, c)
 	body := `{"model":"test","messages":[{"role":"user","content":"danger"}]}`
@@ -331,8 +331,8 @@ func TestAllowedHitForwardsOriginalRequest(t *testing.T) {
 func TestNonBlockingReviewHitFreezesSessionAfterForwarding(t *testing.T) {
 	p := activePolicy()
 	p.Scenes[0].Action = policy.Allow
-	p.SessionBlockOnNonblockingReview = true
-	p.SessionBlockTTLSeconds = 600
+	p.Scenes[0].SessionBlockEnabled = true
+	p.Scenes[0].SessionBlockTTLSeconds = 600
 	c := &testClassifier{answers: fullAnswers(map[string]float64{"cyber_abuse": 0.9})}
 	s, store, calls := makeServer(t, p, c)
 	body := `{"model":"test","messages":[{"role":"user","content":"danger"}]}`

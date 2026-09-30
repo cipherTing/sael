@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import * as echarts from "echarts/core";
-import { BarChart, LineChart, HeatmapChart } from "echarts/charts";
+import { BarChart, LineChart, HeatmapChart, PieChart } from "echarts/charts";
 import {
   GridComponent,
   AxisPointerComponent,
@@ -25,6 +25,7 @@ echarts.use([
   BarChart,
   LineChart,
   HeatmapChart,
+  PieChart,
   GridComponent,
   AxisPointerComponent,
   TooltipComponent,
@@ -60,7 +61,8 @@ export function Chart({
   useEffect(() => {
     if (!viewport.current) return;
     const element = viewport.current;
-    const resize = () => setWidth(element.clientWidth);
+    const resize = () =>
+      setWidth(Math.floor(element.getBoundingClientRect().width));
     resize();
     const observer = new ResizeObserver(resize);
     observer.observe(element);
@@ -143,7 +145,7 @@ type TooltipItem = {
   axisValue?: string;
   dataIndex: number;
   seriesName: string;
-  value: number | null;
+  value: number | null | string;
   color?: string;
 };
 export function timeChart(
@@ -161,9 +163,9 @@ export function timeChart(
     0,
     ...series.flatMap((s) => s.data.map((value) => value ?? 0)),
   );
-  const formatValue = (value: number | null) =>
-    value === null
-      ? "—"
+  const formatValue = (value: number | null | string) =>
+    typeof value !== "number" || !Number.isFinite(value)
+      ? "无样本"
       : unit === "percent"
         ? percent(value)
         : unit === "rpm"
@@ -259,7 +261,7 @@ export function timeChart(
       showSymbol: true,
       symbol: "circle",
       symbolSize: 4,
-      connectNulls: false,
+      connectNulls: true,
       smooth: false,
       lineStyle: { width: 2 },
       itemStyle: {

@@ -28,12 +28,21 @@ func TestIngressLearnsEncryptedCredentialAndRecordsEachCachedHit(t *testing.T) {
 	var calls atomic.Int64
 	jev := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
+		var input struct {
+			Questions map[string]struct {
+				Type string `json:"type"`
+			} `json:"questions"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
 		answers := map[string]any{}
-		for _, q := range policy.Questions {
+		for key, q := range input.Questions {
 			if q.Type == "score" {
-				answers[q.Key] = map[string]any{"type": "score", "score": 2}
+				answers[key] = map[string]any{"type": "score", "score": 2}
 			} else {
-				answers[q.Key] = map[string]any{"type": "noul", "noul": .9}
+				answers[key] = map[string]any{"type": "noul", "noul": .9}
 			}
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"answers": answers})
@@ -101,11 +110,11 @@ func TestIngressLearnsEncryptedCredentialAndRecordsEachCachedHit(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if len(events) != 2 || events[0].MaskedKey != "test********9876" || events[0].ReviewSource != "cache" || events[0].CredentialID == "" || len(events[0].Scores) != 0 {
+	if len(events) != 2 || events[0].MaskedKey != "test-f*************y-9876" || events[0].ReviewSource != "cache" || events[0].CredentialID == "" || len(events[0].Scores) != 0 {
 		t.Fatalf("cache event %+v", events)
 	}
 	list, err := runtime.TrustedCredentials(ctx, 30*24*time.Hour, 0, 50)
-	if err != nil || list.Total != 1 || list.Items[0].MaskedKey != "test********9876" {
+	if err != nil || list.Total != 1 || list.Items[0].MaskedKey != "test-f*************y-9876" {
 		t.Fatalf("trusted list %+v %v", list, err)
 	}
 	var raw string

@@ -25,6 +25,7 @@ it("allows one refresh until completion and restores the action", async () => {
   const button = screen.getByRole("button", {
     name: "刷新记录",
   }) as HTMLButtonElement;
+  expect(button.textContent).toContain("刷新记录");
   fireEvent.click(button);
   fireEvent.click(button);
   expect(button.disabled).toBe(true);

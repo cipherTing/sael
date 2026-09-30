@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/cipherTing/sael/gateway/internal/protocol"
 )
@@ -68,6 +70,8 @@ type Scene struct {
 	Enabled                *bool       `json:"enabled,omitempty"`
 	Endpoints              []string    `json:"endpoints,omitempty"`
 	Models                 []string    `json:"models,omitempty"`
+	SessionBlockEnabled    bool        `json:"session_block_enabled,omitempty"`
+	SessionBlockTTLSeconds int         `json:"session_block_ttl_seconds,omitempty"`
 }
 
 // Active preserves the enabled state of scenes created before per-scene switches existed.
@@ -115,12 +119,25 @@ type Policy struct {
 	UnmatchedAction    Action             `json:"unmatched_action,omitempty"` // Legacy policies are converted on load.
 	PreviewChars       *int               `json:"preview_chars"`
 	RetentionDays      *int               `json:"retention_days"`
-	// SessionBlockEnabled is retained only to read policies written before the
-	// freeze behavior was split by review mode.
-	SessionBlockEnabled             bool `json:"session_block_enabled,omitempty"`
-	SessionBlockOnBlockingReview    bool `json:"session_block_on_blocking_review,omitempty"`
-	SessionBlockOnNonblockingReview bool `json:"session_block_on_nonblocking_review,omitempty"`
-	SessionBlockTTLSeconds          int  `json:"session_block_ttl_seconds,omitempty"`
+	BlockMessage       string             `json:"block_message,omitempty"`
+}
+
+const DefaultBlockMessage = "Request denied."
+
+var blockMessagePlaceholders = regexp.MustCompile(`\{[^{}]*\}`)
+
+// FormatBlockMessage renders only request context. Scene names and hit details
+// are deliberately unavailable to the client-facing error template.
+func (p Policy) FormatBlockMessage(requestID, endpoint, model string) string {
+	message := p.BlockMessage
+	if strings.TrimSpace(message) == "" {
+		message = DefaultBlockMessage
+	}
+	return strings.NewReplacer(
+		"{request_id}", requestID,
+		"{endpoint}", endpoint,
+		"{model}", model,
+	).Replace(message)
 }
 
 // Answer is one measurement returned by the Sael CLI.
@@ -149,13 +166,6 @@ type Decision struct {
 
 // UpgradeLegacy moves the old shared thresholds into each scene once.
 func UpgradeLegacy(p *Policy) {
-	if p.SessionBlockEnabled && !p.SessionBlockOnBlockingReview && !p.SessionBlockOnNonblockingReview {
-		p.SessionBlockOnBlockingReview = true
-	}
-	p.SessionBlockEnabled = false
-	if (p.SessionBlockOnBlockingReview || p.SessionBlockOnNonblockingReview) && p.SessionBlockTTLSeconds <= 0 {
-		p.SessionBlockTTLSeconds = 3600
-	}
 	if p.Enabled && len(p.Scenes) == 0 {
 		p.Enabled = false
 	}
@@ -205,6 +215,17 @@ func (p Policy) TrustedKeyIdle() time.Duration {
 
 // Validate checks ranges, references, and required fields before a policy is enabled.
 func Validate(p Policy) error {
+	if utf8.RuneCountInString(p.BlockMessage) > 500 {
+		return errors.New("拦截提示不能超过 500 字")
+	}
+	for _, placeholder := range blockMessagePlaceholders.FindAllString(p.BlockMessage, -1) {
+		if placeholder != "{request_id}" && placeholder != "{endpoint}" && placeholder != "{model}" {
+			return fmt.Errorf("不支持拦截提示占位符 %s", placeholder)
+		}
+	}
+	if strings.ContainsAny(blockMessagePlaceholders.ReplaceAllString(p.BlockMessage, ""), "{}") {
+		return errors.New("拦截提示包含不完整的占位符")
+	}
 	if p.TrustedKeyIdleDays < 0 || p.TrustedKeyIdleDays > 106751 {
 		return errors.New("可信密钥闲置天数必须为正整数且不超过 106751")
 	}
@@ -213,9 +234,6 @@ func Validate(p Policy) error {
 	}
 	if p.RetentionDays != nil && (*p.RetentionDays < 1 || *p.RetentionDays > 3650) {
 		return errors.New("retention days must be 1–3650")
-	}
-	if (p.SessionBlockEnabled || p.SessionBlockOnBlockingReview || p.SessionBlockOnNonblockingReview) && (p.SessionBlockTTLSeconds < 1 || p.SessionBlockTTLSeconds > 9223372036) {
-		return errors.New("会话冻结时长必须大于 0 且不超过时间类型的范围")
 	}
 	known := map[string]Question{}
 	for _, q := range Questions {
@@ -226,6 +244,9 @@ func Validate(p Policy) error {
 	}
 	seen := map[string]bool{}
 	for _, scene := range p.Scenes {
+		if scene.SessionBlockEnabled && (scene.SessionBlockTTLSeconds < 1 || scene.SessionBlockTTLSeconds > 9223372036) {
+			return fmt.Errorf("场景 %s 的会话冻结时长无效", scene.Name)
+		}
 		if scene.NeedsEndpointSelection && (scene.Enabled == nil || *scene.Enabled) {
 			return fmt.Errorf("场景 %s 需要重新选择端点", scene.Name)
 		}

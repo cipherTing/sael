@@ -64,6 +64,8 @@ type Event struct {
 	Stream          bool                `json:"stream"`
 	HasNonText      bool                `json:"has_non_text_input"`
 	TextPreview     string              `json:"text_preview"`
+	TextAvailable   bool                `json:"text_available"`
+	TextChars       int                 `json:"text_chars"`
 	Text            string              `json:"text,omitempty"`
 	Trace           []policy.SceneTrace `json:"trace,omitempty"`
 	Scores          []policy.Answer     `json:"scores,omitempty"`
@@ -414,7 +416,7 @@ func (s *Server) proxyRequest(w http.ResponseWriter, r *http.Request) {
 		event.SessionSource = "history"
 		event.SessionRef = shortSessionRef(blockPlan.transcript.exact)
 	}
-	if p.SessionBlockEnabled || p.SessionBlockOnBlockingReview || p.SessionBlockOnNonblockingReview {
+	if slices.ContainsFunc(p.Scenes, func(scene policy.Scene) bool { return scene.Active() && scene.SessionBlockEnabled }) {
 		if blockedKey, source := s.sessionBlocked(r.Context(), blockPlan); blockedKey != "" {
 			event.SessionSource = source
 			event.SessionRef = shortSessionRef(blockedKey)
@@ -424,7 +426,7 @@ func (s *Server) proxyRequest(w http.ResponseWriter, r *http.Request) {
 			event.ErrorKind = "session_blocked"
 			s.writeEvent(r.Context(), event)
 			s.recordCount(count)
-			writeBlock(w, meta.Protocol, requestID)
+			writeBlock(w, meta.Protocol, requestID, p.FormatBlockMessage(requestID, r.URL.Path, meta.Model))
 			return
 		}
 	}
@@ -453,14 +455,10 @@ func (s *Server) proxyRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if decision.Action == policy.Block {
-		if p.SessionBlockEnabled || p.SessionBlockOnBlockingReview {
-			ttl := time.Duration(p.SessionBlockTTLSeconds) * time.Second
-			if ttl <= 0 {
-				ttl = time.Hour
-			}
+		if ttl := winningSceneFreezeTTL(p, decision.SceneID); ttl > 0 {
 			s.rememberSessionBlock(r.Context(), blockPlan, ttl)
 		}
-		writeBlock(w, meta.Protocol, requestID)
+		writeBlock(w, meta.Protocol, requestID, p.FormatBlockMessage(requestID, r.URL.Path, meta.Model))
 		return
 	}
 	s.forward(w, r)
@@ -550,7 +548,7 @@ func requestHeader(r *http.Request, keys ...string) string {
 	return ""
 }
 
-func writeBlock(w http.ResponseWriter, protocolName, requestID string) {
+func writeBlock(w http.ResponseWriter, protocolName, requestID, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Request-Id", requestID)
 	w.Header().Set("X-Sael-Blocked", "prompt_guard")
@@ -558,7 +556,6 @@ func writeBlock(w http.ResponseWriter, protocolName, requestID string) {
 		w.Header().Set("Request-Id", requestID)
 	}
 	w.WriteHeader(http.StatusForbidden)
-	message := "Request denied."
 	var result any
 	switch protocolName {
 	case "anthropic":

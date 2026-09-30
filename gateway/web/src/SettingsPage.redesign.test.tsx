@@ -6,14 +6,14 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import SettingsPage from "./SettingsPage";
 import type { PolicyResponse } from "./policy";
 
-afterEach(cleanup);
 const policy: PolicyResponse = {
-  enabled: false,
-  preview_chars: null,
-  retention_days: null,
+  enabled: true,
+  preview_chars: 500,
+  retention_days: 30,
   questions: [
     { key: "gore", type: "score", max: 3 },
     { key: "self_harm", type: "noul", max: 1 },
@@ -21,154 +21,150 @@ const policy: PolicyResponse = {
   scenes: [
     {
       id: "one",
-      name: "血腥审查",
-      conditions: [{ question: "gore", threshold: 1.5 }],
-      match: "all",
+      name: "高风险组合",
+      match: "any",
       action: "block",
+      conditions: [
+        { question: "gore", threshold: 1.5 },
+        { question: "self_harm", threshold: 0.8 },
+      ],
     },
   ],
 };
 
-it("duplicates a scene as a draft and only publishes when saved", async () => {
-  const save = vi.fn().mockResolvedValue(undefined);
-  render(<SettingsPage policy={policy} onSave={save} />);
-  fireEvent.click(screen.getByRole("button", { name: "复制场景" }));
-  expect(save).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "保存并生效" }));
-  await waitFor(() => expect(save).toHaveBeenCalledOnce());
-  const saved = save.mock.calls[0][0];
-  expect(saved.scenes).toHaveLength(2);
-  expect(saved.scenes[1].conditions).toEqual([
-    { question: "gore", threshold: 1.5 },
-  ]);
-  expect(saved.scenes[1].id).not.toBe("one");
+afterEach(() => {
+  cleanup();
+  sessionStorage.clear();
+  vi.restoreAllMocks();
 });
 
-it("defaults a newly created scene to matching any condition", () => {
+it("keeps the graded slider and precise decimal threshold synchronized", () => {
   render(<SettingsPage policy={policy} onSave={vi.fn()} />);
-  fireEvent.click(screen.getByRole("button", { name: "新建场景" }));
-  expect(screen.getByRole("button", { name: "满足任一" }).className).toContain(
-    "selected",
-  );
+  const slider = screen.getByRole("slider", { name: "血腥程度阈值滑杆" });
+  expect(slider.getAttribute("aria-valuenow")).toBe("1.5");
+  expect(slider.getAttribute("aria-valuemax")).toBe("3");
+  fireEvent.change(screen.getByRole("spinbutton", { name: "血腥程度阈值" }), {
+    target: { value: "1.75" },
+  });
+  expect(slider.getAttribute("aria-valuenow")).toBe("1.75");
+  fireEvent.keyDown(slider, { key: "ArrowRight" });
+  expect(
+    (
+      screen.getByRole("spinbutton", {
+        name: "血腥程度阈值",
+      }) as HTMLInputElement
+    ).value,
+  ).toBe("1.76");
 });
 
-it("saves endpoint selection and a paused scene without changing its threshold", async () => {
+it("keeps 0–1 risk values on their own scale without rounding decimal input", async () => {
   const save = vi.fn().mockResolvedValue(undefined);
   render(<SettingsPage policy={policy} onSave={save} />);
-  fireEvent.click(screen.getByRole("button", { name: "适用于 Responses" }));
-  fireEvent.click(screen.getByRole("switch", { name: "启用此场景" }));
+  const slider = screen.getByRole("slider", { name: "自伤风险阈值滑杆" });
+  expect(slider.getAttribute("aria-valuemax")).toBe("1");
+  fireEvent.change(screen.getByRole("spinbutton", { name: "自伤风险阈值" }), {
+    target: { value: "0.333" },
+  });
+  expect(slider.getAttribute("aria-valuenow")).toBe("0.333");
   fireEvent.click(screen.getByRole("button", { name: "保存并生效" }));
   await waitFor(() => expect(save).toHaveBeenCalledOnce());
-  expect(save.mock.calls[0][0].scenes[0]).toMatchObject({
-    enabled: false,
-    endpoints: ["openai_responses"],
-    conditions: [{ question: "gore", threshold: 1.5 }],
+  expect(save.mock.calls[0][0].scenes[0].conditions[1].threshold).toBe(0.333);
+});
+
+it("marks recorded sample scores against the same threshold scale", () => {
+  render(
+    <SettingsPage
+      policy={policy}
+      onSave={vi.fn()}
+      sample={{
+        text: "示例",
+        endpoint: "openai_chat",
+        scores: [{ question: "gore", type: "score", value: 2 }],
+      }}
+    />,
+  );
+  fireEvent.mouseDown(screen.getByRole("tab", { name: "场景配置" }), {
+    button: 0,
+  });
+  expect(screen.getByLabelText("血腥程度样本分数 2，已满足条件")).toBeTruthy();
+});
+
+it("keeps save and discard actions available while viewing the trial tab", async () => {
+  const save = vi.fn().mockResolvedValue(undefined);
+  render(<SettingsPage policy={policy} onSave={save} />);
+  fireEvent.change(screen.getByRole("textbox", { name: "场景名称" }), {
+    target: { value: "新的名称" },
+  });
+  fireEvent.mouseDown(screen.getByRole("tab", { name: "试算" }), { button: 0 });
+  expect(screen.getByRole("button", { name: "放弃修改" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "保存并生效" }));
+  await waitFor(() => expect(save).toHaveBeenCalledOnce());
+  expect(save.mock.calls[0][0]).toEqual({
+    scenes: [{ ...policy.scenes[0], name: "新的名称" }],
   });
 });
 
-it("copies a selected template into the new editor, keeps its identity and isolates edits", async () => {
-  const save = vi.fn().mockResolvedValue(undefined);
-  const source = {
+it("can discard a scene draft from the analysis tab", () => {
+  render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { enabled: false } } })}><SettingsPage policy={policy} onSave={vi.fn()} /></QueryClientProvider>);
+  fireEvent.change(screen.getByRole("textbox", { name: "场景名称" }), {
+    target: { value: "未保存" },
+  });
+  fireEvent.mouseDown(screen.getByRole("tab", { name: "场景分析" }), {
+    button: 0,
+  });
+  fireEvent.click(screen.getByRole("button", { name: "放弃修改" }));
+  fireEvent.mouseDown(screen.getByRole("tab", { name: "场景配置" }), {
+    button: 0,
+  });
+  expect(
+    (screen.getByRole("textbox", { name: "场景名称" }) as HTMLInputElement)
+      .value,
+  ).toBe("高风险组合");
+  expect(screen.queryByRole("button", { name: "保存并生效" })).toBeNull();
+});
+
+it("does not pass an empty numeric threshold into the slider", () => {
+  const save = vi.fn();
+  render(<SettingsPage policy={policy} onSave={save} />);
+  fireEvent.change(screen.getByRole("spinbutton", { name: "血腥程度阈值" }), {
+    target: { value: "" },
+  });
+  expect(
+    screen
+      .getByRole("slider", { name: "血腥程度阈值滑杆" })
+      .getAttribute("aria-valuenow"),
+  ).toBe("0");
+  fireEvent.click(screen.getByRole("button", { name: "保存并生效" }));
+  expect(save).not.toHaveBeenCalled();
+});
+
+it("does not create a slider for an unknown question", () => {
+  const unknown = {
     ...policy,
     scenes: [
       {
         ...policy.scenes[0],
-        note: "用于 Responses 的高风险",
-        models: ["gpt-6-luna"],
-        endpoints: ["openai_responses"],
+        conditions: [{ question: "unknown", threshold: 2 }],
       },
     ],
   };
-  render(<SettingsPage policy={source} onSave={save} />);
-  fireEvent.click(screen.getByRole("button", { name: "新建场景" }));
-  fireEvent.click(screen.getByRole("button", { name: "从场景模板创建" }));
-  expect(screen.getAllByText("用于 Responses 的高风险").length).toBeGreaterThan(
-    0,
-  );
-  fireEvent.click(screen.getByRole("button", { name: /使用模板 血腥审查/ }));
-  expect(
-    (screen.getByRole("textbox", { name: "场景注释" }) as HTMLInputElement)
-      .value,
-  ).toBe("用于 Responses 的高风险");
-  fireEvent.change(screen.getByRole("spinbutton", { name: "血腥程度阈值" }), {
-    target: { value: "2.1" },
-  });
+  const save = vi.fn();
+  render(<SettingsPage policy={unknown} onSave={save} />);
+  expect(screen.getByText("审核项不可用")).toBeTruthy();
+  expect(screen.queryByRole("slider")).toBeNull();
   fireEvent.change(screen.getByRole("textbox", { name: "场景名称" }), {
-    target: { value: "按模板新建" },
+    target: { value: "待修复" },
   });
   fireEvent.click(screen.getByRole("button", { name: "保存并生效" }));
-  await waitFor(() => expect(save).toHaveBeenCalledOnce());
-  const saved = save.mock.calls[0][0];
-  expect(saved.scenes).toHaveLength(2);
-  expect(saved.scenes[0].conditions[0].threshold).toBe(1.5);
-  expect(saved.scenes[1]).toMatchObject({
-    models: ["gpt-6-luna"],
-    endpoints: ["openai_responses"],
-    conditions: [{ question: "gore", threshold: 2.1 }],
-    note: "用于 Responses 的高风险",
-  });
-  expect(saved.scenes[1].id).not.toBe("one");
+  expect(save).not.toHaveBeenCalled();
 });
 
-it("adds multiple model IDs and restores all-model scope by removing the list", async () => {
-  const save = vi.fn().mockResolvedValue(undefined);
-  render(<SettingsPage policy={policy} onSave={save} />);
-  const input = screen.getByLabelText("添加生效模型");
-  fireEvent.change(input, {
-    target: { value: "gpt-6-luna, claude-test, gpt-6-luna" },
-  });
-  fireEvent.keyDown(input, { key: "Enter" });
-  fireEvent.click(screen.getByRole("button", { name: "保存并生效" }));
-  await waitFor(() => expect(save).toHaveBeenCalledOnce());
-  expect(save.mock.calls[0][0].scenes[0].models).toEqual([
-    "gpt-6-luna",
-    "claude-test",
-  ]);
-  fireEvent.click(screen.getByRole("button", { name: "移除模型 gpt-6-luna" }));
-  await waitFor(() =>
-    expect(
-      screen.getByRole("button", { name: "移除模型 claude-test" }),
-    ).toBeTruthy(),
-  );
-  fireEvent.click(screen.getByRole("button", { name: "移除模型 claude-test" }));
-  expect(screen.getByText("全部模型")).toBeTruthy();
-});
-
-it("a template replaces optional scopes and enabled state instead of leaving old editor values", async () => {
-  const save = vi.fn().mockResolvedValue(undefined);
-  render(
-    <SettingsPage
-      policy={{
-        ...policy,
-        scenes: [
-          {
-            ...policy.scenes[0],
-            enabled: false,
-            models: ["old-model"],
-            endpoints: ["anthropic"],
-            note: "old note",
-          },
-          { ...policy.scenes[0], id: "template", name: "无范围模板" },
-        ],
-      }}
-      onSave={save}
-    />,
-  );
-  fireEvent.click(screen.getByRole("button", { name: "从场景模板创建" }));
-  fireEvent.click(screen.getByRole("button", { name: "使用模板 无范围模板" }));
-  expect(
-    screen
-      .getByRole("switch", { name: "启用此场景" })
-      .getAttribute("aria-checked"),
-  ).toBe("true");
-  expect(
-    screen.queryByRole("button", { name: "移除模型 old-model" }),
-  ).toBeNull();
-  expect((screen.getByLabelText("场景注释") as HTMLInputElement).value).toBe(
-    "",
-  );
-  fireEvent.click(screen.getByRole("button", { name: "保存并生效" }));
-  await waitFor(() => expect(save).toHaveBeenCalledOnce());
-  expect(save.mock.calls[0][0].scenes[0].id).toBe("one");
-  expect(save.mock.calls[0][0].scenes).toHaveLength(2);
+it("keeps the trial input when returning from the condition editor", () => {
+  render(<SettingsPage policy={policy} onSave={vi.fn()} />);
+  fireEvent.mouseDown(screen.getByRole("tab", { name: "试算" }), { button: 0 });
+  fireEvent.change(screen.getByRole("textbox", { name: "测试文本" }), { target: { value: "需要反复验证的输入" } });
+  fireEvent.mouseDown(screen.getByRole("tab", { name: "场景配置" }), { button: 0 });
+  fireEvent.change(screen.getByRole("spinbutton", { name: "血腥程度阈值" }), { target: { value: "2.1" } });
+  fireEvent.mouseDown(screen.getByRole("tab", { name: "试算" }), { button: 0 });
+  expect((screen.getByRole("textbox", { name: "测试文本" }) as HTMLTextAreaElement).value).toBe("需要反复验证的输入");
 });

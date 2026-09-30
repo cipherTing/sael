@@ -63,7 +63,7 @@ func (s *PG) Analytics(ctx context.Context, f gateway.AnalyticsFilter) (gateway.
 	}
 	args := []any{f.Since, f.Until, f.Endpoint, f.Model, out.StepSeconds, zone}
 	traffic := func(since, until time.Time) ([]gateway.TrafficPoint, error) {
-		rows, err := s.pool.Query(ctx, `SELECT `+analyticsBucket+`,`+endpointGroupSQL+`,model,outcome,sum(count),sum(classifier_samples) FROM gateway_counts_minute WHERE `+analyticsWhere+` GROUP BY 1,2,3,4 ORDER BY 1`, since, until, f.Endpoint, f.Model, out.StepSeconds, zone)
+		rows, err := s.pool.Query(ctx, `SELECT `+analyticsBucket+`,`+endpointGroupSQL+`,model,outcome,sum(count),sum(classifier_samples),sum(classifier_sum_ms) FROM gateway_counts_minute WHERE `+analyticsWhere+` GROUP BY 1,2,3,4 ORDER BY 1`, since, until, f.Endpoint, f.Model, out.StepSeconds, zone)
 		if err != nil {
 			return nil, err
 		}
@@ -71,7 +71,7 @@ func (s *PG) Analytics(ctx context.Context, f gateway.AnalyticsFilter) (gateway.
 		points := []gateway.TrafficPoint{}
 		for rows.Next() {
 			var p gateway.TrafficPoint
-			if err := rows.Scan(&p.Time, &p.Endpoint, &p.Model, &p.Outcome, &p.Count, &p.ClassifierCalls); err != nil {
+			if err := rows.Scan(&p.Time, &p.Endpoint, &p.Model, &p.Outcome, &p.Count, &p.ClassifierCalls, &p.ClassifierSumMS); err != nil {
 				return nil, err
 			}
 			points = append(points, p)

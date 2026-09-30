@@ -31,12 +31,14 @@ export function RefreshButton({
     <Button
       type="button"
       variant="outline"
-      size="icon-sm"
+      size="sm"
+      className="refresh-control"
       aria-label={label}
       disabled={busy || pending}
       onClick={() => void refresh()}
     >
       <RefreshCw size={14} className={busy || pending ? "animate-spin" : ""} />
+      {label}
     </Button>
   );
 }

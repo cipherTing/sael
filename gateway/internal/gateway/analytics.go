@@ -32,6 +32,7 @@ func (f AnalyticsFilter) StepSeconds() int64 {
 // TrafficPoint contains aggregate request outcomes for a time bucket.
 type TrafficPoint struct {
 	ClassifierCalls int64     `json:"classifier_calls"`
+	ClassifierSumMS int64     `json:"classifier_sum_ms"`
 	Time            time.Time `json:"time"`
 	Endpoint        string    `json:"endpoint"`
 	Model           string    `json:"model"`

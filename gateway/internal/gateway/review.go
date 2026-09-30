@@ -55,7 +55,6 @@ func (s *Server) review(parent context.Context, event Event, p policy.Policy, co
 		event.InputChars, event.InputTokens, event.JevInputLimit = utf8.RuneCountInString(event.Text), inputTokens, inputLimit
 		event.Decision = decision
 		event.TextPreview = preview(event.Text, 500)
-		event.Text = ""
 		s.writeEvent(parent, event)
 		return count, decision
 	}
@@ -201,13 +200,18 @@ func (s *Server) startReview(event Event, p policy.Policy, count Count, blockPla
 		defer func() { s.reviewMu.Lock(); s.reviewActive--; s.reviewMu.Unlock() }()
 		result, decision := s.review(s.reviewContext, event, p, count)
 		s.recordCount(result)
-		if p.SessionBlockOnNonblockingReview && decision.SceneID != "" {
-			ttl := time.Duration(p.SessionBlockTTLSeconds) * time.Second
-			if ttl <= 0 {
-				ttl = time.Hour
-			}
+		if ttl := winningSceneFreezeTTL(p, decision.SceneID); ttl > 0 {
 			s.rememberSessionBlock(s.reviewContext, blockPlan, ttl)
 		}
 	}()
 	return true
+}
+
+func winningSceneFreezeTTL(p policy.Policy, sceneID string) time.Duration {
+	for _, scene := range p.Scenes {
+		if scene.ID == sceneID && scene.Active() && scene.SessionBlockEnabled {
+			return time.Duration(scene.SessionBlockTTLSeconds) * time.Second
+		}
+	}
+	return 0
 }

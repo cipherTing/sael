@@ -18,7 +18,7 @@ import (
 
 func TestSessionFreezeIsIsolatedByCallerAndExpires(t *testing.T) {
 	p := activePolicy()
-	p.SessionBlockOnBlockingReview, p.SessionBlockTTLSeconds = true, 60
+	p.Scenes[0].SessionBlockEnabled, p.Scenes[0].SessionBlockTTLSeconds = true, 60
 	c := &testClassifier{answers: fullAnswers(map[string]float64{"cyber_abuse": 0.9})}
 	s, store, upstream := makeServer(t, p, c)
 	call := func(key, session string) int {
@@ -62,7 +62,7 @@ func TestSessionFreezeIsIsolatedByCallerAndExpires(t *testing.T) {
 
 func TestSessionFreezeNeedsStableSessionAndOnlyBlocksMonitoredRequests(t *testing.T) {
 	p := activePolicy()
-	p.SessionBlockOnBlockingReview, p.SessionBlockTTLSeconds = true, 60
+	p.Scenes[0].SessionBlockEnabled, p.Scenes[0].SessionBlockTTLSeconds = true, 60
 	c := &testClassifier{answers: fullAnswers(map[string]float64{"cyber_abuse": 0.9})}
 	s, store, _ := makeServer(t, p, c)
 	r := authorizedRequest("POST", "/v1/responses", strings.NewReader("{\"input\":\"hello\"}"))
@@ -82,7 +82,7 @@ func TestSessionFreezeNeedsStableSessionAndOnlyBlocksMonitoredRequests(t *testin
 
 func TestSessionFreezeMatchesAHistoryContinuationWithoutExplicitSessionID(t *testing.T) {
 	p := activePolicy()
-	p.SessionBlockOnBlockingReview, p.SessionBlockTTLSeconds = true, 60
+	p.Scenes[0].SessionBlockEnabled, p.Scenes[0].SessionBlockTTLSeconds = true, 60
 	c := &testClassifier{answers: fullAnswers(map[string]float64{"cyber_abuse": 0.9})}
 	s, store, upstream := makeServer(t, p, c)
 	first := authorizedRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"test","messages":[{"role":"user","content":"setup"},{"role":"assistant","content":"ready"},{"role":"user","content":"danger"}]}`))
@@ -105,7 +105,7 @@ func TestSessionFreezeMatchesAHistoryContinuationWithoutExplicitSessionID(t *tes
 
 func TestSessionFreezeDoesNotBlockASeparateConversationWithSameOpening(t *testing.T) {
 	p := activePolicy()
-	p.SessionBlockOnBlockingReview, p.SessionBlockTTLSeconds = true, 60
+	p.Scenes[0].SessionBlockEnabled, p.Scenes[0].SessionBlockTTLSeconds = true, 60
 	c := &testClassifier{answers: fullAnswers(map[string]float64{"cyber_abuse": 0.9})}
 	s, store, _ := makeServer(t, p, c)
 	first := authorizedRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"test","messages":[{"role":"user","content":"setup"},{"role":"assistant","content":"ready"},{"role":"user","content":"danger"}]}`))
@@ -132,7 +132,7 @@ func TestSessionFreezeHistoryAssociationCoversAllMonitoredTextEndpoints(t *testi
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			p := activePolicy()
-			p.SessionBlockOnBlockingReview, p.SessionBlockTTLSeconds = true, 60
+			p.Scenes[0].SessionBlockEnabled, p.Scenes[0].SessionBlockTTLSeconds = true, 60
 			c := &testClassifier{answers: fullAnswers(map[string]float64{"cyber_abuse": 0.9})}
 			s, _, upstream := makeServer(t, p, c)
 			first := authorizedRequest("POST", tc.path, strings.NewReader(tc.first))
@@ -159,7 +159,7 @@ func TestSessionFreezeHistoryAssociationCoversAllMonitoredTextEndpoints(t *testi
 
 func TestSessionFreezeStorageFailureFailsOpenAndDoesNotPretendToFreeze(t *testing.T) {
 	p := activePolicy()
-	p.SessionBlockOnBlockingReview, p.SessionBlockTTLSeconds = true, 60
+	p.Scenes[0].SessionBlockEnabled, p.Scenes[0].SessionBlockTTLSeconds = true, 60
 	c := &testClassifier{answers: fullAnswers(map[string]float64{"cyber_abuse": 0.9})}
 	s, store, _ := makeServer(t, p, c)
 	store.sessionErr = errors.New("redis unavailable")
@@ -186,7 +186,7 @@ func TestBlockEnvelopesMatchSub2apiEndpointBranches(t *testing.T) {
 	} {
 		t.Run(tc.endpoint, func(t *testing.T) {
 			w := httptest.NewRecorder()
-			writeBlock(w, tc.endpoint, "request-abc")
+			writeBlock(w, tc.endpoint, "request-abc", policy.DefaultBlockMessage)
 			var response struct {
 				Type  string
 				Error struct{ Type, Code, Message string }
@@ -205,6 +205,53 @@ func TestBlockEnvelopesMatchSub2apiEndpointBranches(t *testing.T) {
 			}
 			if strings.Contains(w.Body.String(), "cyber") || strings.Contains(w.Body.String(), "threshold") {
 				t.Fatal("response leaks risk details")
+			}
+		})
+	}
+}
+
+func TestBlockingFreezeDependsOnTheWinningScene(t *testing.T) {
+	var p policy.Policy
+	if err := json.Unmarshal([]byte(`{"enabled":true,"scenes":[{"id":"first","name":"first","match":"any","action":"block","conditions":[{"question":"cyber_abuse","threshold":0.5}]},{"id":"second","name":"second","match":"any","action":"block","session_block_enabled":true,"session_block_ttl_seconds":60,"conditions":[{"question":"gore","threshold":1}]}]}`), &p); err != nil {
+		t.Fatal(err)
+	}
+	c := &testClassifier{answers: fullAnswers(map[string]float64{"cyber_abuse": 0.9, "gore": 2})}
+	s, store, _ := makeServer(t, p, c)
+	send := func() {
+		r := authorizedRequest("POST", "/v1/responses", strings.NewReader(`{"input":"danger"}`))
+		r.Header.Set("Authorization", "Bearer caller")
+		r.Header.Set("Session-Id", "conversation")
+		s.ServeHTTP(httptest.NewRecorder(), r)
+	}
+	send()
+	if len(store.blocked) != 0 {
+		t.Fatalf("shadowed scene froze a session: %v", store.blocked)
+	}
+	store.policy.Scenes[0], store.policy.Scenes[1] = store.policy.Scenes[1], store.policy.Scenes[0]
+	send()
+	if len(store.blocked) == 0 {
+		t.Fatal("winning scene did not freeze the session")
+	}
+}
+
+func TestBlockResponseUsesSavedMessageTemplateAndDefault(t *testing.T) {
+	for _, tc := range []struct{ path, body string }{
+		{"/v1/responses", `{"model":"test-model","input":"danger"}`},
+		{"/v1/messages", `{"model":"test-model","messages":[{"role":"user","content":"danger"}]}`},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			p := activePolicy()
+			p.BlockMessage = "Blocked {request_id} on {endpoint} ({model})"
+			s, _, _ := makeServer(t, p, &testClassifier{answers: fullAnswers(map[string]float64{"cyber_abuse": 0.9})})
+			w := httptest.NewRecorder()
+			s.ServeHTTP(w, authorizedRequest("POST", tc.path, strings.NewReader(tc.body)))
+			var got struct{ Error struct{ Message string } }
+			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+			want := "Blocked " + w.Header().Get("X-Request-Id") + " on " + tc.path + " (test-model)"
+			if got.Error.Message != want || w.Code != http.StatusForbidden {
+				t.Fatalf("message=%q, want %q; status=%d", got.Error.Message, want, w.Code)
 			}
 		})
 	}
@@ -301,7 +348,7 @@ func TestImageEditReviewsOnlyPromptAndPreservesMultipartRequest(t *testing.T) {
 
 func TestFrozenSessionRespectsSceneScopeAndDoesNotRenewOnRetry(t *testing.T) {
 	p := activePolicy()
-	p.SessionBlockOnBlockingReview, p.SessionBlockTTLSeconds = true, 60
+	p.Scenes[0].SessionBlockEnabled, p.Scenes[0].SessionBlockTTLSeconds = true, 60
 	c := &testClassifier{answers: fullAnswers(map[string]float64{"cyber_abuse": .9})}
 	s, store, _ := makeServer(t, p, c)
 	call := func(path string) int {
@@ -338,7 +385,7 @@ func TestFrozenSessionRespectsSceneScopeAndDoesNotRenewOnRetry(t *testing.T) {
 		t.Fatal("endpoint outside scene scope did not bypass freeze")
 	}
 	store.policy.Scenes[0].Endpoints = nil
-	store.policy.SessionBlockOnBlockingReview = false
+	store.policy.Scenes[0].SessionBlockEnabled = false
 	if call("/v1/responses") != 201 || c.calls != 2 {
 		t.Fatal("freeze-off did not resume normal review")
 	}

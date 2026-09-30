@@ -75,12 +75,13 @@ export function ModelScope({
         />
         <Button
           variant="outline"
-          size="icon-sm"
+          size="sm"
           aria-label="添加模型"
           disabled={!input.trim()}
           onClick={() => add()}
         >
           <Plus size={14} />
+          添加
         </Button>
       </div>
       <datalist id={id}>

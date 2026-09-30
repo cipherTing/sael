@@ -144,24 +144,84 @@ function SceneRoute({
     queryFn: () => request<Event>(`/admin/events/${encodeURIComponent(id)}`),
     enabled: Boolean(id),
   });
-  const sample = useMemo(
-    () =>
-      sampleQuery.data
-        ? {
-            text: sampleQuery.data.text || sampleQuery.data.text_preview,
-            scores: sampleQuery.data.scores,
-            endpoint:
-              sampleQuery.data.endpoint_group ||
-              endpointGroup(sampleQuery.data.protocol),
-            model: sampleQuery.data.model,
-          }
-        : undefined,
-    [sampleQuery.data],
-  );
+  const fullTextQuery = useQuery({
+    queryKey: ["event-text", id],
+    queryFn: ({ signal }) =>
+      request<{ text: string }>(
+        `/admin/events/${encodeURIComponent(id)}/text`,
+        { signal },
+      ),
+    enabled: Boolean(id && sampleQuery.data?.text_available),
+    staleTime: Infinity,
+  });
+  const sample = useMemo(() => {
+    const event = sampleQuery.data;
+    if (!event) return undefined;
+    const metadata = {
+      scores: event.scores,
+      endpoint: event.endpoint_group || endpointGroup(event.protocol),
+      model: event.model,
+      record_id: event.id,
+      record_time: event.time,
+      return_url:
+        params.get("return")?.startsWith("/events?") ||
+        params.get("return") === "/events"
+          ? params.get("return")!
+          : `/events?event=${encodeURIComponent(event.id)}`,
+    };
+    if (event.text_available) {
+      if (fullTextQuery.isPending || fullTextQuery.isError) return undefined;
+      return {
+        text: fullTextQuery.data?.text || "",
+        ...metadata,
+      };
+    }
+    if (event.text) return { text: event.text, ...metadata };
+    if (event.scores?.length) return { text: "", ...metadata };
+    return undefined;
+  }, [
+    sampleQuery.data,
+    fullTextQuery.data,
+    fullTextQuery.isError,
+    fullTextQuery.isPending,
+    params,
+  ]);
   useEffect(() => {
     if (sampleQuery.error)
       notifyRetry(sampleQuery.error, () => void sampleQuery.refetch());
   }, [sampleQuery.error, sampleQuery.refetch]);
+  useEffect(() => {
+    if (fullTextQuery.error)
+      notifyRetry(fullTextQuery.error, () => void fullTextQuery.refetch());
+  }, [fullTextQuery.error, fullTextQuery.refetch]);
+  if (id && sampleQuery.isPending) return <Loading />;
+  if (id && (sampleQuery.isError || fullTextQuery.isError))
+    return (
+      <div className="empty-state">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() =>
+            void (sampleQuery.isError
+              ? sampleQuery.refetch()
+              : fullTextQuery.refetch())
+          }
+        >
+          重新加载
+        </Button>
+      </div>
+    );
+  if (id && sampleQuery.data?.text_available && fullTextQuery.isPending)
+    return <Loading />;
+  if (id && !sample)
+    return (
+      <div className="empty-state">
+        <p>该记录没有可用于试算的全文或分数</p>
+        <Button variant="outline" size="sm" asChild>
+          <Link to={`/events?event=${encodeURIComponent(id)}`}>返回记录</Link>
+        </Button>
+      </div>
+    );
   return (
     <>
       <ScenesPage
@@ -201,11 +261,24 @@ function JevRoute() {
     return value;
   }
   async function test(text: string, connection?: JevInput) {
-    const value = await request<JevTestResult>("/admin/jev/test", {
-      method: "POST",
-      body: JSON.stringify({ text, connection }),
-    });
-    return value;
+    try {
+      return await request<JevTestResult>("/admin/jev/test", {
+        method: "POST",
+        body: JSON.stringify({
+          text,
+          connection,
+          policy: {
+            enabled: false,
+            scenes: [],
+            preview_chars: null,
+            retention_days: null,
+          } satisfies Policy,
+        }),
+      });
+    } finally {
+      if (!connection)
+        await client.invalidateQueries({ queryKey: ["runtime"] });
+    }
   }
   if (settings.isError)
     return (

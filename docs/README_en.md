@@ -4,101 +4,118 @@
 
 # Sael
 
-**An AI request gateway with visual safety rules**
+**Configure, test, and trace safety rules for AI requests**
 
-Review user text before it reaches a model. Choose the rules for each endpoint and model.
+A text review gateway between your clients and AI services, with a visual operations console.
 
 [![CI](https://github.com/cipherTing/sael/actions/workflows/ci.yml/badge.svg)](https://github.com/cipherTing/sael/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/cipherTing/sael/sdk.svg)](https://pkg.go.dev/github.com/cipherTing/sael/sdk)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](../LICENSE)
 
-[Quick start](#quick-start) · [Deployment guide](../gateway/README.md) · [CLI and SDK](cli_en.md)
+[Quick start](#quick-start) · [Deployment guide](../gateway/README.md) · [CLI and SDK](cli_en.md) · [Contributing](../CONTRIBUTING.md)
 
 </div>
 
-![Sael dashboard: traffic, policy decisions, review latency and endpoint breakdown](images/overview.png)
+![Sael overview: user inputs, moderation outcomes and review latency trends](images/overview.png)
 
-## What Sael does
+## What is Sael?
 
-Sael sits between your clients and your AI service. Clients use the gateway address with their existing credentials. **Jev** classifies the current user text. **Blocking review** decides before forwarding; **nonblocking review** runs alongside forwarding and records matches. Requests that match no scenario pass through.
+Sael adds text safety review to existing AI services. Clients use the Sael ingress address with their existing API key. The gateway applies scenarios to the current user input, blocks or records matches, and forwards requests to your configured AI service. Classification is provided by [Jev](https://docs.typesafe.ai/models).
 
-Change rules in the console, scope them to endpoints and models, combine risk conditions, drag to reorder, and test text against a draft before enabling review.
+Configure rules in the console, compare a draft with the active policy, and follow dashboard data into individual problem requests. Sael supports OpenAI and Anthropic request formats while preserving request bodies, credentials and streaming responses.
 
-| Need | Capability |
+| What you need | What Sael provides |
 | --- | --- |
-| Different rules for different APIs or models | Endpoint and model scopes; any/all condition groups |
-| Understand a rule before saving it | Draft testing, classifier scores, match traces, reuse an existing scenario |
-| See how review is performing | Traffic, live RPM, hit/block rates, Jev failures and latency, scenario rankings |
-| Investigate a blocked request | Endpoint, model, IP, explicit session ID, redacted text and scores |
-| Stop repeated requests in a blocked session | Optional session freezes with a configurable expiry |
+| Different rules for different APIs and models | Scenario scopes, any/all conditions, raw score thresholds and drag ordering |
+| Validate a rule before saving it | Text testing, active/draft comparison and templates from existing scenarios |
+| See how review is running | Live RPM, traffic and hit trends, outcome composition, latency distribution and cache efficiency |
+| Locate concentrated risk | Scenario, credential and source IP rankings with filtered record drilldown |
+| Investigate a request | Redacted text previews and full text, masked keys, conversation association and matched scores |
+| Handle repeated violations | Reused review decisions and optional session freezes per scenario |
 
-## Scenarios define the policy
+## Organize rules as scenarios
 
-A scenario can block when **gore > 1.5 AND self-harm risk > 0.8**, while another logs and forwards. Thresholds belong to each scenario. The first matching scenario determines the action.
+Each scenario owns its thresholds and action. Select endpoints and models, combine conditions, and drag scenarios to set priority. Sliders and numeric inputs support both quick adjustments and exact values. Testing lives in the editor, so you can compare active and draft results before saving.
 
-![Scenario editor: endpoint and model scopes, conditions and actions](images/scenes.png)
+![Scenario workspace: score controls, scope, actions and policy testing](images/scenes.png)
 
-Jev returns eleven measurements: nine probabilities from 0 to 1, plus sexual and gore severity scores from 0 to 3. The console currently uses Chinese labels, with scale descriptions available from help icons.
+## From an overview to a problem request
 
-## From trends to a request
+Trends, composition, distributions and rankings show review activity together. Time range and time granularity are separate controls. Endpoint, model and other filters carry through to request records.
 
-Traffic, decisions and Jev health share one overview. Filter by time, endpoint or model, then drill into scenario hits, Jev failures or gateway warnings.
+![Review record: request metadata, redacted text and matched scores](images/record.png)
 
-![Request detail: redacted text, request context and matched scores](images/record.png)
+Individual records contain scenario hits, classifier failures and gateway warnings. Clean requests do not store individual prompt bodies. Recorded text is redacted; API keys are stored encrypted and displayed only as masked values. The console currently uses Chinese labels.
 
-Matched scores appear first; the remaining scores are collapsed. Clean requests contribute only to counts and latency aggregates, with no per-request records, stored prompts or score distributions. Screenshots show the real console with fictional sample data.
+Screenshots show the local console with sample data.
 
-## Request flow
+## Architecture
 
 ```mermaid
 flowchart LR
-    Client --> Gateway[Sael ingress]
-    Gateway --> Scope{Applicable scene and trusted credential?}
-    Scope -- No --> Upstream[Your AI service]
-    Scope -- Yes --> Mode{Any blocking scene?}
-    Mode -- Yes --> Review[Current user text → Jev]
-    Review --> Rules[Ordered scenarios]
-    Rules -- Allow --> Upstream
-    Rules -- Block --> Deny[Endpoint-specific 403]
-    Mode -- No --> Upstream
-    Mode -- Concurrent review --> Async[Jev → Match records]
-    Async -.-> Console[Separate management port]
-    Rules -. Decisions .-> Console
+    Client[Client] --> Proxy[Reverse proxy]
+    Proxy --> Gateway[Sael gateway]
+    Gateway --> Upstream[Your AI service]
+    Admin[Operations console] --> Gateway
+    Gateway --> CLI[Persistent Sael CLI]
+    CLI --> Jev[Jev classifier]
+    Gateway --> Store[(PostgreSQL / Redis)]
 ```
 
-- **Monitored APIs:** OpenAI Chat Completions, Responses, Anthropic Messages, and OpenAI Images generations, edits and variations. Image endpoints review only `prompt`; variations has no text to review.
-- **Forwarding:** Other paths pass through. Original payloads, credentials and streaming responses are preserved. History, images, audio and tool output are not submitted to Jev.
-- **Failure policy:** Jev failures are logged and forwarded. Oversized text skips Jev and generates a warning. Upstream errors are not counted as review failures.
-- **Deployment:** Go, React, PostgreSQL and Redis, packaged with Docker Compose. Administration and API ingress use separate ports.
+Client ingress and the management console listen on separate ports. Docker Compose starts the gateway, PostgreSQL and Redis together; the forwarding destination and review settings are managed in the console.
 
 ## Quick start
+
+Have Docker Compose ready, along with the address, model and API key for a working Jev service.
 
 ```sh
 git clone https://github.com/cipherTing/sael.git
 cd sael/gateway/deploy
 cp .env.example .env
-# Set ADMIN_PASSWORD, POSTGRES_PASSWORD, REDIS_PASSWORD, REVIEW_CACHE_REDIS_PASSWORD and CREDENTIAL_ENCRYPTION_KEY in .env.
-docker compose up --build -d
+openssl rand -base64 32
 ```
 
-The console defaults to **http://localhost:8080** and ingress to **http://localhost:8081**. OpenAI clients typically use `http://localhost:8081/v1` as their API base and retain their upstream API key.
+Edit `.env` to set the administrator, PostgreSQL and two Redis passwords. Put the generated encryption key in `CREDENTIAL_ENCRYPTION_KEY` and keep a backup. There is no default console password.
 
-Review starts disabled. Sign in, set the forwarding destination under **设置 → 接入**, configure and test Jev under **设置 → Jev 分类器**, then create and test rules under **场景** before enabling review. Host ports can be changed in `.env`.
+```sh
+docker compose up --build -d --wait
+```
 
-See the [deployment guide](../gateway/README.md) for environment variables, session freezing, the estimated Jev input limit and development commands.
+| Entry | Default address |
+| --- | --- |
+| Operations console | `http://localhost:8080` |
+| Client ingress | `http://localhost:8081` |
 
-## CLI and SDK
+Review starts disabled. Sign in using `ADMIN_PASSWORD` from `.env`. Host ports can be changed in `.env`; by default they bind only to the host loopback address. Use a reverse proxy for external access.
 
-Use the CLI or Go SDK independently when you only need classification scores. Enforcement remains with the caller.
+1. Set the forwarding Base URL under **设置 → 接入**.
+2. Configure and test Jev under **设置 → Jev 分类器**.
+3. Create scenarios and test text under **场景**.
+4. Enable global review under **设置 → 审查**.
+5. Point your client at the ingress address, retain its existing API key, and inspect the overview and records.
+
+An API key joins the trusted list after its first successful verification by the upstream; subsequent requests are reviewed according to scenarios. OpenAI clients typically use `http://localhost:8081/v1` as their API base.
+
+From the repository root, `npm run docker:up`, `docker:rebuild`, `docker:ps`, `docker:logs` and `docker:down` also manage the containers. See the [gateway guide](../gateway/README.md) for deployment and configuration details.
+
+## CLI, SDK and development
+
+The CLI can review text independently. The Go SDK is a standalone Jev API client with no gateway dependency.
 
 ```sh
 sael check "text to review"
+sael check --questions gore,self_harm "review selected questions"
 cat prompt.txt | sael check --json
 ```
 
-[Install and use the CLI / SDK](cli_en.md) · [Contributing](../CONTRIBUTING.md) · [Security](../SECURITY.md)
+| Documentation | Contents |
+| --- | --- |
+| [CLI and SDK](cli_en.md) | Installation, terminal configuration, commands and Go examples |
+| [Gateway guide](../gateway/README.md) | Deployment, settings, record boundaries, local development and tests |
+| [Contributing](../CONTRIBUTING.md) | Development conventions and contribution checks |
+| [Security](../SECURITY.md) | Reporting security issues |
 
-Stored text uses regular expressions to redact common credentials and personal information. This does not cover every sensitive format; Jev and the upstream still receive the original text. See the deployment guide for storage boundaries.
+Use [GitHub Issues](https://github.com/cipherTing/sael/issues) for general questions and feature requests.
 
 ## License
 

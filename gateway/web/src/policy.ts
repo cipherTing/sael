@@ -13,6 +13,8 @@ export type Scene = {
   enabled?: boolean;
   endpoints?: string[];
   models?: string[];
+  session_block_enabled?: boolean;
+  session_block_ttl_seconds?: number;
 };
 export type Policy = {
   trusted_key_idle_days?: number;
@@ -20,10 +22,7 @@ export type Policy = {
   scenes: Scene[];
   preview_chars: number | null;
   retention_days: number | null;
-  session_block_enabled?: boolean;
-  session_block_on_blocking_review?: boolean;
-  session_block_on_nonblocking_review?: boolean;
-  session_block_ttl_seconds?: number;
+  block_message?: string;
 };
 export type PolicyResponse = Policy & { questions: Question[] };
 

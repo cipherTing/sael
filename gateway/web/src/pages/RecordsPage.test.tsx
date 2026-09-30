@@ -11,6 +11,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import RecordsPage from "./RecordsPage";
 import { request } from "../api";
 import type { Event } from "../types";
+import { toast } from "sonner";
 vi.mock("../api", () => ({ request: vi.fn() }));
 afterEach(() => {
   cleanup();
@@ -26,8 +27,9 @@ const event: Event = {
   model: "test",
   stream: true,
   has_non_text_input: false,
-  text_preview: "",
-  text: "current user text",
+  text_preview: "current user text",
+  text_available: true,
+  text_chars: 17,
   classifier_ms: 12,
   scores: [{ question: "gore", type: "score", value: 1.9 }],
   decision: {
@@ -47,19 +49,43 @@ const event: Event = {
     },
   ],
 };
-function mount() {
+function mount(initialEntry = "/") {
   render(
     <QueryClientProvider
       client={
         new QueryClient({ defaultOptions: { queries: { retry: false } } })
       }
     >
-      <MemoryRouter>
+      <MemoryRouter initialEntries={[initialEntry]}>
         <RecordsPage scenes={[]} />
       </MemoryRouter>
     </QueryClientProvider>,
   );
 }
+
+it("provides the caller key ID required by the visible record filter", async () => {
+  const item = {
+    ...event,
+    credential_id: "credential-one",
+    masked_key: "sk-a********9876",
+  };
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText },
+  });
+  vi.mocked(request).mockImplementation(async (path) =>
+    path === "/admin/events/event-1" ? item : [item],
+  );
+  mount();
+  fireEvent.click(
+    await screen.findByRole("row", { name: "查看请求 request-1" }),
+  );
+  const copyID = await screen.findByRole("button", { name: "复制调用密钥 ID" });
+  expect(screen.getByText("credential-one")).toBeTruthy();
+  fireEvent.click(copyID);
+  await waitFor(() => expect(writeText).toHaveBeenCalledWith("credential-one"));
+});
 it("defaults to hit records and preserves the separate Jev error view", async () => {
   vi.mocked(request).mockResolvedValue([]);
   mount();
@@ -85,6 +111,26 @@ it("defaults to hit records and preserves the separate Jev error view", async ()
     ).toBe(true),
   );
 });
+
+it("keeps the original records filters in the link to scene testing", async () => {
+  vi.mocked(request).mockImplementation(async (path) =>
+    path === "/admin/events/event-1" ? event : [event],
+  );
+  mount("/events?minutes=10080&client_ip=203.0.113.7&model=test");
+  fireEvent.click(
+    await screen.findByRole("row", { name: "查看请求 request-1" }),
+  );
+  const link = await screen.findByRole("link", { name: "用此记录试算" });
+  const target = new URL(link.getAttribute("href")!, "http://localhost");
+  const back = new URL(
+    target.searchParams.get("return") || "",
+    "http://localhost",
+  );
+  expect(back.pathname).toBe("/events");
+  expect(back.searchParams.get("minutes")).toBe("10080");
+  expect(back.searchParams.get("client_ip")).toBe("203.0.113.7");
+  expect(back.searchParams.get("event")).toBe("event-1");
+});
 it("opens the historical threshold and carries the sample back to its scene", async () => {
   vi.mocked(request).mockImplementation(async (path) =>
     path === "/admin/events/event-1" ? event : [event],
@@ -94,10 +140,14 @@ it("opens the historical threshold and carries the sample back to its scene", as
     await screen.findByRole("row", { name: "查看请求 request-1" }),
   );
   expect(await screen.findByText("current user text")).toBeTruthy();
+  expect(screen.queryByText("当时的匹配过程")).toBeNull();
   expect(screen.getByText("> 1.5")).toBeTruthy();
-  expect(
-    screen.getByRole("link", { name: "用此记录试算" }).getAttribute("href"),
-  ).toBe("/scenes?sample=event-1&scene=scene-old");
+  const sampleURL = new URL(
+    screen.getByRole("link", { name: "用此记录试算" }).getAttribute("href")!,
+    "http://localhost",
+  );
+  expect(sampleURL.searchParams.get("sample")).toBe("event-1");
+  expect(sampleURL.searchParams.get("scene")).toBe("scene-old");
 });
 
 it("shows request context and keeps below-threshold scores collapsed", async () => {
@@ -178,4 +228,116 @@ it("shows the masked caller key in both list and cache detail without fake score
   await screen.findByText("current user text");
   expect(screen.getAllByText("sk-a********9876").length).toBe(2);
   expect(screen.getAllByText("缓存命中").length).toBeGreaterThan(0);
+});
+
+it("loads the redacted full text only on request and can return to the explicit preview", async () => {
+  let resolveText!: (value: { text: string }) => void;
+  const full = new Promise<{ text: string }>((resolve) => {
+    resolveText = resolve;
+  });
+  const item = {
+    ...event,
+    kind: "warning" as const,
+    error_kind: "classifier_input_too_long",
+    text: undefined,
+    text_preview: "前 500 字预览",
+    text_available: true,
+    text_chars: 750000,
+    input_chars: 750000,
+    input_tokens_estimated: 618802,
+    jev_input_limit: 60000,
+    scores: undefined,
+  };
+  vi.mocked(request).mockImplementation(async (path) => {
+    if (path === "/admin/events/event-1/text") return full;
+    return path === "/admin/events/event-1" ? item : [item];
+  });
+  mount();
+  fireEvent.click(
+    await screen.findByRole("row", { name: "查看请求 request-1" }),
+  );
+  await screen.findByRole("heading", { name: "用户输入预览" });
+  expect(screen.getByText("750,000 字")).toBeTruthy();
+  expect(screen.getByText("618,802 Token")).toBeTruthy();
+  expect(vi.mocked(request).mock.calls.some(([p]) => p.endsWith("/text"))).toBe(
+    false,
+  );
+  expect(
+    screen.getByRole("link", { name: "用此记录试算" }).getAttribute("href"),
+  ).toContain("sample=event-1");
+  fireEvent.click(screen.getByRole("button", { name: "查看全文" }));
+  await waitFor(() =>
+    expect(
+      (screen.getByRole("button", { name: "加载全文" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true),
+  );
+  await waitFor(() =>
+    expect(
+      vi.mocked(request).mock.calls.filter(([p]) => p.endsWith("/text")),
+    ).toHaveLength(1),
+  );
+  resolveText({ text: "完整的已去敏用户输入 [REDACTED]" });
+  await screen.findByText("完整的已去敏用户输入 [REDACTED]");
+  expect(screen.getByRole("heading", { name: "用户输入全文" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "返回预览" }));
+  expect(screen.getByText("前 500 字预览")).toBeTruthy();
+  expect(screen.queryByText("完整的已去敏用户输入 [REDACTED]")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "查看全文" }));
+  await screen.findByText("完整的已去敏用户输入 [REDACTED]");
+  expect(
+    vi.mocked(request).mock.calls.filter(([p]) => p.endsWith("/text")),
+  ).toHaveLength(1);
+});
+
+it("identifies legacy preview-only records without offering a false full-text action", async () => {
+  const item = {
+    ...event,
+    text: undefined,
+    scores: undefined,
+    text_preview: "历史预览",
+    text_available: false,
+  };
+  vi.mocked(request).mockImplementation(async (path) =>
+    path === "/admin/events/event-1" ? item : [item],
+  );
+  mount();
+  fireEvent.click(
+    await screen.findByRole("row", { name: "查看请求 request-1" }),
+  );
+  await screen.findByRole("heading", { name: "用户输入预览" });
+  expect(screen.getByText("仅保留预览")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "查看全文" })).toBeNull();
+  expect(screen.queryByRole("link", { name: "用此记录试算" })).toBeNull();
+});
+
+it("keeps the preview and offers a toast retry when loading the full text fails", async () => {
+  const notify = vi.spyOn(toast, "error").mockReturnValue("toast-id");
+  const item = { ...event, text_preview: "保留的预览" };
+  let failed = true;
+  vi.mocked(request).mockImplementation(async (path) => {
+    if (path.endsWith("/text")) {
+      if (failed) throw new Error("全文暂不可用");
+      return { text: "已加载的完整文本" };
+    }
+    return path === "/admin/events/event-1" ? item : [item];
+  });
+  mount();
+  fireEvent.click(
+    await screen.findByRole("row", { name: "查看请求 request-1" }),
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "查看全文" }));
+  await screen.findByRole("button", { name: "重试全文" });
+  expect(screen.getByText("保留的预览")).toBeTruthy();
+  expect(notify).toHaveBeenCalledWith(
+    "全文暂不可用",
+    expect.objectContaining({
+      action: expect.objectContaining({ label: "重试" }),
+    }),
+  );
+  failed = false;
+  fireEvent.click(screen.getByRole("button", { name: "重试全文" }));
+  await screen.findByText("已加载的完整文本");
+  expect(screen.getByRole("button", { name: "返回预览" })).toBeTruthy();
+  notify.mockRestore();
 });

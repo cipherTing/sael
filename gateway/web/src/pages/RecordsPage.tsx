@@ -14,6 +14,8 @@ import {
   ArrowRight,
   Columns3,
   FlaskConical,
+  FileText,
+  LoaderCircle,
   Search,
   X,
 } from "lucide-react";
@@ -65,6 +67,7 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
       params.get("credential_id") || "",
     ),
     [model, setModel] = useState(params.get("model") || ""),
+    [expandedTextId, setExpandedTextId] = useState(""),
     [visibility, setVisibility] = useState<VisibilityState>({
       request_id: false,
       session_id: false,
@@ -90,10 +93,25 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
       request<Event>(`/admin/events/${encodeURIComponent(selected)}`),
     enabled: Boolean(selected),
   });
+  const fullText = useQuery({
+    queryKey: ["event-text", selected],
+    queryFn: ({ signal }) =>
+      request<{ text: string }>(
+        `/admin/events/${encodeURIComponent(selected)}/text`,
+        { signal },
+      ),
+    enabled: Boolean(selected) && expandedTextId === selected,
+    staleTime: Infinity,
+    retry: false,
+  });
   useEffect(() => {
     if (result.error) notifyRetry(result.error, () => void result.refetch());
     if (detail.error) notifyRetry(detail.error, () => void detail.refetch());
   }, [result.error, result.refetch, detail.error, detail.refetch]);
+  useEffect(() => {
+    if (fullText.error)
+      notifyRetry(fullText.error, () => void fullText.refetch());
+  }, [fullText.error, fullText.refetch]);
   useEffect(() => {
     setSearch(params.get("search") || "");
     setClientIP(params.get("client_ip") || "");
@@ -152,10 +170,10 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
   }
   const hasTextFilters = Boolean(
     search.trim() ||
-      clientIP.trim() ||
-      sessionID.trim() ||
-      credentialID.trim() ||
-      model.trim(),
+    clientIP.trim() ||
+    sessionID.trim() ||
+    credentialID.trim() ||
+    model.trim(),
   );
   const columns = useMemo<ColumnDef<Event>[]>(
     () =>
@@ -297,6 +315,7 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
     onColumnVisibilityChange: setVisibility,
   });
   const current = detail.data;
+  const showingFullText = expandedTextId === selected && Boolean(fullText.data);
   return (
     <>
       <PageHeading title="记录">
@@ -368,7 +387,7 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
             <span>调用密钥 ID</span>
             <Input
               aria-label="筛选调用密钥 ID"
-              placeholder="输入凭据 ID"
+              placeholder="输入调用密钥 ID"
               value={credentialID}
               onChange={(e) => setCredentialID(e.target.value)}
             />
@@ -403,6 +422,7 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
         <div className="records-toolbar records-select-toolbar">
           <Choice
             label="记录端点"
+            visibleLabel="端点"
             value={params.get("endpoint") || ""}
             onChange={(value) => filter("endpoint", value)}
             options={[
@@ -416,6 +436,7 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
           {kind === "hit" && (
             <Choice
               label="记录场景"
+              visibleLabel="场景"
               value={params.get("scene") || ""}
               onChange={(value) => filter("scene", value)}
               options={[
@@ -431,6 +452,7 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
           {kind !== "hit" && (
             <Choice
               label="错误原因"
+              visibleLabel="原因"
               value={params.get("error_kind") || ""}
               onChange={(value) => filter("error_kind", value)}
               options={[
@@ -457,6 +479,7 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
           {kind === "hit" && (
             <Choice
               label="处理结果"
+              visibleLabel="处理结果"
               value={params.get("action") || ""}
               onChange={(value) => filter("action", value)}
               options={[
@@ -470,11 +493,12 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
             <DropdownMenuTrigger asChild>
               <Button
                 type="button"
-                size="icon-sm"
+                size="sm"
                 variant="ghost"
                 aria-label="显示列"
               >
                 <Columns3 size={14} />
+                显示列
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
@@ -609,6 +633,7 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
         open={Boolean(selected)}
         onOpenChange={(open) => {
           if (!open) {
+            setExpandedTextId("");
             const next = new URLSearchParams(params);
             next.delete("event");
             setParams(next);
@@ -711,6 +736,20 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
                     )}
                   </dd>
                 </div>
+                {current.credential_id && (
+                  <div>
+                    <dt>调用密钥 ID</dt>
+                    <dd>
+                      <span className="detail-value-actions">
+                        <code>{current.credential_id}</code>
+                        <CopyButton
+                          value={current.credential_id}
+                          label="复制调用密钥 ID"
+                        />
+                      </span>
+                    </dd>
+                  </div>
+                )}
                 {(current.image_operation ||
                   current.protocol.startsWith("openai_images_")) && (
                   <div>
@@ -751,23 +790,66 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
                   </div>
                 </dl>
               )}
-              <div className="editor-block-title">
-                <h3 className="section-label">当前用户文本</h3>
-                {(current.text ||
-                  current.text_preview ||
-                  current.scores?.length) && (
-                  <Button asChild variant="outline" size="sm">
-                    <Link
-                      to={`/scenes?sample=${encodeURIComponent(current.id)}${current.decision.scene_id ? `&scene=${encodeURIComponent(current.decision.scene_id)}` : ""}`}
+              <div className="editor-block-title record-text-heading">
+                <h3 className="section-label">
+                  {showingFullText ? "用户输入全文" : "用户输入预览"}
+                </h3>
+                <div className="heading-actions">
+                  {current.text_available && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={fullText.isFetching}
+                      onClick={() => {
+                        if (fullText.isFetching) return;
+                        if (showingFullText) setExpandedTextId("");
+                        else if (fullText.isError) void fullText.refetch();
+                        else setExpandedTextId(selected);
+                      }}
                     >
-                      <FlaskConical size={13} />
-                      用此记录试算
-                    </Link>
-                  </Button>
+                      {fullText.isFetching ? (
+                        <LoaderCircle size={13} className="animate-spin" />
+                      ) : (
+                        <FileText size={13} />
+                      )}
+                      {fullText.isFetching
+                        ? "加载全文"
+                        : showingFullText
+                          ? "返回预览"
+                          : fullText.isError
+                            ? "重试全文"
+                            : "查看全文"}
+                    </Button>
+                  )}
+                  {(current.text_available || current.scores?.length) && (
+                    <Button asChild variant="outline" size="sm">
+                      <Link
+                        to={`/scenes?sample=${encodeURIComponent(current.id)}${current.decision.scene_id ? `&scene=${encodeURIComponent(current.decision.scene_id)}` : ""}&return=${encodeURIComponent(`/events?${params.toString()}`)}`}
+                      >
+                        <FlaskConical size={13} />
+                        用此记录试算
+                      </Link>
+                    </Button>
+                  )}
+                </div>
+              </div>
+              <div className="prompt-text-meta">
+                {!showingFullText &&
+                  `预览 ${count(Array.from(current.text_preview || "").length)} 字`}
+                {current.text_chars ? (
+                  <span>
+                    {!showingFullText && " · "}全文{" "}
+                    <b>{count(current.text_chars)} 字</b>
+                  </span>
+                ) : null}
+                {!current.text_available && current.text_preview && (
+                  <span className="subtle-badge">仅保留预览</span>
                 )}
               </div>
               <div className="request-text">
-                {current.text || current.text_preview || "未记录文本"}
+                {showingFullText
+                  ? fullText.data!.text
+                  : current.text_preview || "未记录文本"}
               </div>
               {!!current.scores?.length && (
                 <ScoreBreakdown
@@ -854,28 +936,6 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
                     ))}
                 </dl>
               </details>
-              {current.trace && (
-                <details style={{ marginTop: 20 }}>
-                  <summary className="section-label">当时的匹配过程</summary>
-                  {current.trace.map((trace) => (
-                    <div className="trace-item" key={trace.id}>
-                      <span>{trace.name}</span>
-                      <span className="trace-status">
-                        {
-                          {
-                            effective: "最终生效",
-                            shadowed: "优先级未采用",
-                            not_matched: "未匹配",
-                            endpoint_skipped: "端点不适用",
-                            disabled: "已暂停",
-                            model_skipped: "模型不适用",
-                          }[trace.status]
-                        }
-                      </span>
-                    </div>
-                  ))}
-                </details>
-              )}
             </div>
           )}
         </SheetContent>

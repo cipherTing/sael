@@ -1,11 +1,22 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, FlaskConical, PlugZap, Save, RotateCcw } from "lucide-react";
+import {
+  Check,
+  CircleAlert,
+  FlaskConical,
+  LoaderCircle,
+  PlugZap,
+  Save,
+  RotateCcw,
+  Server,
+} from "lucide-react";
+import { toast } from "sonner";
+import "./newsettings-workbench.css";
 import { Input } from "./components/ui/input";
 import { Textarea } from "./components/ui/textarea";
 import { Button } from "./components/ui/button";
 import { Help, Panel } from "./components/common";
 import { notifyError } from "./notifications";
-import { questionName } from "./questionMeta";
+import { questionMeta, questionName } from "./questionMeta";
 import { duration } from "./analytics";
 import type { Answer, Hit } from "./types";
 
@@ -49,33 +60,54 @@ type Props = {
   onSave: (value: JevInput) => Promise<JevConfig>;
   onTest: (text: string, connection?: JevInput) => Promise<JevTestResult>;
 };
+type TestRun = {
+  kind: "connection" | "text";
+  config: Pick<JevInput, "base_url" | "model">;
+  draft: boolean;
+  failed: boolean;
+  data?: JevTestResult;
+};
+
 export default function JevSettingsPage({
   config,
   runtime,
   onSave,
   onTest,
 }: Props) {
-  const [baseURL, setBaseURL] = useState(config.base_url),
-    [model, setModel] = useState(config.model),
-    [key, setKey] = useState(""),
-    [timeout, setTimeout] = useState(config.timeout_ms || 5000),
-    [maxInputTokens, setMaxInputTokens] = useState(
-      config.max_input_tokens || 28800,
-    ),
-    [saved, setSaved] = useState(config);
-  const [saving, setSaving] = useState(false),
-    [testing, setTesting] = useState(false),
-    [text, setText] = useState(""),
-    [result, setResult] = useState<JevTestResult | null>(null),
-    [connectionOK, setConnectionOK] = useState(false);
+  const [baseURL, setBaseURL] = useState(config.base_url);
+  const [model, setModel] = useState(config.model);
+  const [key, setKey] = useState("");
+  const [timeout, setTimeout] = useState(config.timeout_ms || 5000);
+  const [maxInputTokens, setMaxInputTokens] = useState(
+    config.max_input_tokens || 28800,
+  );
+  const [saved, setSaved] = useState(config);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState<TestRun["kind"] | null>(null);
+  const [text, setText] = useState("");
+  const [run, setRun] = useState<TestRun | null>(null);
   const serial = useRef(0);
+
+  function resetFields(value: JevConfig) {
+    setBaseURL(value.base_url);
+    setModel(value.model);
+    setKey("");
+    setTimeout(value.timeout_ms || 5000);
+    setMaxInputTokens(value.max_input_tokens || 28800);
+  }
+  function clearTest() {
+    serial.current++;
+    setRun(null);
+    setTesting(null);
+  }
   useEffect(() => {
     setSaved(config);
-    setBaseURL(config.base_url);
-    setModel(config.model);
-    setTimeout(config.timeout_ms || 5000);
-    setMaxInputTokens(config.max_input_tokens || 28800);
+    resetFields(config);
   }, [config]);
+  useEffect(() => {
+    clearTest();
+  }, [baseURL, model, key, timeout, maxInputTokens]);
+
   let urlValid = false;
   try {
     const u = new URL(baseURL);
@@ -92,6 +124,7 @@ export default function JevSettingsPage({
     urlValid &&
     Boolean(model.trim()) &&
     (saved.api_key_set || Boolean(key.trim())) &&
+    Number.isInteger(timeout) &&
     timeout >= 1 &&
     timeout <= 120000 &&
     Number.isInteger(maxInputTokens) &&
@@ -109,18 +142,16 @@ export default function JevSettingsPage({
     timeout_ms: timeout,
     max_input_tokens: maxInputTokens,
   });
-  useEffect(() => {
-    serial.current++;
-    setConnectionOK(false);
-    setResult(null);
-    setTesting(false);
-  }, [baseURL, model, key, timeout, maxInputTokens]);
+
   async function save() {
+    if (saving || !valid || !dirty) return;
     setSaving(true);
     try {
       const value = await onSave(input());
       setSaved(value);
-      setKey("");
+      resetFields(value);
+      clearTest();
+      toast.success("Jev 配置已保存");
     } catch (error) {
       notifyError(error);
     } finally {
@@ -128,243 +159,400 @@ export default function JevSettingsPage({
     }
   }
   async function test(connectionOnly = false) {
+    if (testing || !valid || (!connectionOnly && !text.trim())) return;
     const id = ++serial.current;
-    setTesting(true);
-    setResult(null);
+    const kind = connectionOnly ? "connection" : "text";
+    const target = input();
+    const draft = dirty;
+    setTesting(kind);
+    setRun(null);
     try {
-      const value = await onTest(
+      const data = await onTest(
         connectionOnly ? "这是一条连接测试。" : text.trim(),
-        input(),
+        draft ? target : undefined,
       );
-      if (id === serial.current) {
-        setConnectionOK(!value.skipped);
-        if (!connectionOnly) setResult(value);
-      }
-    } catch (error) {
       if (id === serial.current)
+        setRun({
+          kind,
+          config: { base_url: target.base_url, model: target.model },
+          draft,
+          failed: false,
+          data,
+        });
+    } catch (error) {
+      if (id === serial.current) {
+        setRun({
+          kind,
+          config: { base_url: target.base_url, model: target.model },
+          draft,
+          failed: true,
+        });
         notifyError(error);
+      }
     } finally {
-      if (id === serial.current) setTesting(false);
+      if (id === serial.current) setTesting(null);
     }
   }
+  const result = run?.data;
+  const runtimeState =
+    runtime?.classifier === "ok"
+      ? "正常"
+      : runtime?.classifier === "error"
+        ? "异常"
+        : "未验证";
+
   return (
-    <>
-      <div className="connection-layout">
-        <Panel
-          title="连接配置"
-          extra={
-            <span className="review-state">
-              <i
-                className={`state-dot ${runtime?.classifier === "ok" ? "on" : ""}`}
-              />
-              {runtime?.classifier === "ok"
-                ? "分类器正常"
-                : runtime?.classifier === "error"
-                  ? "分类器异常"
-                  : "未验证"}
-            </span>
-          }
+    <div className="jev-workbench">
+      <section className="jev-active-connection" aria-label="正在使用">
+        <div className="jev-active-label">
+          <span className="jev-active-icon">
+            <Server size={17} />
+          </span>
+          <strong>正在使用</strong>
+          <span
+            className={`settings-status-pill ${runtime?.classifier === "ok" ? "is-on" : runtime?.classifier === "error" ? "is-error" : ""}`}
+          >
+            生产连接 · {runtimeState}
+          </span>
+        </div>
+        <dl className="jev-active-facts">
+          <div>
+            <dt>接口地址</dt>
+            <dd>{saved.base_url || "—"}</dd>
+          </div>
+          <div>
+            <dt>模型</dt>
+            <dd>{saved.model || "—"}</dd>
+          </div>
+          <div>
+            <dt>密钥</dt>
+            <dd>{saved.api_key_set ? "已配置" : "未配置"}</dd>
+          </div>
+        </dl>
+      </section>
+
+      <Panel
+        title="连接配置"
+        className="jev-connection-panel"
+        extra={
+          <span className={`settings-status-pill ${dirty ? "is-draft" : ""}`}>
+            {dirty ? "未保存" : "已保存"}
+          </span>
+        }
+      >
+        <form
+          className="jev-connection-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void save();
+          }}
         >
-          <div className="panel-body">
-            <div className="fields-grid">
-              <label className="field" style={{ gridColumn: "1 / -1" }}>
-                <span>接口地址</span>
-                <Input
-                  aria-label="接口地址"
-                  placeholder="https://api.example.com/v1"
-                  value={baseURL}
-                  onChange={(e) => setBaseURL(e.target.value)}
-                  aria-invalid={Boolean(baseURL) && !urlValid}
-                />
-              </label>
-              <label className="field">
-                <span>模型 ID</span>
-                <Input
-                  aria-label="模型 ID"
-                  placeholder="jev-latest"
-                  value={model}
-                  onChange={(e) => setModel(e.target.value)}
-                />
-              </label>
-              <label className="field">
-                <span>超时（毫秒）</span>
-                <Input
-                  type="number"
-                  min={1}
-                  max={120000}
-                  aria-label="分类器超时（毫秒）"
-                  value={timeout || ""}
-                  onChange={(e) => setTimeout(Number(e.target.value))}
-                />
-              </label>
-              <label className="field" style={{ gridColumn: "1 / -1" }}>
-                <span>
-                  送审上限（估算 Token）
-                  <Help>
-                    默认 28,800，为 Jev 32k 文本与单题预算的 90%。使用本地
-                    cl100k_base 估算；超出后跳过审核、原样转发并记录警告。
-                  </Help>
-                </span>
+          <div className="jev-fields">
+            <label className="field jev-field-wide">
+              <span>接口地址</span>
+              <Input
+                aria-label="接口地址"
+                placeholder="https://api.example.com/v1"
+                value={baseURL}
+                onChange={(event) => setBaseURL(event.target.value)}
+                aria-invalid={Boolean(baseURL) && !urlValid}
+                disabled={saving}
+              />
+            </label>
+            <label className="field jev-field-wide">
+              <span>模型 ID</span>
+              <Input
+                aria-label="模型 ID"
+                placeholder="jev-latest"
+                value={model}
+                onChange={(event) => setModel(event.target.value)}
+                disabled={saving}
+              />
+            </label>
+            <label className="field jev-field-wide" htmlFor="jev-api-key">
+              <span>
+                API Key{" "}
+                <Help>留空保留已保存的密钥；输入新密钥后保存才会替换。</Help>
+              </span>
+              <Input
+                id="jev-api-key"
+                type="password"
+                autoComplete="new-password"
+                aria-label="API Key"
+                placeholder={
+                  saved.api_key_set ? "留空保留当前密钥" : "输入 API Key"
+                }
+                value={key}
+                onChange={(event) => setKey(event.target.value)}
+                disabled={saving}
+              />
+            </label>
+            <label className="field">
+              <span>超时（毫秒）</span>
+              <Input
+                type="number"
+                min={1}
+                max={120000}
+                step={1}
+                aria-label="分类器超时（毫秒）"
+                value={timeout || ""}
+                onChange={(event) => setTimeout(Number(event.target.value))}
+                disabled={saving}
+              />
+            </label>
+            <label className="field">
+              <span>
+                送审上限{" "}
+                <Help>
+                  默认 28,800 Token，为 Jev 32k 文本与单题预算的 90%。本地使用
+                  cl100k_base 估算；超出后跳过审查并记录警告。
+                </Help>
+              </span>
+              <div className="jev-unit-input">
                 <Input
                   type="number"
                   min={1}
                   step={1}
                   aria-label="送审上限（估算 Token）"
                   value={maxInputTokens || ""}
-                  onChange={(e) => setMaxInputTokens(Number(e.target.value))}
-                />
-              </label>
-              <label
-                className="field"
-                htmlFor="jev-api-key"
-                style={{ gridColumn: "1 / -1" }}
-              >
-                <span>
-                  API Key{" "}
-                  <Help>留空保留已保存的密钥；输入新密钥后保存才会替换。</Help>
-                  {saved.api_key_set && (
-                    <span
-                      className="subtle-badge"
-                      style={{ marginLeft: "auto" }}
-                    >
-                      已配置
-                    </span>
-                  )}
-                </span>
-                <Input
-                  id="jev-api-key"
-                  type="password"
-                  autoComplete="new-password"
-                  aria-label="API Key"
-                  placeholder={
-                    saved.api_key_set ? "保留当前密钥" : "输入 API Key"
+                  onChange={(event) =>
+                    setMaxInputTokens(Number(event.target.value))
                   }
-                  value={key}
-                  onChange={(e) => setKey(e.target.value)}
+                  disabled={saving}
                 />
-              </label>
-            </div>
-            <div className="form-actions">
-              {connectionOK && (
-                <span
-                  className="small"
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 5,
-                    color: "#4b967f",
-                  }}
-                >
-                  <Check size={13} />
-                  连接正常
-                </span>
-              )}
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={!valid || testing}
-                onClick={() => void test(true)}
-              >
-                <PlugZap size={14} />
-                {testing ? "测试中…" : "测试连接"}
-              </Button>
-              <Button
-                size="sm"
-                disabled={!valid || !dirty || saving}
-                onClick={() => void save()}
-              >
-                <Save size={14} />
-                {saving ? "保存中…" : "保存 Jev 配置"}
-              </Button>
-            </div>
+                <span>Token</span>
+              </div>
+            </label>
           </div>
-        </Panel>
-        <Panel
-          title="文本调试"
-          extra={
-            <Help>
-              使用表单中的连接配置。测试不会保存请求，也不计入生产统计。
-            </Help>
-          }
-        >
-          <div className="panel-body">
+          <div className="jev-save-actions">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={!dirty || saving}
+              onClick={() => resetFields(saved)}
+            >
+              <RotateCcw size={14} />
+              放弃修改
+            </Button>
+            <Button
+              type="submit"
+              size="sm"
+              disabled={!valid || !dirty || saving}
+            >
+              <Save size={14} />
+              {saving ? "保存中…" : "保存 Jev 配置"}
+            </Button>
+          </div>
+        </form>
+      </Panel>
+
+      <Panel
+        title="测试工作台"
+        className="jev-test-panel"
+        extra={
+          <Help>
+            使用左侧当前填写的配置测试，不保存配置，也不计入生产统计。
+          </Help>
+        }
+      >
+        <div className="jev-test-body">
+          <div className="jev-test-target">
+            <span>测试配置</span>
+            <span className={`settings-status-pill ${dirty ? "is-draft" : ""}`}>
+              {dirty ? "当前填写配置" : "已保存配置"}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!valid || Boolean(testing) || saving}
+              onClick={() => void test(true)}
+            >
+              {testing === "connection" ? (
+                <LoaderCircle size={14} className="animate-spin" />
+              ) : (
+                <PlugZap size={14} />
+              )}
+              {testing === "connection" ? "测试中…" : "测试连接"}
+            </Button>
+          </div>
+          <label className="field jev-test-input">
+            <span>
+              测试文本{" "}
+              <span className="jev-input-count">
+                {text.length.toLocaleString()} 字
+              </span>
+            </span>
             <Textarea
               aria-label="测试文本"
-              placeholder="输入当前用户请求的文本"
-              rows={6}
+              placeholder="输入一段用户文本"
+              rows={5}
               value={text}
-              onChange={(e) => {
-                setText(e.target.value);
-                setResult(null);
+              onChange={(event) => {
+                setText(event.target.value);
+                clearTest();
               }}
             />
-            <div className="form-actions">
-              <Button
-                size="icon-sm"
-                variant="ghost"
-                aria-label="清空测试"
-                onClick={() => {
-                  serial.current++;
-                  setText("");
-                  setResult(null);
-                  setTesting(false);
-                }}
-              >
-                <RotateCcw size={13} />
-              </Button>
-              <Button
-                size="sm"
-                disabled={!valid || !text.trim() || testing}
-                onClick={() => void test()}
-              >
+          </label>
+          <div className="jev-test-actions">
+            <Button
+              size="sm"
+              variant="ghost"
+              aria-label="清空测试"
+              disabled={!text && !run && !testing}
+              onClick={() => {
+                setText("");
+                clearTest();
+              }}
+            >
+              <RotateCcw size={14} />
+              清空
+            </Button>
+            <Button
+              size="sm"
+              disabled={!valid || !text.trim() || Boolean(testing) || saving}
+              onClick={() => void test()}
+            >
+              {testing === "text" ? (
+                <LoaderCircle size={14} className="animate-spin" />
+              ) : (
                 <FlaskConical size={14} />
-                测试 Jev 分类器
-              </Button>
-            </div>
-            {result && (
-              <div
-                style={{
-                  borderTop: "1px solid var(--border)",
-                  marginTop: 18,
-                  paddingTop: 17,
-                }}
-              >
-                <div className="editor-block-title">
-                  <h3>{result.skipped ? "输入超限，跳过审查" : "审核结果"}</h3>
-                  {!result.skipped && (
-                    <span className="small muted">
-                      {duration(result.classifier_ms)}
+              )}
+              {testing === "text" ? "测试中…" : "测试 Jev 分类器"}
+            </Button>
+          </div>
+          <section className="jev-test-result" aria-label="测试结果">
+            {testing ? (
+              <div className="jev-test-empty">
+                <LoaderCircle size={23} className="animate-spin" />
+                <span>正在测试</span>
+              </div>
+            ) : !run ? (
+              <div className="jev-test-empty">
+                <FlaskConical size={23} />
+                <span>尚未测试</span>
+              </div>
+            ) : (
+              <>
+                <div className="jev-result-header">
+                  <div
+                    className={`jev-result-status ${run.failed || result?.skipped ? "is-warning" : ""}`}
+                  >
+                    {run.failed || result?.skipped ? (
+                      <CircleAlert size={17} />
+                    ) : (
+                      <Check size={17} />
+                    )}
+                    <strong>
+                      {run.failed
+                        ? "测试未完成"
+                        : result?.skipped
+                          ? "输入超限，跳过审查"
+                          : run.kind === "connection"
+                            ? "连接正常"
+                            : "分类完成"}
+                    </strong>
+                  </div>
+                  {result && !result.skipped && (
+                    <span className="jev-duration">
+                      Jev 耗时 {duration(result.classifier_ms)}
                     </span>
                   )}
                 </div>
-                {result.skipped && (
-                  <p className="small muted">
-                    估算 {result.input_tokens_estimated?.toLocaleString()} /
-                    上限 {result.input_limit_tokens?.toLocaleString()} Token
-                  </p>
-                )}
-                <div className="score-grid">
-                  {result.scores.map((score) => (
-                    <div className="score-item" key={score.question}>
-                      <div>
-                        <span>{questionName(score.question)}</span>
-                        <b>{score.value}</b>
-                      </div>
-                      <div className="score-bar">
-                        <span
-                          style={{
-                            width: `${(score.value / (score.type === "score" ? 3 : 1)) * 100}%`,
-                          }}
-                        />
-                      </div>
-                    </div>
-                  ))}
+                <div className="jev-result-source">
+                  <span
+                    className={`settings-status-pill ${run.draft ? "is-draft" : ""}`}
+                  >
+                    {run.draft ? "当前填写配置" : "已保存配置"}
+                  </span>
+                  <span>{run.config.model}</span>
+                  <code>{run.config.base_url}</code>
                 </div>
-              </div>
+                {run.failed && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void test(run.kind === "connection")}
+                  >
+                    {run.kind === "connection"
+                      ? "重新测试连接"
+                      : "重新测试文本"}
+                  </Button>
+                )}
+                {result?.skipped && (
+                  <div className="jev-skipped-budget">
+                    <span>
+                      估算输入{" "}
+                      <strong>
+                        {result.input_tokens_estimated?.toLocaleString()} Token
+                      </strong>
+                    </span>
+                    <span>
+                      送审上限{" "}
+                      <strong>
+                        {result.input_limit_tokens?.toLocaleString()} Token
+                      </strong>
+                    </span>
+                  </div>
+                )}
+                {run.kind === "text" && result && !result.skipped && (
+                  <div className="jev-score-grid">
+                    {result.scores.map((score) => {
+                      const graded = score.type === "score";
+                      const range = graded ? 3 : 1;
+                      return (
+                        <div
+                          className={`jev-score ${graded ? "is-graded" : ""}`}
+                          key={score.question}
+                        >
+                          <div className="jev-score-heading">
+                            <span>
+                              {questionName(score.question)}
+                              <Help>
+                                {questionMeta[score.question]?.description ||
+                                  score.question}
+                              </Help>
+                            </span>
+                            <strong>{score.value}</strong>
+                          </div>
+                          <div className="jev-score-track">
+                            <span
+                              style={{
+                                width: `${Math.max(0, Math.min(100, (score.value / range) * 100))}%`,
+                              }}
+                            />
+                            {graded && (
+                              <>
+                                <i style={{ left: "33.333%" }} />
+                                <i style={{ left: "66.666%" }} />
+                              </>
+                            )}
+                          </div>
+                          <div className="jev-score-scale">
+                            {graded ? (
+                              <>
+                                <span>0</span>
+                                <span>1</span>
+                                <span>2</span>
+                                <span>3</span>
+                              </>
+                            ) : (
+                              <>
+                                <span>0</span>
+                                <span>1</span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
             )}
-          </div>
-        </Panel>
-      </div>
-    </>
+          </section>
+        </div>
+      </Panel>
+    </div>
   );
 }
