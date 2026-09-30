@@ -92,7 +92,7 @@ it("copies the masked key and IP directly from a record row without opening its 
   ).toBe(false);
 });
 
-it("provides the caller key ID required by the visible record filter", async () => {
+it("keeps the internal caller key ID out of request details while showing its masked value", async () => {
   const item = {
     ...event,
     credential_id: "credential-one",
@@ -110,10 +110,17 @@ it("provides the caller key ID required by the visible record filter", async () 
   fireEvent.click(
     await screen.findByRole("row", { name: "查看请求 request-1" }),
   );
-  const copyID = await screen.findByRole("button", { name: "复制调用密钥 ID" });
-  expect(screen.getByText("credential-one")).toBeTruthy();
-  fireEvent.click(copyID);
-  await waitFor(() => expect(writeText).toHaveBeenCalledWith("credential-one"));
+  const dialog = await screen.findByRole("dialog");
+  await within(dialog).findByText("sk-a********9876");
+  expect(within(dialog).queryByText("credential-one")).toBeNull();
+  expect(within(dialog).queryByText("调用密钥 ID")).toBeNull();
+  expect(
+    within(dialog).queryByRole("button", { name: "复制调用密钥 ID" }),
+  ).toBeNull();
+  fireEvent.click(within(dialog).getByRole("button", { name: "复制调用密钥" }));
+  await waitFor(() =>
+    expect(writeText).toHaveBeenCalledWith("sk-a********9876"),
+  );
 });
 it("defaults to hit records and preserves the separate Jev error view", async () => {
   vi.mocked(request).mockResolvedValue([]);
@@ -213,9 +220,9 @@ it("shows request context and keeps below-threshold scores collapsed", async () 
     await screen.findByRole("button", { name: "复制来源 IP" }),
   ).toBeTruthy();
   expect(screen.getByRole("button", { name: "复制调用密钥" })).toBeTruthy();
-  expect(
-    screen.getAllByRole("button", { name: "复制会话 ID" }).length,
-  ).toBeGreaterThan(0);
+  expect(screen.getAllByRole("button", { name: "复制会话 ID" })).toHaveLength(
+    1,
+  );
   expect(screen.getByText("high")).toBeTruthy();
   expect(screen.getByText("2,048")).toBeTruthy();
   const hidden = screen
@@ -237,6 +244,137 @@ it("shows request context and keeps below-threshold scores collapsed", async () 
         .mock.calls.some(([p]) => String(p).includes("session_id=session-123")),
     ).toBe(true),
   );
+});
+
+it("puts the prompt before risk and source information with the testing action in its fixed header", async () => {
+  const item = {
+    ...event,
+    masked_key: "sk-a********9876",
+    client_ip: "203.0.113.7",
+    session_id: "session-123",
+    parameters: { conversation_id: "session-123", reasoning_effort: "high" },
+  };
+  vi.mocked(request).mockImplementation(async (path) =>
+    path === "/admin/events/event-1" ? item : [item],
+  );
+  mount();
+  fireEvent.click(
+    await screen.findByRole("row", { name: "查看请求 request-1" }),
+  );
+  const dialog = await screen.findByRole("dialog");
+  await within(dialog).findByText("current user text");
+  const headings = within(dialog)
+    .getAllByRole("heading")
+    .map((heading) => heading.textContent);
+  expect(headings.indexOf("用户输入预览")).toBeLessThan(
+    headings.findIndex((text) => text?.startsWith("达到阈值")),
+  );
+  expect(
+    headings.findIndex((text) => text?.startsWith("达到阈值")),
+  ).toBeLessThan(headings.indexOf("请求来源"));
+  expect(
+    within(dialog)
+      .getByRole("link", { name: "用此记录试算" })
+      .closest("[data-slot=sheet-header]"),
+  ).toBeTruthy();
+  expect(within(dialog).getAllByText("session-123")).toHaveLength(1);
+  const parameters = within(dialog).getByText("请求参数").closest("details")!;
+  expect(parameters.open).toBe(false);
+  expect(parameters.textContent).not.toContain("session-123");
+});
+
+it("shows a single short historical conversation reference without exposing its hash or algorithm", async () => {
+  const ref =
+    "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+  const item = {
+    ...event,
+    session_source: "history" as const,
+    session_ref: ref,
+    session_id: undefined,
+  };
+  vi.mocked(request).mockImplementation(async (path) =>
+    path === "/admin/events/event-1" ? item : [item],
+  );
+  mount();
+  fireEvent.click(
+    await screen.findByRole("row", { name: "查看请求 request-1" }),
+  );
+  const dialog = await screen.findByRole("dialog");
+  await within(dialog).findByText("current user text");
+  expect(within(dialog).getAllByText("历史关联 · abcdef012345")).toHaveLength(
+    1,
+  );
+  expect(within(dialog).queryByText(ref, { exact: false })).toBeNull();
+  expect(within(dialog).queryByText(/指纹|哈希|hash/i)).toBeNull();
+});
+
+it("keeps cache records without samples free of invented risk scores and Jev duration", async () => {
+  const item = {
+    ...event,
+    review_source: "cache" as const,
+    scores: undefined,
+    classifier_ms: undefined,
+    trace: undefined,
+    decision: { ...event.decision, hits: [] },
+  };
+  vi.mocked(request).mockImplementation(async (path) =>
+    path === "/admin/events/event-1" ? item : [item],
+  );
+  mount();
+  fireEvent.click(
+    await screen.findByRole("row", { name: "查看请求 request-1" }),
+  );
+  const dialog = await screen.findByRole("dialog");
+  await within(dialog).findByText("current user text");
+  expect(within(dialog).getByText("缓存命中")).toBeTruthy();
+  expect(within(dialog).getByText("历史场景")).toBeTruthy();
+  expect(within(dialog).queryByText(/Jev 耗时/)).toBeNull();
+  expect(within(dialog).queryByText("血腥程度")).toBeNull();
+  expect(within(dialog).queryByText(/达到阈值/)).toBeNull();
+});
+
+it("copies the currently displayed text and never shows an earlier record's full text in another detail", async () => {
+  const another = {
+    ...event,
+    id: "event-2",
+    request_id: "request-2",
+    text_preview: "另一条预览",
+  };
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText },
+  });
+  vi.mocked(request).mockImplementation(async (path) => {
+    if (path === "/admin/events/event-1/text")
+      return { text: "第一条完整内容" };
+    if (path === "/admin/events/event-1") return event;
+    if (path === "/admin/events/event-2") return another;
+    return [event, another];
+  });
+  mount();
+  fireEvent.click(
+    await screen.findByRole("row", { name: "查看请求 request-1" }),
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "复制用户输入" }));
+  await waitFor(() =>
+    expect(writeText).toHaveBeenLastCalledWith("current user text"),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "查看全文" }));
+  await screen.findByText("第一条完整内容");
+  fireEvent.click(screen.getByRole("button", { name: "复制用户输入" }));
+  await waitFor(() =>
+    expect(writeText).toHaveBeenLastCalledWith("第一条完整内容"),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Close" }));
+  fireEvent.click(screen.getByRole("row", { name: "查看请求 request-2" }));
+  await screen.findByText("另一条预览");
+  expect(screen.queryByText("第一条完整内容")).toBeNull();
+  expect(
+    vi
+      .mocked(request)
+      .mock.calls.some(([path]) => path === "/admin/events/event-2/text"),
+  ).toBe(false);
 });
 
 it("shows the masked caller key in both list and cache detail without fake scores", async () => {
@@ -326,6 +464,7 @@ it("identifies legacy preview-only records without offering a false full-text ac
     scores: undefined,
     text_preview: "历史预览",
     text_available: false,
+    text_chars: 0,
   };
   vi.mocked(request).mockImplementation(async (path) =>
     path === "/admin/events/event-1" ? item : [item],
@@ -336,6 +475,7 @@ it("identifies legacy preview-only records without offering a false full-text ac
   );
   await screen.findByRole("heading", { name: "用户输入预览" });
   expect(screen.getByText("仅保留预览")).toBeTruthy();
+  expect(screen.queryByText("0 字")).toBeNull();
   expect(screen.queryByRole("button", { name: "查看全文" })).toBeNull();
   expect(screen.queryByRole("link", { name: "用此记录试算" })).toBeNull();
 });

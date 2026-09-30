@@ -13,6 +13,9 @@ import {
   ArrowLeft,
   ArrowRight,
   Columns3,
+  ChevronDown,
+  Clock3,
+  Database,
   FlaskConical,
   FileText,
   LoaderCircle,
@@ -57,6 +60,7 @@ import {
   PageHeading,
 } from "../components/common";
 import { notifyRetry } from "../notifications";
+import "../record-detail.css";
 
 export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
   const [params, setParams] = useSearchParams(),
@@ -330,8 +334,21 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
     state: { columnVisibility: visibility },
     onColumnVisibilityChange: setVisibility,
   });
-  const current = detail.data;
+  const current = detail.data?.id === selected ? detail.data : undefined;
   const showingFullText = expandedTextId === selected && Boolean(fullText.data);
+  const displayedText = showingFullText
+    ? fullText.data!.text
+    : current?.text_preview || "";
+  const requestParameters = Object.entries(current?.parameters || {}).filter(
+    ([key, value]) =>
+      value !== undefined &&
+      value !== "" &&
+      parameterLabels[key] &&
+      !(
+        key === "conversation_id" &&
+        (value === current?.session_id || value === current?.session_ref)
+      ),
+  );
   return (
     <>
       <PageHeading title="记录">
@@ -656,12 +673,22 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
           }
         }}
       >
-        <SheetContent className="w-full sm:max-w-[620px] p-0 gap-0">
-          <SheetHeader className="border-b px-5 py-5">
+        <SheetContent className="record-detail-sheet w-full sm:max-w-[720px] p-0 gap-0">
+          <SheetHeader className="record-detail-header">
             <SheetTitle>请求详情</SheetTitle>
             <SheetDescription className="sr-only">
-              当前用户文本、请求参数与场景判定
+              用户输入、审核分数与请求来源
             </SheetDescription>
+            {current && (current.text_available || current.scores?.length) && (
+              <Button asChild variant="outline" size="sm">
+                <Link
+                  to={`/scenes?sample=${encodeURIComponent(current.id)}${current.decision.scene_id ? `&scene=${encodeURIComponent(current.decision.scene_id)}` : ""}&return=${encodeURIComponent(`/events?${params.toString()}`)}`}
+                >
+                  <FlaskConical size={13} />
+                  用此记录试算
+                </Link>
+              </Button>
+            )}
           </SheetHeader>
           {detail.isError ? (
             <div className="panel-body">
@@ -676,230 +703,221 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
           ) : !current ? (
             <Loading />
           ) : (
-            <div className="detail-content">
-              <div className="editor-block-title">
-                <EndpointLabel id={current.protocol} />
-                {current.kind !== "hit" ? (
-                  <span className="subtle-badge">
-                    {errorNames[current.error_kind || ""] || "Jev 错误"}
-                  </span>
-                ) : (
-                  <ActionBadge action={current.decision.action} />
-                )}
-              </div>
-              <dl className="detail-facts record-summary">
-                <div>
-                  <dt>请求时间</dt>
-                  <dd>{fullDate(current.time)}</dd>
-                </div>
-                <div>
-                  <dt>模型</dt>
-                  <dd>{current.model || "—"}</dd>
-                </div>
-                <div>
-                  <dt>来源 IP</dt>
-                  <dd>
-                    {current.client_ip ? (
-                      <span className="detail-value-actions">
-                        <span>{current.client_ip}</span>
-                        <CopyButton
-                          value={current.client_ip}
-                          label="复制来源 IP"
-                        />
+            <div className="record-detail-body">
+              <section className="record-result-summary" aria-label="处理摘要">
+                <div className="record-result-line">
+                  {current.kind === "hit" ? (
+                    <ActionBadge action={current.decision.action} />
+                  ) : (
+                    <>
+                      <span
+                        className={`action-badge ${current.error_kind === "session_blocked" ? "blocked" : "allowed"}`}
+                      >
+                        {current.error_kind === "session_blocked"
+                          ? "拦截"
+                          : "放行"}
                       </span>
-                    ) : (
-                      "—"
-                    )}
-                  </dd>
-                </div>
-                <div>
-                  <dt>会话 ID</dt>
-                  <dd>
-                    {current.session_id ? (
-                      <span className="detail-value-actions">
-                        <span>{current.session_id}</span>
-                        <CopyButton
-                          value={current.session_id}
-                          label="复制会话 ID"
-                        />
+                      <span className="record-fault">
+                        {errorNames[current.error_kind || ""] ||
+                          (current.kind === "warning"
+                            ? "网关警告"
+                            : "Jev 调用失败")}
                       </span>
-                    ) : (
-                      "—"
-                    )}
-                  </dd>
-                </div>
-                {current.session_source === "history" && (
-                  <div>
-                    <dt>会话关联</dt>
-                    <dd>历史消息指纹 · {current.session_ref || "—"}</dd>
-                  </div>
-                )}
-                <div>
-                  <dt>调用密钥</dt>
-                  <dd>
-                    {current.credential_id ? (
-                      <span className="detail-value-actions">
-                        <code>{current.masked_key || "—"}</code>
-                        {current.masked_key && (
-                          <CopyButton
-                            value={current.masked_key}
-                            label="复制调用密钥"
-                          />
-                        )}
+                    </>
+                  )}
+                  {current.decision.scene_name && (
+                    <span className="record-effective-scene">
+                      {current.decision.scene_name}
+                    </span>
+                  )}
+                  {current.review_source === "cache" ? (
+                    <span className="record-cache-source">
+                      <Database size={12} />
+                      缓存命中
+                    </span>
+                  ) : (
+                    current.kind !== "warning" &&
+                    current.classifier_ms !== undefined && (
+                      <span className="record-review-time">
+                        <Clock3 size={12} />
+                        Jev 耗时 <b>{duration(current.classifier_ms)}</b>
                       </span>
-                    ) : (
-                      "—"
-                    )}
-                  </dd>
+                    )
+                  )}
                 </div>
-                {current.credential_id && (
-                  <div>
-                    <dt>调用密钥 ID</dt>
-                    <dd>
-                      <span className="detail-value-actions">
-                        <code>{current.credential_id}</code>
-                        <CopyButton
-                          value={current.credential_id}
-                          label="复制调用密钥 ID"
-                        />
-                      </span>
-                    </dd>
-                  </div>
-                )}
-                {(current.image_operation ||
-                  current.protocol.startsWith("openai_images_")) && (
-                  <div>
-                    <dt>图片操作</dt>
-                    <dd>
+                <div className="record-route-line">
+                  <EndpointLabel
+                    id={current.endpoint_group || current.protocol}
+                  />
+                  <span className="record-model">{current.model || "—"}</span>
+                  {(current.image_operation ||
+                    current.protocol.startsWith("openai_images")) && (
+                    <span className="subtle-badge">
                       {current.image_operation === "edit" ||
                       current.protocol === "openai_images_edits"
                         ? "编辑"
                         : "生成"}
-                    </dd>
-                  </div>
-                )}
-                <div>
-                  <dt>生效场景</dt>
-                  <dd>{current.decision.scene_name || "—"}</dd>
+                    </span>
+                  )}
+                  <time>{fullDate(current.time)}</time>
                 </div>
-                <div>
-                  <dt>审查耗时</dt>
-                  <dd>
-                    {current.review_source === "cache"
-                      ? "缓存命中"
-                      : current.kind === "warning" ||
-                          current.classifier_ms === undefined
-                        ? "—"
-                        : duration(current.classifier_ms)}
-                  </dd>
-                </div>
-              </dl>
-              {current.error_kind === "classifier_input_too_long" && (
-                <dl className="detail-facts">
-                  <div>
-                    <dt>估算输入</dt>
-                    <dd>{count(current.input_tokens_estimated || 0)} Token</dd>
-                  </div>
-                  <div>
-                    <dt>送审上限</dt>
-                    <dd>{count(current.jev_input_limit || 0)} Token</dd>
-                  </div>
-                </dl>
-              )}
-              <div className="editor-block-title record-text-heading">
-                <h3 className="section-label">
-                  {showingFullText ? "用户输入全文" : "用户输入预览"}
-                </h3>
-                <div className="heading-actions">
-                  {current.text_available && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={fullText.isFetching}
-                      onClick={() => {
-                        if (fullText.isFetching) return;
-                        if (showingFullText) setExpandedTextId("");
-                        else if (fullText.isError) void fullText.refetch();
-                        else setExpandedTextId(selected);
-                      }}
-                    >
-                      {fullText.isFetching ? (
-                        <LoaderCircle size={13} className="animate-spin" />
-                      ) : (
-                        <FileText size={13} />
+              </section>
+              <section className="record-input-panel" aria-label="用户输入">
+                <div className="record-input-header">
+                  <div className="record-input-heading">
+                    <h3>{showingFullText ? "用户输入全文" : "用户输入预览"}</h3>
+                    <div className="prompt-text-meta">
+                      {!showingFullText &&
+                        `预览 ${count(Array.from(current.text_preview || "").length)} 字`}
+                      {current.text_available &&
+                        current.text_chars !== undefined && (
+                          <span>
+                            {!showingFullText && " · "}全文{" "}
+                            <b>{count(current.text_chars)} 字</b>
+                          </span>
+                        )}
+                      {!current.text_available && current.text_preview && (
+                        <span className="subtle-badge">仅保留预览</span>
                       )}
-                      {fullText.isFetching
-                        ? "加载全文"
-                        : showingFullText
-                          ? "返回预览"
-                          : fullText.isError
-                            ? "重试全文"
-                            : "查看全文"}
-                    </Button>
-                  )}
-                  {(current.text_available || current.scores?.length) && (
-                    <Button asChild variant="outline" size="sm">
-                      <Link
-                        to={`/scenes?sample=${encodeURIComponent(current.id)}${current.decision.scene_id ? `&scene=${encodeURIComponent(current.decision.scene_id)}` : ""}&return=${encodeURIComponent(`/events?${params.toString()}`)}`}
+                    </div>
+                  </div>
+                  <div className="record-input-controls">
+                    {displayedText && (
+                      <CopyButton value={displayedText} label="复制用户输入" />
+                    )}
+                    {current.text_available && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={fullText.isFetching}
+                        onClick={() => {
+                          if (fullText.isFetching) return;
+                          if (showingFullText) setExpandedTextId("");
+                          else if (fullText.isError) {
+                            setExpandedTextId(selected);
+                            void fullText.refetch();
+                          } else setExpandedTextId(selected);
+                        }}
                       >
-                        <FlaskConical size={13} />
-                        用此记录试算
-                      </Link>
-                    </Button>
-                  )}
+                        {fullText.isFetching ? (
+                          <LoaderCircle size={13} className="animate-spin" />
+                        ) : (
+                          <FileText size={13} />
+                        )}
+                        {fullText.isFetching
+                          ? "加载全文"
+                          : showingFullText
+                            ? "返回预览"
+                            : fullText.isError
+                              ? "重试全文"
+                              : "查看全文"}
+                      </Button>
+                    )}
+                  </div>
                 </div>
-              </div>
-              <div className="prompt-text-meta">
-                {!showingFullText &&
-                  `预览 ${count(Array.from(current.text_preview || "").length)} 字`}
-                {current.text_chars ? (
-                  <span>
-                    {!showingFullText && " · "}全文{" "}
-                    <b>{count(current.text_chars)} 字</b>
-                  </span>
-                ) : null}
-                {!current.text_available && current.text_preview && (
-                  <span className="subtle-badge">仅保留预览</span>
+                <div className="request-text">
+                  {displayedText || "未记录文本"}
+                </div>
+                {current.error_kind === "classifier_input_too_long" && (
+                  <div className="record-input-limit">
+                    <span>
+                      估算输入{" "}
+                      <b>
+                        {current.input_tokens_estimated === undefined
+                          ? "—"
+                          : `${count(current.input_tokens_estimated)} Token`}
+                      </b>
+                    </span>
+                    <span>
+                      送审上限{" "}
+                      <b>
+                        {current.jev_input_limit === undefined
+                          ? "—"
+                          : `${count(current.jev_input_limit)} Token`}
+                      </b>
+                    </span>
+                  </div>
                 )}
-              </div>
-              <div className="request-text">
-                {showingFullText
-                  ? fullText.data!.text
-                  : current.text_preview || "未记录文本"}
-              </div>
-              {!!current.scores?.length && (
+              </section>
+              {(!!current.scores?.length ||
+                !!current.decision.hits?.length) && (
                 <ScoreBreakdown
                   key={current.id}
-                  scores={current.scores}
+                  scores={current.scores || []}
                   hits={current.decision.hits}
                   comparisons={
-                    current.trace?.find((t) => t.status === "effective")
+                    current.trace?.find((trace) => trace.status === "effective")
                       ?.conditions
                   }
                 />
               )}
-              <details className="record-parameters">
-                <summary>请求参数</summary>
-                <dl className="detail-facts">
+              <section className="record-detail-source" aria-label="请求来源">
+                <h3>请求来源</h3>
+                <dl className="record-source-facts">
                   <div>
-                    <dt>端点</dt>
+                    <dt>调用密钥</dt>
                     <dd>
-                      {current.endpoint ||
-                        endpoints.find((e) => e.id === current.protocol)?.path}
+                      {current.masked_key ? (
+                        <span className="detail-value-actions">
+                          <code>{current.masked_key}</code>
+                          <CopyButton
+                            value={current.masked_key}
+                            label="复制调用密钥"
+                          />
+                        </span>
+                      ) : (
+                        "—"
+                      )}
                     </dd>
                   </div>
                   <div>
-                    <dt>响应方式</dt>
-                    <dd>{current.stream ? "流式" : "非流式"}</dd>
+                    <dt>来源 IP</dt>
+                    <dd>
+                      {current.client_ip ? (
+                        <span className="detail-value-actions">
+                          <span>{current.client_ip}</span>
+                          <CopyButton
+                            value={current.client_ip}
+                            label="复制来源 IP"
+                          />
+                        </span>
+                      ) : (
+                        "—"
+                      )}
+                    </dd>
                   </div>
-                  <div className="full-fact">
+                  <div>
+                    <dt>
+                      {current.session_source === "history"
+                        ? "会话"
+                        : "会话 ID"}
+                    </dt>
+                    <dd>
+                      {current.session_source === "history" ? (
+                        `历史关联 · ${(current.session_ref || current.session_id || "—").slice(0, 12)}`
+                      ) : current.session_id ? (
+                        <span className="detail-value-actions">
+                          <span>{current.session_id}</span>
+                          <CopyButton
+                            value={current.session_id}
+                            label="复制会话 ID"
+                          />
+                        </span>
+                      ) : (
+                        "—"
+                      )}
+                    </dd>
+                  </div>
+                  <div>
                     <dt>请求 ID</dt>
-                    <dd className="heading-actions">
-                      <span>{current.request_id}</span>
-                      <CopyButton
-                        value={current.request_id}
-                        label="复制请求 ID"
-                      />
+                    <dd>
+                      <span className="detail-value-actions">
+                        <code>{current.request_id}</code>
+                        <CopyButton
+                          value={current.request_id}
+                          label="复制请求 ID"
+                        />
+                      </span>
                     </dd>
                   </div>
                   {current.client_request_id && (
@@ -912,44 +930,41 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
                     <dt>客户端</dt>
                     <dd>{current.user_agent || "—"}</dd>
                   </div>
-                  {current.session_id && (
-                    <div className="full-fact">
-                      <dt>会话 ID</dt>
-                      <dd className="heading-actions">
-                        <span>{current.session_id}</span>
-                        <CopyButton
-                          value={current.session_id}
-                          label="复制会话 ID"
-                        />
+                </dl>
+              </section>
+              <details className="record-detail-parameters">
+                <summary>
+                  <ChevronDown size={13} />
+                  请求参数<span>{requestParameters.length + 2} 项</span>
+                </summary>
+                <dl className="detail-facts">
+                  <div className="full-fact">
+                    <dt>端点</dt>
+                    <dd>
+                      {current.endpoint ||
+                        endpoints.find(
+                          (endpoint) => endpoint.id === current.protocol,
+                        )?.path ||
+                        "—"}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>响应方式</dt>
+                    <dd>{current.stream ? "流式" : "非流式"}</dd>
+                  </div>
+                  {requestParameters.map(([key, value]) => (
+                    <div
+                      key={key}
+                      className={key.includes("_id") ? "full-fact" : ""}
+                    >
+                      <dt>{parameterLabels[key]}</dt>
+                      <dd>
+                        {typeof value === "number"
+                          ? count(value)
+                          : String(value)}
                       </dd>
                     </div>
-                  )}
-                  {current.session_source === "history" && (
-                    <div className="full-fact">
-                      <dt>会话关联</dt>
-                      <dd>历史消息指纹 · {current.session_ref || "—"}</dd>
-                    </div>
-                  )}
-                  {Object.entries(current.parameters || {})
-                    .filter(
-                      ([key, value]) =>
-                        value !== undefined &&
-                        value !== "" &&
-                        parameterLabels[key],
-                    )
-                    .map(([key, value]) => (
-                      <div
-                        key={key}
-                        className={key.includes("_id") ? "full-fact" : ""}
-                      >
-                        <dt>{parameterLabels[key]}</dt>
-                        <dd>
-                          {typeof value === "number"
-                            ? count(value)
-                            : String(value)}
-                        </dd>
-                      </div>
-                    ))}
+                  ))}
                 </dl>
               </details>
             </div>

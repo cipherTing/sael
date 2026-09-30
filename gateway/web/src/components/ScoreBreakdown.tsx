@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Check } from "lucide-react";
 import type { Answer, Hit } from "../types";
-import { questionName } from "../questionMeta";
+import { questionMeta, questionName } from "../questionMeta";
+import "../record-detail.css";
 
 type Comparison = {
   question: string;
@@ -9,6 +10,7 @@ type Comparison = {
   threshold: number;
   matched: boolean;
 };
+
 export function ScoreBreakdown({
   scores,
   hits = [],
@@ -19,64 +21,127 @@ export function ScoreBreakdown({
   comparisons?: Comparison[];
 }) {
   const [expanded, setExpanded] = useState(false);
-  const rows = scores.map((score) => {
-    const hit = hits.find((h) => h.question === score.question),
-      comparison = comparisons.find((c) => c.question === score.question);
-    const threshold = comparison?.threshold ?? hit?.threshold;
-    return {
-      ...score,
-      threshold,
-      matched: threshold !== undefined && score.value > threshold,
-    };
+  const samples = [
+    ...scores,
+    ...hits
+      .filter((hit) => !scores.some((score) => score.question === hit.question))
+      .map((hit) => ({
+        question: hit.question,
+        value: hit.value,
+        type:
+          hit.question === "gore" || hit.question === "sexual"
+            ? "score"
+            : "noul",
+      })),
+  ];
+  const seen = new Set<string>();
+  const rows = samples.flatMap((score) => {
+    const max =
+      score.question === "gore" || score.question === "sexual" ? 3 : 1;
+    if (
+      !questionMeta[score.question] ||
+      seen.has(score.question) ||
+      !Number.isFinite(score.value) ||
+      score.value < 0 ||
+      score.value > max
+    )
+      return [];
+    seen.add(score.question);
+    const hit = hits.find((item) => item.question === score.question),
+      comparison = comparisons.find((item) => item.question === score.question);
+    const rawThreshold = comparison?.threshold ?? hit?.threshold;
+    const threshold =
+      rawThreshold !== undefined &&
+      Number.isFinite(rawThreshold) &&
+      rawThreshold >= 0 &&
+      rawThreshold <= max
+        ? rawThreshold
+        : undefined;
+    return [
+      {
+        ...score,
+        max,
+        threshold,
+        matched: threshold !== undefined && score.value > threshold,
+      },
+    ];
   });
-  const reached = rows.filter((s) => s.matched),
-    below = rows.filter((s) => !s.matched && s.threshold !== undefined),
-    unconfigured = rows.filter((s) => s.threshold === undefined);
-  function table(items: typeof rows) {
+  if (!rows.length) return null;
+  const reached = rows.filter((row) => row.matched),
+    below = rows.filter((row) => !row.matched && row.threshold !== undefined),
+    unconfigured = rows.filter((row) => row.threshold === undefined);
+
+  function cards(items: typeof rows) {
     return (
-      <table className="data-table score-table">
-        <thead>
-          <tr>
-            <th>审核项</th>
-            <th className="num">分数</th>
-            <th className="num">阈值</th>
-          </tr>
-        </thead>
-        <tbody>
-          {items.map((s) => (
-            <tr key={s.question}>
-              <td>
-                <span>{questionName(s.question)}</span>
-                <div className={`score-meter ${s.matched ? "reached" : ""}`}>
-                  <i
-                    style={{
-                      width: `${(100 * s.value) / (s.type === "score" ? 3 : 1)}%`,
-                    }}
-                  />
+      <div className="risk-score-grid">
+        {items.map((row) => (
+          <article
+            key={row.question}
+            aria-label={`${questionName(row.question)}评分`}
+            className={`risk-score-card ${row.max === 3 ? "graded" : "probability"} ${row.matched ? "reached" : ""}`}
+          >
+            <div className="risk-score-card-heading">
+              <strong>{questionName(row.question)}</strong>
+              <span>{row.max === 3 ? "程度分级" : "风险评分"}</span>
+            </div>
+            <div className="risk-score-values">
+              <b>{row.value}</b>
+              <span>/ {row.max}</span>
+              <small>
+                {row.matched && <Check size={12} />}
+                {row.threshold === undefined
+                  ? "未配置阈值"
+                  : `> ${row.threshold}`}
+              </small>
+            </div>
+            <div
+              className="risk-score-track"
+              role="img"
+              aria-label={`${questionName(row.question)} ${row.value}，原始刻度 0 至 ${row.max}`}
+            >
+              {row.max === 3 && (
+                <div className="risk-score-segments">
+                  <span />
+                  <span />
+                  <span />
                 </div>
-              </td>
-              <td className={`num ${s.matched ? "score-reached" : ""}`}>
-                {s.value}
-              </td>
-              <td className="num">
-                {s.threshold === undefined ? "—" : `> ${s.threshold}`}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+              )}
+              <span
+                className="risk-score-fill"
+                style={{ width: `${(100 * row.value) / row.max}%` }}
+              />
+              {row.threshold !== undefined && (
+                <span
+                  className="risk-threshold-marker"
+                  aria-label={`${questionName(row.question)}阈值 ${row.threshold}`}
+                  style={{ left: `${(100 * row.threshold) / row.max}%` }}
+                />
+              )}
+              <span
+                className="risk-score-dot"
+                style={{ left: `${(100 * row.value) / row.max}%` }}
+              />
+            </div>
+            <div className="risk-score-scale">
+              {(row.max === 3 ? [0, 1, 2, 3] : [0, 1]).map((tick) => (
+                <span key={tick}>{tick}</span>
+              ))}
+            </div>
+          </article>
+        ))}
+      </div>
     );
   }
   return (
-    <section className="score-breakdown">
+    <section className="score-breakdown visual-score-breakdown">
       <h3 className="section-label score-heading">
         达到阈值 <span>{reached.length}</span>
       </h3>
-      {reached.length > 0 && table(reached)}
+      {reached.length > 0 && cards(reached)}
       {(below.length > 0 || unconfigured.length > 0) && (
         <details
           open={expanded}
-          onToggle={(e) => setExpanded(e.currentTarget.open)}
+          onToggle={(event) => setExpanded(event.currentTarget.open)}
           className="remaining-scores"
         >
           <summary>
@@ -86,13 +151,13 @@ export function ScoreBreakdown({
           {below.length > 0 && (
             <div>
               <h4>未达到阈值</h4>
-              {table(below)}
+              {cards(below)}
             </div>
           )}
           {unconfigured.length > 0 && (
             <div>
               <h4>未配置阈值</h4>
-              {table(unconfigured)}
+              {cards(unconfigured)}
             </div>
           )}
         </details>
