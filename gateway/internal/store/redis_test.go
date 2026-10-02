@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +15,160 @@ import (
 
 	"github.com/cipherTing/sael/gateway/internal/gateway"
 )
+
+func TestEnqueueReturnsWhenCallerDeadlineExpires(t *testing.T) {
+	s := &RedisStore{queue: make(chan ingestItem, 1), stopCh: make(chan struct{})}
+	s.queue <- ingestItem{}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- s.Increment(ctx, gateway.Count{}) }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("got %v", err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		close(s.stopCh)
+		<-done
+		t.Fatal("full telemetry queue ignored the caller deadline")
+	}
+}
+
+func TestCancelledTelemetryDoesNotEnterQueue(t *testing.T) {
+	s := &RedisStore{queue: make(chan ingestItem, 1), stopCh: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := s.Increment(ctx, gateway.Count{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("got %v", err)
+	}
+	if len(s.queue) != 0 {
+		t.Fatal("cancelled telemetry was accepted")
+	}
+}
+
+func TestRedisSessionScopeCoversLaterFreeze(t *testing.T) {
+	p, r := redisFixture(t)
+	s := &RedisStore{PG: p, redis: r}
+	ctx := context.Background()
+	early, late := time.Now().Add(time.Minute), time.Now().Add(2*time.Minute)
+	for _, until := range []time.Time{early, late, early} {
+		if err := s.PutSessionBlock(ctx, "scope:shared", until); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if ttl := r.PTTL(ctx, sessionPrefix+"scope:shared").Val(); ttl < 119*time.Second {
+		t.Fatalf("scope expires before the later conversation: %s", ttl)
+	}
+	if err := s.PutSessionBlock(ctx, "exact", early); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutSessionBlock(ctx, "exact", late); err != nil {
+		t.Fatal(err)
+	}
+	if ttl := r.PTTL(ctx, sessionPrefix+"exact").Val(); ttl > time.Minute {
+		t.Fatal("exact conversation freeze was renewed")
+	}
+}
+
+type sessionLookupHook struct {
+	batches []int
+	failAt  int
+}
+
+func (*sessionLookupHook) DialHook(next redis.DialHook) redis.DialHook { return next }
+func (*sessionLookupHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return next
+}
+func (h *sessionLookupHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
+	return func(ctx context.Context, cmd redis.Cmder) error {
+		if cmd.Name() == "mget" {
+			h.batches = append(h.batches, len(cmd.Args())-1)
+			if len(h.batches) == h.failAt {
+				return errors.New("injected second-batch failure")
+			}
+		}
+		return next(ctx, cmd)
+	}
+}
+
+func TestSessionLookupCrossesRedisBatchesInCandidateOrder(t *testing.T) {
+	p, r := redisFixture(t)
+	ctx := context.Background()
+	keys := make([]string, 256)
+	for i := range keys {
+		keys[i] = fmt.Sprintf("candidate-%03d", i)
+	}
+	for _, index := range []int{150, 200} {
+		if err := r.Set(ctx, sessionPrefix+keys[index], "1", time.Minute).Err(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// An expired earlier candidate must not win over active blocks in batch two.
+	if err := r.Set(ctx, sessionPrefix+keys[1], "1", time.Minute).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.PExpire(ctx, sessionPrefix+keys[1], -time.Second).Err(); err != nil {
+		t.Fatal(err)
+	}
+	client := redis.NewClient(r.Options())
+	defer client.Close()
+	hook := &sessionLookupHook{}
+	client.AddHook(hook)
+	s := &RedisStore{PG: p, redis: client}
+	key, err := s.FindSessionBlock(ctx, keys, time.Now())
+	if err != nil || key != "candidate-150" {
+		t.Fatalf("first active match = %q, error=%v", key, err)
+	}
+	if len(hook.batches) != 2 || hook.batches[0] != 128 || hook.batches[1] != 128 {
+		t.Fatalf("unexpected Redis batch sizes: %v", hook.batches)
+	}
+	hook.batches, hook.failAt = nil, 2
+	if key, err := s.FindSessionBlock(ctx, keys, time.Now()); key != "" || err == nil {
+		t.Fatalf("failed second batch returned a decision: key=%q error=%v", key, err)
+	}
+}
+
+func TestPostgresSessionScopeUsesLatestExpiryAndFindsFirstCandidate(t *testing.T) {
+	p, _ := redisFixture(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	for _, until := range []time.Time{now.Add(time.Minute), now.Add(2 * time.Minute), now.Add(time.Minute)} {
+		if err := p.PutSessionBlock(ctx, "scope:shared", until); err != nil {
+			t.Fatal(err)
+		}
+	}
+	active, err := p.SessionBlockActive(ctx, "scope:shared", now.Add(90*time.Second))
+	if err != nil || !active {
+		t.Fatalf("scope expired ahead of its later frozen conversation: active=%v error=%v", active, err)
+	}
+	for _, key := range []string{"later", "first"} {
+		if err := p.PutSessionBlock(ctx, key, now.Add(time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, err := p.FindSessionBlock(ctx, []string{"missing", "first", "later"}, now); err != nil || got != "first" {
+		t.Fatalf("candidate order lost: key=%q error=%v", got, err)
+	}
+}
+
+func TestCompletedProducerMarkersAreCleanedAfterRestart(t *testing.T) {
+	p, r := redisFixture(t)
+	ctx := context.Background()
+	for i := 0; i < 3; i++ {
+		s, err := OpenRedis(ctx, p, os.Getenv("TEST_REDIS_URL"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Increment(ctx, gateway.Count{Time: time.Now(), Protocol: "openai_chat", Outcome: "clean"}); err != nil {
+			t.Fatal(err)
+		}
+		s.Close()
+	}
+	if n := r.HLen(ctx, ingestProducers).Val(); n != 0 {
+		t.Fatalf("finished processes left %d deduplication markers", n)
+	}
+}
 
 func redisFixture(t *testing.T) (*PG, *redis.Client) {
 	t.Helper()
@@ -223,7 +379,12 @@ func TestRuntimeKeepsSnapshotsAndSynchronizesConfigAcrossInstances(t *testing.T)
 		t.Fatal(err)
 	}
 	defer first.Close()
-	second, err := OpenRedis(ctx, p, os.Getenv("TEST_REDIS_URL"))
+	secondPG, err := Open(ctx, os.Getenv("TEST_DATABASE_URL"), filepath.Join(t.TempDir(), "spool"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer secondPG.Close()
+	second, err := OpenRedis(ctx, secondPG, os.Getenv("TEST_REDIS_URL"))
 	if err != nil {
 		t.Fatal(err)
 	}

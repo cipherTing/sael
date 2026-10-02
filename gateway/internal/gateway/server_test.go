@@ -128,6 +128,18 @@ func (s *testStore) SessionBlockActive(_ context.Context, key string, now time.T
 	return s.blocked[key].After(now), nil
 }
 
+func (s *testStore) FindSessionBlock(_ context.Context, keys []string, now time.Time) (string, error) {
+	if s.sessionErr != nil {
+		return "", s.sessionErr
+	}
+	for _, key := range keys {
+		if s.blocked[key].After(now) {
+			return key, nil
+		}
+	}
+	return "", nil
+}
+
 // Existing rule tests start with an already trusted caller. Admission tests use an empty trust store.
 func (s *testStore) LoginAttempt(context.Context, string) (time.Duration, error) { return 0, nil }
 func (s *testStore) PutAdminSession(_ context.Context, token string, ttl time.Duration) error {

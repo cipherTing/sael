@@ -2,8 +2,10 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +14,65 @@ import (
 
 	"github.com/cipherTing/sael/gateway/internal/gateway"
 )
+
+func TestAdminLoginKeepsFiveSessionsAcrossInstances(t *testing.T) {
+	p, r := redisFixture(t)
+	s := &RedisStore{PG: p, redis: r}
+	servers := []*gateway.Server{gateway.New(s, nil, "secret"), gateway.New(s, nil, "secret")}
+	defer servers[0].Close()
+	defer servers[1].Close()
+	cookies := []*http.Cookie{}
+	for i := 0; i < 12; i++ {
+		req := httptest.NewRequest("POST", "/admin/login", strings.NewReader(`{"password":"secret"}`))
+		req.RemoteAddr = fmt.Sprintf("192.0.2.%d:1234", i+1)
+		w := httptest.NewRecorder()
+		servers[i%2].AdminHandler().ServeHTTP(w, req)
+		if w.Code != 200 {
+			t.Fatalf("login %d: status=%d", i, w.Code)
+		}
+		cookies = append(cookies, w.Result().Cookies()[0])
+	}
+	for i, cookie := range cookies {
+		req := httptest.NewRequest("GET", "/admin/session", http.NoBody)
+		req.AddCookie(cookie)
+		w := httptest.NewRecorder()
+		servers[1].AdminHandler().ServeHTTP(w, req)
+		want := 401
+		if i >= 7 {
+			want = 200
+		}
+		if w.Code != want {
+			t.Errorf("login %d remained %d, want %d", i, w.Code, want)
+		}
+	}
+	if n := len(r.Keys(context.Background(), "sael:admin_session:*").Val()); n != 5 {
+		t.Fatalf("retained %d session keys", n)
+	}
+}
+
+func TestExistingAdminSessionsAreCappedAtStartup(t *testing.T) {
+	p, r := redisFixture(t)
+	ctx := context.Background()
+	for i := 0; i < 12; i++ {
+		if err := r.Set(ctx, adminSessionKey(fmt.Sprintf("old-%02d", i)), "1", 30*24*time.Hour-time.Duration(12-i)*time.Minute).Err(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s, err := OpenRedis(ctx, p, os.Getenv("TEST_REDIS_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for i := 0; i < 12; i++ {
+		active, err := s.AdminSessionActive(ctx, fmt.Sprintf("old-%02d", i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if active != (i >= 7) {
+			t.Errorf("legacy login %d active=%v", i, active)
+		}
+	}
+}
 
 func TestRedisAdminSessionSurvivesServerReplacementAndExpires(t *testing.T) {
 	p, r := redisFixture(t)

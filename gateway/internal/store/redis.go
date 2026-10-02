@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -48,21 +49,27 @@ type ingestItem struct {
 type RedisStore struct {
 	credentialWrites singleflight.Group
 	*PG
-	redis          *redis.Client
-	snapshot       atomic.Pointer[configSnapshot]
-	refreshMu      sync.Mutex
-	queue          chan ingestItem
-	stopCh         chan struct{}
-	accepting      sync.RWMutex
-	closed         bool
-	producerDone   chan struct{}
-	producerCtx    context.Context
-	producerCancel context.CancelFunc
-	cancel         context.CancelFunc
-	workers        sync.WaitGroup
-	spoolMu        sync.Mutex
-	spooling       bool
-	replayMu       sync.Mutex
+	redis            *redis.Client
+	snapshot         atomic.Pointer[configSnapshot]
+	refreshMu        sync.Mutex
+	queue            chan ingestItem
+	stopCh           chan struct{}
+	accepting        sync.RWMutex
+	enqueues         sync.WaitGroup
+	closed           bool
+	producerDone     chan struct{}
+	producerCtx      context.Context
+	producerCancel   context.CancelFunc
+	cancel           context.CancelFunc
+	workers          sync.WaitGroup
+	spoolMu          sync.Mutex
+	spooling         bool
+	replayMu         sync.Mutex
+	producer         string
+	producerSequence int64
+	producerLock     *os.File
+	producerDrained  bool
+	retired          map[string]bool
 }
 
 // OpenRedis verifies both stores before the listeners accept requests.
@@ -77,8 +84,14 @@ func OpenRedis(ctx context.Context, p *PG, endpoint string) (*RedisStore, error)
 	opt.WriteTimeout = time.Second
 	opt.ContextTimeoutEnabled = true
 	r := redis.NewClient(opt)
-	s := &RedisStore{PG: p, redis: r, queue: make(chan ingestItem, 4096), stopCh: make(chan struct{}), producerDone: make(chan struct{})}
-	fail := func(err error) (*RedisStore, error) { _ = r.Close(); return nil, err }
+	s := &RedisStore{PG: p, redis: r, queue: make(chan ingestItem, 8192), stopCh: make(chan struct{}), producerDone: make(chan struct{})}
+	fail := func(err error) (*RedisStore, error) {
+		if s.producerLock != nil {
+			_ = s.producerLock.Close()
+		}
+		_ = r.Close()
+		return nil, err
+	}
 	if err := r.Ping(ctx).Err(); err != nil {
 		return fail(err)
 	}
@@ -88,12 +101,18 @@ func OpenRedis(ctx context.Context, p *PG, endpoint string) (*RedisStore, error)
 	if err := s.migrateSessionBlocks(ctx); err != nil {
 		return fail(err)
 	}
+	if err := s.migrateAdminSessions(ctx); err != nil {
+		return fail(err)
+	}
 	for _, path := range []string{p.spoolPath + ".redis", p.spoolPath + ".redis.replay"} {
-		if _, err := os.Stat(path); err == nil {
+		if _, err := os.Stat(path); err == nil { // #nosec G703 -- Fixed spool filenames from the operator-configured data directory.
 			s.spooling = true
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return fail(err)
 		}
+	}
+	if err := s.initProducer(ctx); err != nil {
+		return fail(err)
 	}
 	work, cancel := context.WithCancel(context.Background())
 	producerCtx, producerCancel := context.WithCancel(context.Background())
@@ -121,6 +140,10 @@ func (s *RedisStore) Close() {
 	}
 	close(s.stopCh)
 	s.accepting.Unlock()
+	s.enqueues.Wait()
+	if s.queue != nil {
+		close(s.queue)
+	}
 	producerStopped := false
 	timer := time.NewTimer(telemetryShutdownTimeout)
 	select {
@@ -150,9 +173,22 @@ func (s *RedisStore) Close() {
 		s.cancel()
 	}
 	s.workers.Wait()
+	if producerStopped && s.PG != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		if err := s.cleanupProducerMarkers(ctx, s.producerDrained); err != nil {
+			slog.Warn("statistics producer cleanup failed", "error", err)
+		}
+		cancel()
+	}
+	if s.producerLock != nil {
+		_ = s.producerLock.Close()
+	}
 	_ = s.redis.Close()
 }
-func (s *RedisStore) enqueue(_ context.Context, item ingestItem) error {
+func (s *RedisStore) enqueue(ctx context.Context, item ingestItem) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	s.accepting.Lock()
 	if s.stopCh == nil {
 		s.stopCh = make(chan struct{})
@@ -162,7 +198,9 @@ func (s *RedisStore) enqueue(_ context.Context, item ingestItem) error {
 		return errors.New("telemetry store closed")
 	}
 	queue, stop := s.queue, s.stopCh
+	s.enqueues.Add(1)
 	s.accepting.Unlock()
+	defer s.enqueues.Done()
 	// A full queue applies backpressure until shutdown signals stop. Do not hold
 	// the lifecycle lock while waiting, or Close could never cancel this send.
 	select {
@@ -170,6 +208,8 @@ func (s *RedisStore) enqueue(_ context.Context, item ingestItem) error {
 		return nil
 	case <-stop:
 		return errors.New("telemetry store closed")
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -190,13 +230,18 @@ func (s *RedisStore) produce() {
 	if producerCtx == nil {
 		producerCtx = context.Background()
 	}
-	producer := rand.Text()
-	var sequence int64
+	producer := s.producer
+	if producer == "" {
+		producer = rand.Text()
+		s.producer = producer
+	}
+	sequence := s.producerSequence
 	for {
 		var first ingestItem
 		select {
 		case item, ok := <-s.queue:
 			if !ok {
+				s.producerDrained = true
 				return
 			}
 			first = item
@@ -379,6 +424,9 @@ func (s *RedisStore) PutSessionBlock(ctx context.Context, key string, until time
 	if !until.After(time.Now()) {
 		return nil
 	}
+	if strings.HasPrefix(key, "scope:") {
+		return extendSessionScope.Run(ctx, s.redis, []string{sessionPrefix + key}, until.UnixMilli()).Err()
+	}
 	// SET NX preserves the original expiry when concurrent requests block the same session.
 	err := s.redis.Do(ctx, "SET", sessionPrefix+key, "1", "NX", "PXAT", until.UnixMilli()).Err()
 	if errors.Is(err, redis.Nil) {
@@ -387,10 +435,39 @@ func (s *RedisStore) PutSessionBlock(ctx context.Context, key string, until time
 	return err
 }
 
+// A shared scope must outlive every exact conversation it guards. Exact keys use NX.
+var extendSessionScope = redis.NewScript(`
+local expires=redis.call('PEXPIRETIME',KEYS[1])
+if expires==-2 then redis.call('SET',KEYS[1],'1','PXAT',ARGV[1])
+elseif expires>=0 and expires<tonumber(ARGV[1]) then redis.call('PEXPIREAT',KEYS[1],ARGV[1]) end
+return 1`)
+
 // SessionBlockActive checks the Redis expiry for a hashed session.
 func (s *RedisStore) SessionBlockActive(ctx context.Context, key string, _ time.Time) (bool, error) {
 	n, err := s.redis.Exists(ctx, sessionPrefix+key).Result()
 	return n > 0, err
+}
+
+// FindSessionBlock follows sub2api's bounded MGET batches and earliest-match order.
+func (s *RedisStore) FindSessionBlock(ctx context.Context, keys []string, _ time.Time) (string, error) {
+	const batchSize = 128
+	for start := 0; start < len(keys); start += batchSize {
+		end := min(start+batchSize, len(keys))
+		redisKeys := make([]string, end-start)
+		for i, key := range keys[start:end] {
+			redisKeys[i] = sessionPrefix + key
+		}
+		values, err := s.redis.MGet(ctx, redisKeys...).Result()
+		if err != nil {
+			return "", err
+		}
+		for i, value := range values {
+			if value != nil {
+				return keys[start+i], nil
+			}
+		}
+	}
+	return "", nil
 }
 func (s *RedisStore) migrateSessionBlocks(ctx context.Context) error {
 	rows, err := s.pool.Query(ctx, "SELECT session_hash,expires_at FROM gateway_session_blocks WHERE expires_at>now()")

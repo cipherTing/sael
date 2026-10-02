@@ -55,26 +55,26 @@ func TestGatewayLoad(t *testing.T) {
 	}
 	var providerCalls, providerHits, forwarded, providerConnections atomic.Int64
 	response := func(hit bool) []byte {
-		answers := map[string]any{}
-		for _, q := range policy.Questions {
-			v := .1
-			if hit && q.Key == "cyber_abuse" {
-				v = .9
-			}
-			if q.Type == "score" {
-				answers[q.Key] = map[string]any{"type": "score", "score": v}
-			} else {
-				answers[q.Key] = map[string]any{"type": "noul", "noul": v}
-			}
+		v := .1
+		if hit {
+			v = .9
 		}
+		answers := map[string]any{"cyber_abuse": map[string]any{"type": "noul", "noul": v}}
 		raw, _ := json.Marshal(map[string]any{"answers": answers})
 		return raw
 	}
 	cleanAnswer, hitAnswer := response(false), response(true)
 	provider := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		providerCalls.Add(1)
-		raw, _ := io.ReadAll(req.Body)
-		if bytes.Contains(raw, []byte(`"state":"load:hit`)) {
+		var input struct {
+			State     string
+			Questions map[string]json.RawMessage
+		}
+		if err := json.NewDecoder(req.Body).Decode(&input); err != nil || len(input.Questions) != 1 || input.Questions["cyber_abuse"] == nil {
+			http.Error(w, "unexpected load-test question set", http.StatusBadRequest)
+			return
+		}
+		if strings.HasPrefix(input.State, "load:hit") {
 			providerHits.Add(1)
 			_, _ = w.Write(hitAnswer)
 		} else {

@@ -7,12 +7,20 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"regexp"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 )
 
 const maxTranscriptLookupKeys = 256
+
+var (
+	sessionUserAgentProductPattern = regexp.MustCompile(`([A-Za-z0-9._-]+)/[A-Za-z0-9._-]+`)
+	sessionUserAgentVersionPattern = regexp.MustCompile(`\bv?\d+(?:\.\d+){1,3}\b`)
+)
 
 type transcriptPlan struct {
 	exact           string
@@ -23,8 +31,10 @@ type transcriptPlan struct {
 }
 
 type sessionBlockPlan struct {
+	sessionID  string
 	explicit   string
 	transcript transcriptPlan
+	derive     func() transcriptPlan
 }
 
 func hashSessionKey(credential, session string) string {
@@ -40,7 +50,7 @@ func sessionScopeKey(credential, clientIP, userAgent string) string {
 	credential = strings.TrimSpace(credential)
 	clientIP = strings.TrimSpace(clientIP)
 	userAgent = normalizeUserAgent(userAgent)
-	if credential == "" || clientIP == "" || userAgent == "" {
+	if credential == "" || clientIP == "" {
 		return ""
 	}
 	sum := sha256.Sum256([]byte("sael-session-scope:v1|credential=" + credential + "|ip=" + clientIP + "|ua=" + userAgent))
@@ -48,26 +58,41 @@ func sessionScopeKey(credential, clientIP, userAgent string) string {
 }
 
 func normalizeUserAgent(value string) string {
-	value = sanitizeSessionID(value)
-	if value == "" {
-		return ""
+	products := sessionUserAgentProductPattern.FindAllStringSubmatch(value, -1)
+	if len(products) == 0 {
+		value = strings.ToLower(strings.Join(strings.Fields(value), " "))
+		return strings.Join(strings.Fields(sessionUserAgentVersionPattern.ReplaceAllString(value, "")), " ")
 	}
-	parts := strings.Fields(value)
-	for i, part := range parts {
-		if slash := strings.LastIndexByte(part, '/'); slash > 0 {
-			parts[i] = part[:slash]
-		}
+	names := make([]string, 0, len(products))
+	for _, product := range products {
+		names = append(names, strings.ToLower(product[1]))
 	}
-	return strings.Join(parts, " ")
+	slices.Sort(names)
+	return strings.Join(slices.Compact(names), "+")
 }
 
 func sessionPlanForRequest(r *http.Request, credential, clientIP string, body []byte, protocolName string) sessionBlockPlan {
 	plan := sessionBlockPlan{}
-	session := requestSession(r, bodySessionID(protocolName, body))
+	session := requestSession(r, "")
+	if session == "" {
+		session = bodySessionID(protocolName, body)
+	}
+	plan.sessionID = session
 	plan.explicit = hashSessionKey(credential, session)
-	plan.transcript = transcriptBlockPlan(credential, protocolName, body)
 	plan.transcript.scope = sessionScopeKey(credential, clientIP, r.UserAgent())
+	plan.derive = sync.OnceValue(func() transcriptPlan {
+		transcript := transcriptBlockPlan(credential, protocolName, body)
+		transcript.scope = plan.transcript.scope
+		return transcript
+	})
 	return plan
+}
+
+func (p sessionBlockPlan) history() transcriptPlan {
+	if p.derive != nil {
+		return p.derive()
+	}
+	return p.transcript
 }
 
 func transcriptBlockPlan(credential, protocolName string, body []byte) transcriptPlan {
@@ -76,8 +101,11 @@ func transcriptBlockPlan(credential, protocolName string, body []byte) transcrip
 		return transcriptPlan{}
 	}
 	seed := "sael-transcript:v1|credential=" + strings.TrimSpace(credential) + "|protocol=" + protocolName
-	if instructions, ok := root["instructions"]; ok && strings.TrimSpace(string(instructions)) != "" {
-		seed += "|instructions=" + canonicalJSON(instructions)
+	if instructions, ok := root["instructions"]; ok {
+		var text *string
+		if json.Unmarshal(instructions, &text) != nil || text == nil || strings.TrimSpace(*text) != "" {
+			seed += "|instructions=" + canonicalJSON(instructions)
+		}
 	}
 	sequence, ok := transcriptSequence(protocolName, root)
 	if !ok || len(sequence) == 0 {
@@ -124,6 +152,12 @@ func transcriptSequence(protocolName string, root map[string]json.RawMessage) ([
 	if raw, ok := root[field]; ok && json.Unmarshal(raw, &values) == nil {
 		return values, true
 	}
+	if protocolName == "openai_responses" {
+		var text string
+		if raw, ok := root[field]; ok && json.Unmarshal(raw, &text) == nil && strings.TrimSpace(text) != "" {
+			return []json.RawMessage{raw}, true
+		}
+	}
 	return nil, false
 }
 
@@ -143,6 +177,10 @@ func bodySessionID(protocolName string, body []byte) string {
 		}
 	}
 	if raw, ok := root["conversation"]; ok {
+		var id string
+		if json.Unmarshal(raw, &id) == nil {
+			return sanitizeSessionID(id)
+		}
 		var conversation struct {
 			ID string `json:"id"`
 		}
@@ -272,52 +310,62 @@ func sanitizeSessionID(raw string) string {
 }
 
 func (s *Server) sessionBlocked(ctx context.Context, plan sessionBlockPlan) (key, source string) {
-	if plan.explicit != "" && s.sessionBlockActive(ctx, plan.explicit) {
-		return plan.explicit, "explicit"
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	if plan.explicit != "" {
+		key, err := s.Store.FindSessionBlock(ctx, []string{plan.explicit}, time.Now().UTC())
+		if err != nil {
+			slog.Warn("explicit session freeze lookup failed", "error", err)
+			return "", ""
+		}
+		if key != "" {
+			return key, "explicit"
+		}
 	}
-	transcript := plan.transcript
-	if transcript.scope == "" || len(transcript.keys) == 0 || !s.sessionBlockActive(ctx, transcript.scope) {
+	if plan.transcript.scope == "" {
 		return "", ""
 	}
+	active, err := s.Store.SessionBlockActive(ctx, plan.transcript.scope, time.Now().UTC())
+	if err != nil {
+		slog.Warn("session freeze scope lookup failed", "error", err)
+		return "", ""
+	}
+	if !active {
+		return "", ""
+	}
+	transcript := plan.history()
 	if transcript.lookupTruncated {
 		return "transcript_lookup_limit_exceeded", "history"
 	}
-	for _, key := range transcript.keys {
-		if s.sessionBlockActive(ctx, key) {
-			return key, "history"
-		}
+	key, err = s.Store.FindSessionBlock(ctx, transcript.keys, time.Now().UTC())
+	if err != nil {
+		slog.Warn("session freeze batch lookup failed", "error", err)
+		return "", ""
+	}
+	if key != "" {
+		return key, "history"
 	}
 	return "", ""
 }
 
-func (s *Server) sessionBlockActive(ctx context.Context, key string) bool {
-	if key == "" {
-		return false
-	}
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	active, err := s.Store.SessionBlockActive(ctx, key, time.Now().UTC())
-	if err != nil {
-		slog.Warn("session freeze lookup failed", "error", err)
-		return false
-	}
-	return active
-}
-
 func (s *Server) rememberSessionBlock(ctx context.Context, plan sessionBlockPlan, ttl time.Duration) {
+	if ttl <= 0 {
+		return
+	}
+	transcript := plan.history()
 	keys := make([]string, 0, 4)
 	if plan.explicit != "" {
 		keys = append(keys, plan.explicit)
 	}
-	if plan.transcript.exact != "" {
-		keys = append(keys, plan.transcript.exact)
+	if transcript.exact != "" {
+		keys = append(keys, transcript.exact)
 	}
-	if plan.transcript.preLatest != "" && plan.transcript.preLatest != plan.transcript.exact {
-		keys = append(keys, plan.transcript.preLatest)
+	if transcript.preLatest != "" && transcript.preLatest != transcript.exact {
+		keys = append(keys, transcript.preLatest)
 	}
 	// Write the scope marker only after all exact keys succeed. A scope without
 	// its exact blocks could turn a storage failure into a broad overflow block.
-	scope := plan.transcript.scope
+	scope := transcript.scope
 	writeFailed := false
 	for _, key := range keys {
 		if key == "" || ttl <= 0 {
@@ -330,7 +378,7 @@ func (s *Server) rememberSessionBlock(ctx context.Context, plan sessionBlockPlan
 		}
 		cancel()
 	}
-	if scope != "" && !writeFailed {
+	if scope != "" && transcript.exact != "" && !writeFailed {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 		if err := s.Store.PutSessionBlock(ctx, scope, time.Now().UTC().Add(ttl)); err != nil {
 			slog.Warn("session freeze scope write failed", "error", err)

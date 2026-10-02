@@ -81,6 +81,42 @@ func TestReviewCacheDoesNotStoreCleanPrompts(t *testing.T) {
 	}
 }
 
+func TestCachedHitFreezesTheCurrentSession(t *testing.T) {
+	for _, action := range []policy.Action{policy.Block, policy.Allow} {
+		t.Run(string(action), func(t *testing.T) {
+			p := activePolicy()
+			p.Scenes[0].Action = action
+			p.Scenes[0].SessionBlockEnabled, p.Scenes[0].SessionBlockTTLSeconds = true, 60
+			c := &testClassifier{answers: fullAnswers(map[string]float64{"cyber_abuse": .9})}
+			s, st, upstream := makeServer(t, p, c)
+			s.ReviewCache = &memoryReviewCache{values: map[string]bool{}}
+			send := func(session, agent, text string) int {
+				r := authorizedRequest("POST", "/v1/responses", strings.NewReader(`{"input":"`+text+`"}`))
+				r.Header.Set("Session-Id", session)
+				r.Header.Set("User-Agent", agent)
+				w := httptest.NewRecorder()
+				s.ServeHTTP(w, r)
+				s.reviewWG.Wait()
+				return w.Code
+			}
+			want := http.StatusForbidden
+			if action == policy.Allow {
+				want = http.StatusCreated
+			}
+			if send("original", "first/1.0", "repeated danger") != want || send("cached", "second/1.0", "repeated danger") != want {
+				t.Fatal("initial and cached decisions differ")
+			}
+			if c.calls != 1 || len(st.events) != 2 || st.events[1].ReviewSource != "cache" || st.events[1].SessionID != "cached" {
+				t.Fatalf("cached decision lost current session: calls=%d events=%+v", c.calls, st.events)
+			}
+			forwarded := *upstream
+			if send("cached", "second/1.0", "safe follow-up") != http.StatusForbidden || c.calls != 1 || *upstream != forwarded {
+				t.Fatal("cached hit did not freeze the current session's follow-up")
+			}
+		})
+	}
+}
+
 func TestReviewCacheStoresFalsePredicatesAlongsideAHit(t *testing.T) {
 	p := activePolicy()
 	p.Scenes = append(p.Scenes, policy.Scene{ID: "unhit", Name: "unhit", Match: policy.Any, Action: policy.Allow, Conditions: []policy.Condition{{Question: "illicit", Threshold: .5}}})

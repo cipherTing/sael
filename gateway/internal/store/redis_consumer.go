@@ -107,13 +107,18 @@ func (s *RedisStore) consumeLoop(ctx context.Context) {
 			return
 		case <-tick.C:
 		}
-		work, cancel := context.WithTimeout(ctx, 3*time.Second)
-		if time.Since(replayed) > time.Second {
-			if err := s.replay(work); err != nil && ctx.Err() == nil {
+		s.spoolMu.Lock()
+		spooling := s.spooling
+		s.spoolMu.Unlock()
+		if spooling || time.Since(replayed) > time.Second {
+			replayCtx, cancel := context.WithTimeout(ctx, time.Second)
+			if err := s.replay(replayCtx); err != nil && ctx.Err() == nil {
 				slog.Warn("Redis spool replay failed", "error", err)
 			}
+			cancel()
 			replayed = time.Now()
 		}
+		work, cancel := context.WithTimeout(ctx, 3*time.Second)
 		for i := 0; i < 8; i++ {
 			more, err := s.consume(work)
 			if err != nil {

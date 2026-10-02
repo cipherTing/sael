@@ -45,6 +45,7 @@ type configuredClassifier interface {
 
 // Event records one hit or classifier failure.
 type Event struct {
+	sessionPlan     *sessionBlockPlan
 	ContentType     string              `json:"content_type,omitempty"`
 	RequestBytes    int64               `json:"request_bytes,omitempty"`
 	ReviewSource    string              `json:"review_source,omitempty"`
@@ -170,6 +171,7 @@ type Store interface {
 	Changes(context.Context) ([]PolicyChange, error)
 	PutSessionBlock(context.Context, string, time.Time) error
 	SessionBlockActive(context.Context, string, time.Time) (bool, error)
+	FindSessionBlock(context.Context, []string, time.Time) (string, error)
 }
 
 type proxySnapshot struct {
@@ -406,22 +408,24 @@ func (s *Server) proxyRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	count.UserInput = meta.Text != ""
-	meta.SessionID = requestSession(r, meta.SessionID)
 	s.observeIngress(r.Context(), count)
-	event := s.baseEvent(r, requestID, meta, p)
 	credential := ""
 	if state != nil {
 		credential = state.key
 	}
 	blockPlan := sessionPlanForRequest(r, credential, s.clientIP(r), body, meta.Protocol)
+	meta.SessionID = requestSession(r, meta.SessionID)
+	if meta.SessionID == "" {
+		meta.SessionID = blockPlan.sessionID
+	}
+	blockPlan.explicit = hashSessionKey(credential, meta.SessionID)
+	event := s.baseEvent(r, requestID, meta, p)
+	event.sessionPlan = &blockPlan
 	if meta.SessionID != "" {
 		event.SessionSource = "explicit"
 		event.SessionRef = shortSessionRef(meta.SessionID)
-	} else if blockPlan.transcript.exact != "" {
-		event.SessionSource = "history"
-		event.SessionRef = shortSessionRef(blockPlan.transcript.exact)
 	}
-	if slices.ContainsFunc(p.Scenes, func(scene policy.Scene) bool { return scene.Active() && scene.SessionBlockEnabled }) {
+	if slices.ContainsFunc(p.Scenes, func(scene policy.Scene) bool { return applies(scene) && scene.SessionBlockEnabled }) {
 		if blockedKey, source := s.sessionBlocked(r.Context(), blockPlan); blockedKey != "" {
 			event.SessionSource = source
 			event.SessionRef = shortSessionRef(blockedKey)
@@ -459,10 +463,10 @@ func (s *Server) proxyRequest(w http.ResponseWriter, r *http.Request) {
 	if r.Context().Err() != nil {
 		return
 	}
+	if ttl := winningSceneFreezeTTL(p, decision.SceneID); ttl > 0 {
+		s.rememberSessionBlock(r.Context(), blockPlan, ttl)
+	}
 	if decision.Action == policy.Block {
-		if ttl := winningSceneFreezeTTL(p, decision.SceneID); ttl > 0 {
-			s.rememberSessionBlock(r.Context(), blockPlan, ttl)
-		}
 		writeBlock(w, meta.Protocol, requestID, p.FormatBlockMessage(requestID, r.URL.Path, meta.Model))
 		return
 	}
@@ -520,6 +524,12 @@ func classifierErrorKind(err error, timedOut bool) string {
 }
 
 func (s *Server) writeEvent(ctx context.Context, e Event) {
+	if e.SessionSource == "" && e.sessionPlan != nil {
+		if transcript := e.sessionPlan.history(); transcript.exact != "" {
+			e.SessionSource, e.SessionRef = "history", shortSessionRef(transcript.exact)
+		}
+	}
+	e.sessionPlan = nil
 	e.Redact()
 	if err := s.Store.WriteEvent(ctx, e); err != nil {
 		slog.Error("record event failed", "error", err, "request_id", e.RequestID)

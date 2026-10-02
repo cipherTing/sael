@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -39,11 +41,46 @@ func (s *RedisStore) LoginAttempt(ctx context.Context, ip string) (time.Duration
 	return time.Duration(ms) * time.Millisecond, err
 }
 
-func adminSessionKey(id string) string { return "sael:admin_session:" + id }
+const adminSessionPrefix = "sael:admin_session:"
+const adminSessionIndex = "sael:admin_sessions"
+const adminSessionLimit = 5
+
+func adminSessionKey(id string) string { return adminSessionPrefix + id }
+
+//nolint:dupword // Consecutive Lua end tokens close nested blocks.
+var putAdminSessionScript = redis.NewScript(`
+for _,id in ipairs(redis.call('ZRANGE',KEYS[1],0,-1)) do
+ if redis.call('EXISTS',ARGV[4]..id)==0 then redis.call('ZREM',KEYS[1],id) end
+end
+local score=tonumber(ARGV[5])
+if ARGV[6]=='adopt' then
+ if redis.call('EXISTS',KEYS[2])==0 or redis.call('ZSCORE',KEYS[1],ARGV[1]) then return 0 end
+else
+ local clock=redis.call('TIME')
+ score=tonumber(clock[1])*1000+math.floor(tonumber(clock[2])/1000)
+ local latest=redis.call('ZREVRANGE',KEYS[1],0,0,'WITHSCORES')
+ if #latest>0 then score=math.max(score,tonumber(latest[2])+1) end
+ redis.call('SET',KEYS[2],'1','PX',ARGV[2])
+end
+local indexTTL=redis.call('PTTL',KEYS[1])
+redis.call('ZADD',KEYS[1],score,ARGV[1])
+local excess=redis.call('ZCARD',KEYS[1])-tonumber(ARGV[3])
+if excess>0 then
+ for _,id in ipairs(redis.call('ZRANGE',KEYS[1],0,excess-1)) do
+  redis.call('DEL',ARGV[4]..id)
+  redis.call('ZREM',KEYS[1],id)
+ end
+end
+redis.call('PEXPIRE',KEYS[1],math.max(indexTTL,tonumber(ARGV[2])))
+return 1
+`)
 
 // PutAdminSession stores an opaque session identifier with a fixed expiry.
 func (s *RedisStore) PutAdminSession(ctx context.Context, token string, ttl time.Duration) error {
-	return s.redis.Set(ctx, adminSessionKey(token), "1", ttl).Err()
+	if ttl.Milliseconds() <= 0 {
+		return errors.New("admin session expiry must be positive")
+	}
+	return putAdminSessionScript.Run(ctx, s.redis, []string{adminSessionIndex, adminSessionKey(token)}, token, ttl.Milliseconds(), adminSessionLimit, adminSessionPrefix, 0, "login").Err()
 }
 
 // AdminSessionActive checks session validity without extending its lifetime.
@@ -54,7 +91,47 @@ func (s *RedisStore) AdminSessionActive(ctx context.Context, token string) (bool
 
 // DeleteAdminSession revokes a session immediately across instances.
 func (s *RedisStore) DeleteAdminSession(ctx context.Context, token string) error {
-	return s.redis.Del(ctx, adminSessionKey(token)).Err()
+	_, err := s.redis.TxPipelined(ctx, func(p redis.Pipeliner) error {
+		p.Del(ctx, adminSessionKey(token))
+		p.ZRem(ctx, adminSessionIndex, token)
+		return nil
+	})
+	return err
+}
+
+// Existing fixed-30-day sessions are adopted in expiry order without resetting TTLs.
+func (s *RedisStore) migrateAdminSessions(ctx context.Context) error {
+	var cursor uint64
+	for {
+		keys, next, err := s.redis.Scan(ctx, cursor, adminSessionPrefix+"*", 128).Result()
+		if err != nil {
+			return err
+		}
+		pipe := s.redis.Pipeline()
+		ttls := make([]*redis.DurationCmd, len(keys))
+		for i, key := range keys {
+			ttls[i] = pipe.PTTL(ctx, key)
+		}
+		if len(keys) > 0 {
+			if _, err := pipe.Exec(ctx); err != nil {
+				return err
+			}
+		}
+		for i, key := range keys {
+			ttl := ttls[i].Val()
+			if ttl <= 0 {
+				continue
+			}
+			issued := time.Now().Add(ttl - 30*24*time.Hour).UnixMilli()
+			if err := putAdminSessionScript.Run(ctx, s.redis, []string{adminSessionIndex, key}, strings.TrimPrefix(key, adminSessionPrefix), ttl.Milliseconds(), adminSessionLimit, adminSessionPrefix, issued, "adopt").Err(); err != nil {
+				return err
+			}
+		}
+		cursor = next
+		if cursor == 0 {
+			return nil
+		}
+	}
 }
 
 const trustedKeys = "sael:trusted_keys"

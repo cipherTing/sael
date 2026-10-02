@@ -60,7 +60,7 @@ func TestSessionFreezeIsIsolatedByCallerAndExpires(t *testing.T) {
 	}
 }
 
-func TestSessionFreezeNeedsStableSessionAndOnlyBlocksMonitoredRequests(t *testing.T) {
+func TestSessionFreezeDoesNotBlockUnrelatedInputWithoutSessionID(t *testing.T) {
 	p := activePolicy()
 	p.Scenes[0].SessionBlockEnabled, p.Scenes[0].SessionBlockTTLSeconds = true, 60
 	c := &testClassifier{answers: fullAnswers(map[string]float64{"cyber_abuse": 0.9})}
@@ -75,8 +75,85 @@ func TestSessionFreezeNeedsStableSessionAndOnlyBlocksMonitoredRequests(t *testin
 	r = authorizedRequest("POST", "/v1/responses", strings.NewReader("{\"input\":\"hello\"}"))
 	r.Header.Set("Authorization", "Bearer caller-a")
 	s.ServeHTTP(httptest.NewRecorder(), r)
+	c.answers = fullAnswers(nil)
+	r = authorizedRequest("POST", "/v1/responses", strings.NewReader(`{"input":"different conversation"}`))
+	r.Header.Set("Authorization", "Bearer caller-a")
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, r)
+	if w.Code != http.StatusCreated {
+		t.Fatal("transcript freezing became a caller or IP ban")
+	}
+}
+
+func TestMixedScenesFreezeWinningRecordScene(t *testing.T) {
+	p := activePolicy()
+	record := p.Scenes[0]
+	record.ID, record.Name, record.Action = "record", "record", policy.Allow
+	record.SessionBlockEnabled, record.SessionBlockTTLSeconds = true, 60
+	p.Scenes[0].Conditions = []policy.Condition{{Question: "gore", Threshold: 2}}
+	p.Scenes = append([]policy.Scene{record}, p.Scenes...)
+	c := &testClassifier{answers: fullAnswers(map[string]float64{"cyber_abuse": .9})}
+	s, _, upstream := makeServer(t, p, c)
+	call := func() int {
+		r := authorizedRequest("POST", "/v1/responses", strings.NewReader(`{"input":"hello"}`))
+		r.Header.Set("Session-Id", "record-session")
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, r)
+		return w.Code
+	}
+	if call() != http.StatusCreated {
+		t.Fatal("record scene blocked the initial request")
+	}
+	if call() != http.StatusForbidden || c.calls != 1 || *upstream != 1 {
+		t.Fatal("winning record scene did not freeze its follow-up")
+	}
+}
+
+func TestImagesWithoutSessionDoNotActivateHistoryScope(t *testing.T) {
+	p := activePolicy()
+	p.Scenes[0].SessionBlockEnabled, p.Scenes[0].SessionBlockTTLSeconds = true, 60
+	c := &testClassifier{answers: fullAnswers(map[string]float64{"cyber_abuse": .9})}
+	s, store, _ := makeServer(t, p, c)
+	r := authorizedRequest("POST", "/v1/images/generations", strings.NewReader(`{"prompt":"danger"}`))
+	r.Header.Set("User-Agent", "client/1.0")
+	s.ServeHTTP(httptest.NewRecorder(), r)
 	if len(store.blocked) != 0 {
-		t.Fatal("missing session must not freeze caller or IP")
+		t.Fatal("image prompt without a session activated a broad risk scope")
+	}
+}
+
+func TestFrozenSessionDoesNotCrossIntoSceneWithoutFreeze(t *testing.T) {
+	p := activePolicy()
+	p.Scenes[0].Endpoints = []string{"openai_chat"}
+	p.Scenes[0].SessionBlockEnabled, p.Scenes[0].SessionBlockTTLSeconds = true, 60
+	other := p.Scenes[0]
+	other.ID = "responses"
+	other.Endpoints = []string{"openai_responses"}
+	other.SessionBlockEnabled = false
+	p.Scenes = append(p.Scenes, other)
+	c := &testClassifier{answers: fullAnswers(map[string]float64{"cyber_abuse": .9})}
+	s, _, _ := makeServer(t, p, c)
+	r := authorizedRequest("POST", "/v1/chat/completions", strings.NewReader(`{"messages":[{"role":"user","content":"danger"}]}`))
+	r.Header.Set("Session-Id", "shared-session")
+	s.ServeHTTP(httptest.NewRecorder(), r)
+	c.answers = fullAnswers(nil)
+	r = authorizedRequest("POST", "/v1/responses", strings.NewReader(`{"input":"ordinary"}`))
+	r.Header.Set("Session-Id", "shared-session")
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, r)
+	if w.Code != http.StatusCreated {
+		t.Fatal("chat scene freeze leaked into an unfrozen Responses scene")
+	}
+}
+
+func TestBodyExplicitSessionIsAlsoRecordedAsExplicit(t *testing.T) {
+	p := activePolicy()
+	c := &testClassifier{answers: fullAnswers(map[string]float64{"cyber_abuse": .9})}
+	s, store, _ := makeServer(t, p, c)
+	r := authorizedRequest("POST", "/v1/responses", strings.NewReader(`{"prompt_cache_key":"body-session","input":"danger"}`))
+	s.ServeHTTP(httptest.NewRecorder(), r)
+	if len(store.events) != 1 || store.events[0].SessionID != "body-session" || store.events[0].SessionSource != "explicit" {
+		t.Fatal("event disagrees with the stable session used for freezing")
 	}
 }
 

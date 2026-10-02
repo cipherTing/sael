@@ -3,6 +3,7 @@ package testcli
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -13,6 +14,13 @@ import (
 // Binary returns a CLI executable scoped to the calling test's temporary files.
 func Binary(t testing.TB) string {
 	t.Helper()
+	if path := os.Getenv("SAEL_TEST_CLI_PATH"); path != "" {
+		info, err := os.Stat(path) // #nosec G703 -- Explicit test-runner executable path, never provided by a gateway request.
+		if err != nil || info.IsDir() {
+			t.Fatalf("SAEL_TEST_CLI_PATH is not an executable file: %s", path)
+		}
+		return path
+	}
 	name := "sael"
 	if runtime.GOOS == "windows" {
 		name += ".exe"
