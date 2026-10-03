@@ -42,17 +42,28 @@ type Props = {
   jev: ReactNode;
 };
 const tabs = [
-  { id: "review", label: "审查", icon: ShieldCheck },
+  { id: "gateway", label: "网关", icon: Network },
   { id: "jev", label: "Jev 分类器", icon: PlugZap },
-  { id: "access", label: "接入", icon: Network },
   { id: "keys", label: "可信密钥", icon: KeyRound },
-  { id: "cache", label: "审核缓存", icon: Database },
+  { id: "data", label: "数据与缓存", icon: Database },
 ];
 export default function SettingsConsole({ policy, onSave, jev }: Props) {
   const [params, setParams] = useSearchParams();
-  const tab = tabs.some(({ id }) => id === params.get("tab"))
-    ? params.get("tab")!
-    : "review";
+  const requested = params.get("tab") || "gateway";
+  const resolved =
+    (
+      { review: "gateway", access: "gateway", cache: "data" } as Record<
+        string,
+        string
+      >
+    )[requested] || requested;
+  const tab = tabs.some(({ id }) => id === resolved) ? resolved : "gateway";
+  const [visited, setVisited] = useState([tab]);
+  useEffect(() => {
+    setVisited((current) =>
+      current.includes(tab) ? current : [...current, tab],
+    );
+  }, [tab]);
   return (
     <>
       <PageHeading title="设置" />
@@ -69,47 +80,49 @@ export default function SettingsConsole({ policy, onSave, jev }: Props) {
             </TabsTrigger>
           ))}
         </TabsList>
-        <TabsContent value="review">
-          <ReviewSettings policy={policy} onSave={onSave} />
+        <TabsContent
+          value="gateway"
+          forceMount={visited.includes("gateway") ? true : undefined}
+          hidden={tab !== "gateway"}
+        >
+          <GatewaySettings policy={policy} onSave={onSave} />
         </TabsContent>
-        <TabsContent value="jev">{jev}</TabsContent>
-        <TabsContent value="access">
-          <AccessSettings />
+        <TabsContent
+          value="jev"
+          forceMount={visited.includes("jev") ? true : undefined}
+          hidden={tab !== "jev"}
+        >
+          {jev}
         </TabsContent>
-        <TabsContent value="keys">
-          <div className="settings-stack settings-keys-stack">
-            <TrustedKeySettings
-              policy={policy}
-              onSave={(next) =>
-                onSave({
-                  trusted_key_idle_days: next.trusted_key_idle_days,
-                })
-              }
-            />
-            <TrustedKeys />
+        <TabsContent
+          value="keys"
+          forceMount={visited.includes("keys") ? true : undefined}
+          hidden={tab !== "keys"}
+        >
+          <TrustedKeys policy={policy} onSave={onSave} />
+        </TabsContent>
+        <TabsContent
+          value="data"
+          forceMount={visited.includes("data") ? true : undefined}
+          hidden={tab !== "data"}
+        >
+          <div className="settings-stack data-settings">
+            <RecordRetentionSettings policy={policy} onSave={onSave} />
+            <CacheSettings />
           </div>
-        </TabsContent>
-        <TabsContent value="cache">
-          <CacheSettings />
         </TabsContent>
       </Tabs>
     </>
   );
 }
-function ReviewSettings({
+function GatewaySettings({
   policy,
   onSave,
 }: {
   policy: Policy;
   onSave: Props["onSave"];
 }) {
-  const [busy, setBusy] = useState(false),
-    [saving, setSaving] = useState(false),
-    [days, setDays] = useState(String(policy.retention_days || 30));
-  useEffect(
-    () => setDays(String(policy.retention_days || 30)),
-    [policy.retention_days],
-  );
+  const [busy, setBusy] = useState(false);
   async function toggle(enabled: boolean) {
     if (busy) return;
     setBusy(true);
@@ -122,6 +135,44 @@ function ReviewSettings({
       setBusy(false);
     }
   }
+  return (
+    <div className="settings-stack gateway-settings">
+      <section className="review-switch-row" aria-label="全局审查设置">
+        <div className="review-switch-label">
+          <ShieldCheck size={22} />
+          <div>
+            <strong>全局审查</strong>
+            <div className={policy.enabled ? "status-on" : "muted"}>
+              {policy.enabled ? "已开启" : "已关闭"}
+            </div>
+          </div>
+        </div>
+        <Switch
+          aria-label="全局审查"
+          checked={policy.enabled}
+          disabled={busy}
+          onCheckedChange={(enabled) => void toggle(enabled)}
+        />
+      </section>
+      <AccessSettings />
+      <BlockMessageSettings policy={policy} onSave={onSave} />
+    </div>
+  );
+}
+
+function RecordRetentionSettings({
+  policy,
+  onSave,
+}: {
+  policy: Policy;
+  onSave: Props["onSave"];
+}) {
+  const [saving, setSaving] = useState(false);
+  const [days, setDays] = useState(String(policy.retention_days || 30));
+  useEffect(
+    () => setDays(String(policy.retention_days || 30)),
+    [policy.retention_days],
+  );
   async function saveRetention() {
     const value = Number(days);
     if (!Number.isInteger(value) || value < 1 || value > 3650 || saving) return;
@@ -136,61 +187,43 @@ function ReviewSettings({
     }
   }
   return (
-    <div className="settings-stack review-settings-grid">
-      <Panel title="请求审查">
-        <div className="review-switch-row">
-          <div className="review-switch-label">
-            <ShieldCheck size={22} />
-            <div>
-              <strong>全局审查</strong>
-              <div className={policy.enabled ? "status-on" : "muted"}>
-                {policy.enabled ? "已开启" : "已关闭"}
-              </div>
-            </div>
-          </div>
-          <Switch
-            aria-label="全局审查"
-            checked={policy.enabled}
-            disabled={busy}
-            onCheckedChange={(enabled) => void toggle(enabled)}
+    <section className="record-retention-row" aria-label="审核记录保留">
+      <h2>审核记录</h2>
+      <form
+        className="retention-form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void saveRetention();
+        }}
+      >
+        <label className="retention-field">
+          <span>记录保留</span>
+          <Input
+            aria-label="记录保留天数"
+            type="number"
+            min={1}
+            max={3650}
+            value={days}
+            onChange={(e) => setDays(e.target.value)}
           />
-        </div>
-      </Panel>
-      <Panel title="记录保留">
-        <form
-          className="settings-inline-form"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void saveRetention();
-          }}
+          <span>天</span>
+        </label>
+        <Button
+          type="submit"
+          size="sm"
+          aria-label="保存记录保留"
+          disabled={
+            saving ||
+            Number(days) === (policy.retention_days || 30) ||
+            !Number.isInteger(Number(days)) ||
+            Number(days) < 1 ||
+            Number(days) > 3650
+          }
         >
-          <label className="field">
-            <span>保留天数</span>
-            <Input
-              aria-label="记录保留天数"
-              type="number"
-              min={1}
-              max={3650}
-              value={days}
-              onChange={(e) => setDays(e.target.value)}
-            />
-          </label>
-          <Button
-            type="submit"
-            disabled={
-              saving ||
-              Number(days) === (policy.retention_days || 30) ||
-              !Number.isInteger(Number(days)) ||
-              Number(days) < 1 ||
-              Number(days) > 3650
-            }
-          >
-            {saving ? "保存中…" : "保存"}
-          </Button>
-        </form>
-      </Panel>
-      <BlockMessageSettings policy={policy} onSave={onSave} />
-    </div>
+          {saving ? "保存中…" : "保存"}
+        </Button>
+      </form>
+    </section>
   );
 }
 
@@ -331,7 +364,13 @@ type Credential = {
   first_seen_at: string;
   last_seen_at: string;
 };
-function TrustedKeys() {
+function TrustedKeys({
+  policy,
+  onSave,
+}: {
+  policy: Policy;
+  onSave: Props["onSave"];
+}) {
   const [offset, setOffset] = useState(0);
   const result = useQuery({
     queryKey: ["trusted-keys", offset],
@@ -355,6 +394,7 @@ function TrustedKeys() {
         />
       }
     >
+      <TrustedKeySettings policy={policy} onSave={onSave} />
       {result.isPending ? (
         <Loading />
       ) : !data?.items.length ? (

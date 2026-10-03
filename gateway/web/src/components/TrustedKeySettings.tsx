@@ -4,7 +4,7 @@ import { notifyError } from "../notifications";
 import type { Policy, PolicyPatch } from "../policy";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
-import { Help, Panel } from "./common";
+import { Help } from "./common";
 
 export function TrustedKeySettings({
   policy,
@@ -32,43 +32,38 @@ export function TrustedKeySettings({
     }
   }
   return (
-    <div className="session-settings">
-      <Panel
-        title="可信密钥"
-        extra={
-          <Help>
-            密钥首次获得上游成功响应后加入可信列表。每次请求刷新闲置时间，过期后重新验证。
-          </Help>
-        }
+    <form
+      className="trusted-key-settings-row"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void save();
+      }}
+    >
+      <label className="trusted-key-expiry-field">
+        <span>闲置清除</span>
+        <Help>
+          密钥首次获得上游成功响应后加入可信列表。每次请求刷新闲置时间，过期后重新验证。
+        </Help>
+        <Input
+          aria-label="闲置清除天数"
+          type="number"
+          min={1}
+          max={106751}
+          step={1}
+          value={days}
+          onChange={(e) => setDays(e.target.value)}
+          disabled={busy}
+        />
+        <span>天</span>
+      </label>
+      <Button
+        type="submit"
+        size="sm"
+        aria-label="保存可信密钥设置"
+        disabled={busy || !valid || value === current}
       >
-        <form
-          className="trusted-key-settings-row"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void save();
-          }}
-        >
-          <label className="field">
-            <span>闲置清除天数</span>
-            <Input
-              aria-label="闲置清除天数"
-              type="number"
-              min={1}
-              max={106751}
-              step={1}
-              value={days}
-              onChange={(e) => setDays(e.target.value)}
-            />
-          </label>
-          <Button
-            type="submit"
-            size="sm"
-            disabled={busy || !valid || value === current}
-          >
-            {busy ? "保存中…" : "保存可信密钥设置"}
-          </Button>
-        </form>
-      </Panel>
-    </div>
+        {busy ? "保存中…" : "保存"}
+      </Button>
+    </form>
   );
 }

@@ -497,9 +497,9 @@ it("redirects the former access page into settings with persistent tabs", async 
   );
   expect(await screen.findByText("http://localhost:8091")).toBeTruthy();
   expect(window.location.pathname + window.location.search).toBe(
-    "/settings?tab=access",
+    "/settings?tab=gateway",
   );
-  for (const name of ["审查", "Jev 分类器", "接入", "可信密钥", "审核缓存"])
+  for (const name of ["网关", "Jev 分类器", "可信密钥", "数据与缓存"])
     expect(screen.getByRole("tab", { name })).toBeTruthy();
   expect(screen.queryByRole("link", { name: "接入" })).toBeNull();
 });

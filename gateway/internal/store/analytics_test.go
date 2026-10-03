@@ -15,6 +15,31 @@ import (
 	"github.com/cipherTing/sael/gateway/internal/policy"
 )
 
+func TestAnalyticsExcludesLegacyWarningsWithoutChangingStoredData(t *testing.T) {
+	p, _ := redisFixture(t)
+	ctx := context.Background()
+	now := time.Date(2026, 10, 3, 10, 0, 0, 0, time.UTC)
+	for _, kind := range []string{"classifier_input_too_long", "session_blocked", "classifier_timeout"} {
+		if _, err := p.pool.Exec(ctx, `INSERT INTO gateway_jev_errors_minute(bucket,protocol,model,kind,count) VALUES($1,'openai_chat','test',$2,7)`, now, kind); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err := p.Analytics(ctx, gateway.AnalyticsFilter{Since: now, Until: now.Add(time.Minute)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Errors) != 1 || result.Errors[0].Kind != "classifier_timeout" || result.Errors[0].Count != 7 {
+		t.Fatalf("warnings mixed into Jev failures: %+v", result.Errors)
+	}
+	var stored int64
+	if err := p.pool.QueryRow(ctx, `SELECT sum(count) FROM gateway_jev_errors_minute`).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != 21 {
+		t.Fatalf("reading statistics changed historical data: %d", stored)
+	}
+}
+
 func TestAnalyticsKeepsOnlyHitScoresAndFiltersEndpoints(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {

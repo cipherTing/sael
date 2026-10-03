@@ -214,7 +214,7 @@ export function CacheEfficiency({ data }: { data: Analytics }) {
     <Panel
       title="缓存效率"
       extra={
-        <Link className="instrument-panel-link" to="/settings?tab=cache">
+        <Link className="instrument-panel-link" to="/settings?tab=data">
           <Database size={13} />
           设置
         </Link>

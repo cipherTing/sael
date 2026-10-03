@@ -304,8 +304,9 @@ export default function JevSettingsPage({
               <span>
                 送审上限{" "}
                 <Help>
-                  默认 28,800 Token，为 Jev 32k 文本与单题预算的 90%。本地使用
-                  cl100k_base 估算；超出后跳过审查并记录警告。
+                  Jev 限制为输入文本加最长审核题不超过 32k Token，整包不超过
+                  64k。默认 28,800 是预留 10% 后的文本估算阈值；使用
+                  cl100k_base 近似计数，超出后放行并记录警告。
                 </Help>
               </span>
               <div className="jev-unit-input">

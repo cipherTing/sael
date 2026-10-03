@@ -271,6 +271,17 @@ export default function DashboardPage({ enabled }: { enabled: boolean }) {
                   </b>
                   <span>最近一分钟</span>
                 </div>
+                <Link
+                  aria-label="查看超长放行记录"
+                  to={goRecords({
+                    kind: "warning",
+                    error_kind: "classifier_input_too_long",
+                  })}
+                >
+                  <span>超长放行</span>
+                  <b>{count(stats.skipped)}</b>
+                  <ArrowUpRight size={12} />
+                </Link>
               </div>
             </div>
             <div className="metric dashboard-kpi">
@@ -298,6 +309,17 @@ export default function DashboardPage({ enabled }: { enabled: boolean }) {
                   <span>拦截</span>
                   <b>{count(stats.blocked)}</b>
                   <span>{percent(stats.blockRate)}</span>
+                  <ArrowUpRight size={12} />
+                </Link>
+                <Link
+                  aria-label="查看会话拦截记录"
+                  to={goRecords({
+                    kind: "warning",
+                    error_kind: "session_blocked",
+                  })}
+                >
+                  <span>会话拦截</span>
+                  <b>{count(stats.frozen)}</b>
                   <ArrowUpRight size={12} />
                 </Link>
               </div>
@@ -343,28 +365,6 @@ export default function DashboardPage({ enabled }: { enabled: boolean }) {
               </Link>
               <div className="kpi-support">
                 失败 / 调用 {count(stats.classifierCalls)}
-              </div>
-              <div className="kpi-footer">
-                <div>
-                  <span>输入超限</span>
-                  <Link
-                    to={goRecords({
-                      kind: "warning",
-                      error_kind: "classifier_input_too_long",
-                    })}
-                  >
-                    {count(stats.skipped)}
-                  </Link>
-                  <span>会话拦截</span>
-                  <Link
-                    to={goRecords({
-                      kind: "warning",
-                      error_kind: "session_blocked",
-                    })}
-                  >
-                    {count(stats.frozen)}
-                  </Link>
-                </div>
               </div>
             </div>
           </div>

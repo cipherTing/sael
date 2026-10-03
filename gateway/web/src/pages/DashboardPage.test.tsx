@@ -227,6 +227,37 @@ function mount(initialEntry = "/") {
     </QueryClientProvider>,
   );
 }
+
+it("shows over-limit forwarding with user input and keeps warnings out of the Jev error card", async () => {
+  vi.mocked(request).mockImplementation(async (url) =>
+    String(url).includes("risk-sources")
+      ? { keys: [], ips: [] }
+      : {
+          ...data,
+          traffic: [
+            ...data.traffic,
+            { ...data.traffic[0], outcome: "input_too_long", count: 8, classifier_calls: 0, classifier_sum_ms: 0 },
+            { ...data.traffic[0], outcome: "session_blocked", count: 3, classifier_calls: 0, classifier_sum_ms: 0 },
+            { ...data.traffic[0], outcome: "unreviewed", count: 2, classifier_calls: 2, classifier_sum_ms: 1000 },
+          ],
+          errors: [{ time: data.since, endpoint: "openai_chat", kind: "classifier_timeout", count: 2 }],
+        },
+  );
+  mount();
+  await screen.findByRole("region", { name: "核心指标" });
+  const errorCard = screen.getByText("Jev 异常", { selector: ".kpi-heading span" }).closest(".dashboard-kpi")! as HTMLElement;
+  expect(within(errorCard).getByRole("link", { name: "查看 Jev 错误记录" }).textContent).toContain("2");
+  expect(errorCard.textContent).not.toMatch(/超限|超长|会话/);
+  const inputCard = screen.getByText("用户输入", { selector: ".kpi-heading span" }).closest(".dashboard-kpi")! as HTMLElement;
+  const warning = within(inputCard).getByRole("link", { name: /超长放行/ });
+  expect(warning.textContent).toContain("8");
+  const q = new URL(warning.getAttribute("href")!, "http://localhost").searchParams;
+  expect(q.get("kind")).toBe("warning");
+  expect(q.get("error_kind")).toBe("classifier_input_too_long");
+  expect(q.get("start")).toBe(data.since);
+  const riskCard = screen.getByText("命中与拦截", { selector: ".kpi-heading span" }).closest(".dashboard-kpi")! as HTMLElement;
+  expect(within(riskCard).getByRole("link", { name: /会话拦截/ }).textContent).toContain("3");
+});
 it("links blocked requests to records with the same resolved time window", async () => {
   vi.mocked(request).mockResolvedValue(data);
   mount();

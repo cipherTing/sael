@@ -89,7 +89,7 @@ func (a aggregate) add(c gateway.Count) {
 			a.merge(aggregateRow{aggregateKey: k, Count: 1, Name: s.Name, WinnerName: s.WinnerName})
 		}
 	}
-	if c.ErrorKind != "" {
+	if c.Outcome == "unreviewed" && c.ErrorKind != "" {
 		k := key
 		k.Kind = "error"
 		k.ErrorKind = c.ErrorKind

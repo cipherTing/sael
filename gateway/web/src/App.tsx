@@ -517,7 +517,7 @@ function Console() {
                   />
                   <Route
                     path="/access"
-                    element={<Navigate to="/settings?tab=access" replace />}
+                    element={<Navigate to="/settings?tab=gateway" replace />}
                   />
                   <Route
                     path="/settings"

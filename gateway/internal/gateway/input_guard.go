@@ -6,7 +6,10 @@ import (
 	"github.com/tiktoken-go/tokenizer"
 )
 
-// DefaultJevInputTokens reserves 10% of Jev's documented 32k state-plus-question budget.
+// DefaultJevInputTokens is a conservative text estimate, not a provider limit.
+// Jev documents 32k for state + the longest question, and 64k for the full request;
+// the exact integer behind "32k" and its tokenizer are not published.
+// Reserve 10% of 32,000 for question text and estimation differences.
 // https://docs.typesafe.ai/models
 const DefaultJevInputTokens = 28800
 

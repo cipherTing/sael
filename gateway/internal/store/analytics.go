@@ -119,7 +119,7 @@ func (s *PG) Analytics(ctx context.Context, f gateway.AnalyticsFilter) (gateway.
 	if err != nil {
 		return out, err
 	}
-	rows, err = s.pool.Query(ctx, `SELECT `+analyticsBucket+`,`+endpointGroupSQL+`,kind,sum(count) FROM gateway_jev_errors_minute WHERE `+analyticsWhere+` GROUP BY 1,2,3 ORDER BY 1`, args...)
+	rows, err = s.pool.Query(ctx, `SELECT `+analyticsBucket+`,`+endpointGroupSQL+`,kind,sum(count) FROM gateway_jev_errors_minute WHERE `+analyticsWhere+` AND kind NOT IN ('classifier_input_too_long','session_blocked') GROUP BY 1,2,3 ORDER BY 1`, args...)
 	if err != nil {
 		return out, err
 	}

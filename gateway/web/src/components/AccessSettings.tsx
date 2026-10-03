@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Network, ArrowRight } from "lucide-react";
 import { request } from "../api";
 import type { UpstreamConfig } from "../SettingsPage";
 import { Button } from "../components/ui/button";
@@ -62,45 +61,48 @@ export default function AccessSettings() {
     }
   }
   return (
-    <>
-      <div className="access-grid">
-        <Panel title="进网入口" extra={<Network size={15} color="#99a5b8" />}>
-          <div className="panel-body">
-            <div className="address-line">
-              <code>{ingress || "—"}</code>
-              {ingress && <CopyButton value={ingress} label="复制进网地址" />}
-            </div>
-          </div>
-        </Panel>
-        <Panel
-          title="出站地址"
-          extra={<ArrowRight size={15} color="#99a5b8" />}
-        >
-          <form
-            className="panel-body"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void save();
-            }}
-          >
-            <div className="address-line" style={{ paddingTop: 0 }}>
-              <Input
-                aria-label="出站地址"
-                placeholder="https://api.example.com"
-                value={url}
-                onChange={(e) => setURL(e.target.value)}
-              />
-              <Button
-                type="submit"
-                size="sm"
-                disabled={saving || url === upstream.data?.base_url}
-              >
-                {saving ? "保存中…" : "保存"}
-              </Button>
-            </div>
-          </form>
-        </Panel>
+    <Panel title="请求转发" className="gateway-routing-panel">
+      <div className="gateway-address-row">
+        <span className="gateway-address-label">进网地址</span>
+        <div className="gateway-ingress-address">
+          <code>{ingress || "—"}</code>
+          {ingress && <CopyButton value={ingress} label="复制进网地址" />}
+        </div>
       </div>
-    </>
+      <form
+        className="gateway-address-row"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void save();
+        }}
+      >
+        <label className="gateway-address-label" htmlFor="gateway-upstream">
+          出站地址
+        </label>
+        <div className="gateway-outbound-address">
+          <Input
+            id="gateway-upstream"
+            aria-label="出站地址"
+            placeholder="https://api.example.com"
+            value={url}
+            onChange={(e) => setURL(e.target.value)}
+            disabled={saving || upstream.isPending}
+          />
+          <Button
+            type="submit"
+            size="sm"
+            aria-label="保存出站地址"
+            disabled={
+              saving ||
+              upstream.isPending ||
+              !url.trim() ||
+              url === upstream.data?.base_url
+            }
+          >
+            {saving ? "保存中…" : "保存"}
+          </Button>
+        </div>
+      </form>
+    </Panel>
   );
 }
