@@ -101,6 +101,8 @@ func (s *RedisStore) consumeLoop(ctx context.Context) {
 	tick := time.NewTicker(100 * time.Millisecond)
 	defer tick.Stop()
 	var replayed time.Time
+	var nextAttempt, lastWarning, lastReplayWarning time.Time
+	var retryDelay time.Duration
 	for {
 		select {
 		case <-ctx.Done():
@@ -112,20 +114,31 @@ func (s *RedisStore) consumeLoop(ctx context.Context) {
 		s.spoolMu.Unlock()
 		if spooling || time.Since(replayed) > time.Second {
 			replayCtx, cancel := context.WithTimeout(ctx, time.Second)
-			if err := s.replay(replayCtx); err != nil && ctx.Err() == nil {
+			if err := s.replay(replayCtx); err != nil && ctx.Err() == nil && time.Since(lastReplayWarning) >= 30*time.Second {
 				slog.Warn("Redis spool replay failed", "error", err)
+				lastReplayWarning = time.Now()
 			}
 			cancel()
 			replayed = time.Now()
+		}
+		if time.Now().Before(nextAttempt) {
+			continue
 		}
 		work, cancel := context.WithTimeout(ctx, 3*time.Second)
 		for i := 0; i < 8; i++ {
 			more, err := s.consume(work)
 			if err != nil {
-				if ctx.Err() == nil {
+				if ctx.Err() == nil && time.Since(lastWarning) >= 30*time.Second {
 					slog.Warn("telemetry persistence delayed", "error", err)
+					lastWarning = time.Now()
 				}
+				retryDelay = min(5*time.Second, max(200*time.Millisecond, retryDelay*2))
+				nextAttempt = time.Now().Add(retryDelay)
 				break
+			}
+			if retryDelay != 0 {
+				slog.Info("telemetry persistence recovered")
+				retryDelay, nextAttempt, lastWarning = 0, time.Time{}, time.Time{}
 			}
 			if !more {
 				break

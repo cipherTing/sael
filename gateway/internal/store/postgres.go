@@ -264,11 +264,13 @@ func clonePolicy(p policy.Policy) policy.Policy {
 
 func (s *PG) insertEvent(ctx context.Context, event gateway.Event) error {
 	event.Redact()
-	raw, err := json.Marshal(event)
+	raw, err := marshalPostgresJSON(event)
 	if err != nil {
 		return err
 	}
-	_, err = s.pool.Exec(ctx, `INSERT INTO audit_events(id,time,kind,action,request_id,body) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (id) DO NOTHING`, event.ID, event.Time, event.Kind, event.Decision.Action, event.RequestID, raw)
+	_, err = s.pool.Exec(ctx, `INSERT INTO audit_events(id,time,kind,action,request_id,body)
+ SELECT e->>'id',(e->>'time')::timestamptz,e->>'kind',e->'decision'->>'action',e->>'request_id',e
+ FROM (SELECT $1::jsonb AS e) input ON CONFLICT (id) DO NOTHING`, raw)
 	return err
 }
 

@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"encoding/json"
 	"math"
 	"time"
 
@@ -37,6 +36,9 @@ type aggregate map[aggregateKey]aggregateRow
 
 func newAggregate() aggregate { return make(aggregate) }
 func (a aggregate) merge(r aggregateRow) {
+	for _, value := range []*string{&r.Kind, &r.Protocol, &r.Model, &r.Outcome, &r.Metric, &r.SceneID, &r.Action, &r.WinnerID, &r.ErrorKind, &r.Name, &r.WinnerName} {
+		*value = postgresText(*value)
+	}
 	old := a[r.aggregateKey]
 	r.Count += old.Count
 	r.SumMS += old.SumMS
@@ -124,7 +126,7 @@ var aggregateSQL = []string{
 func writeAggregate(ctx context.Context, tx pgx.Tx, a aggregate, events []gateway.Event) error {
 	batch := &pgx.Batch{}
 	if len(a) > 0 {
-		raw, err := json.Marshal(a.rows())
+		raw, err := marshalPostgresJSON(a.rows())
 		if err != nil {
 			return err
 		}
@@ -133,7 +135,7 @@ func writeAggregate(ctx context.Context, tx pgx.Tx, a aggregate, events []gatewa
 		}
 	}
 	if len(events) > 0 {
-		raw, err := json.Marshal(events)
+		raw, err := marshalPostgresJSON(events)
 		if err != nil {
 			return err
 		}
