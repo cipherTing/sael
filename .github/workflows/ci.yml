@@ -174,7 +174,9 @@ jobs:
             sdk/go.sum
             cli/go.sum
             gateway/go.sum
-          go-version: stable
+          # Match the gateway build toolchain. The pinned analyzers cannot read
+          # Go 1.27.2's new export data; the test matrix still checks Go stable.
+          go-version-file: gateway/go.mod
 
       - name: Format, tidy, vet, lint every module, and check the workflows
         run: make fmt-check tidy-check vet staticcheck lint lint-workflows
