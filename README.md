@@ -75,8 +75,9 @@ flowchart LR
 准备好 Docker Compose，以及可用 Jev 服务的地址、模型和密钥。
 
 ```sh
-git clone https://github.com/cipherTing/sael.git
-cd sael/gateway/deploy
+mkdir -p sael && cd sael
+curl -fsSLO https://raw.githubusercontent.com/cipherTing/sael/main/gateway/deploy/compose.yaml
+curl -fsSLO https://raw.githubusercontent.com/cipherTing/sael/main/gateway/deploy/.env.example
 cp .env.example .env
 openssl rand -base64 32
 ```
@@ -84,7 +85,7 @@ openssl rand -base64 32
 编辑 `.env`，填写管理员、PostgreSQL 和两套 Redis 的密码，将上面生成的主密钥填入 `CREDENTIAL_ENCRYPTION_KEY` 并保留备份。控制台没有默认登录密码。
 
 ```sh
-docker compose up --build -d --wait
+docker compose up -d --wait
 ```
 
 | 入口 | 默认地址 |
@@ -102,7 +103,14 @@ docker compose up --build -d --wait
 
 调用密钥首次经上游验证成功后进入可信列表，后续请求按场景审查。OpenAI 客户端的 API 根地址通常填写 `http://localhost:8081/v1`。
 
-在仓库根目录也可使用 `npm run docker:up`、`docker:rebuild`、`docker:ps`、`docker:logs`、`docker:down` 管理容器。完整部署和配置说明见[网关文档](gateway/README.md)。
+Compose 默认拉取 `sundayting/sael-gateway:latest`，无需本地编译。首页显示实际运行的网关版本并检查新版。更新网关：
+
+```sh
+docker compose pull gateway
+docker compose up -d --no-deps --wait gateway
+```
+
+网关镜像通过 GitHub Actions 构建，版本独立于 CLI 和 SDK。也可从 [Sael Gateway Releases](https://github.com/cipherTing/sael/releases?q=gateway%2F) 下载部署文件；固定版本时直接修改 Compose 的镜像标签。源码开发入口和完整说明见[网关文档](gateway/README.md)，维护者发版说明见[镜像发版流程](docs/gateway-release.md)。
 
 ## CLI、SDK 与开发
 

@@ -213,32 +213,33 @@ resolve_version() {
     # GitHub from inside the test that redirected it here.
     if [ -n "$BASE_URL" ]; then VERSION="0.0.0-local"; return; fi
 
-    local url tag=""
-    # One request against /releases/latest, then read where it landed: no JSON at
-    # all. It cannot see a prerelease, and the first tag this project publishes is
-    # 0.0.1-rc2, so fall through to the API list -- which does include prereleases
-    # -- when the redirect does not name a tag.
+    local url tag="" page=1 releases tags candidate count
+    # GitHub's latest is repository-wide. Accept it only when it names a CLI;
+    # gateway releases and SDK releases cannot supply CLI archives.
     url="$(curl -fsSLI -o /dev/null -w '%{url_effective}' "${RELEASES_URL}/latest" 2>/dev/null || true)"
     case "$url" in
         */releases/tag/*) tag="${url##*/releases/tag/}" ;;
     esac
-    if [ -z "$tag" ]; then
-        tag="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases?per_page=1" 2>/dev/null \
-            | tr ',' '\n' \
-            | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
-            | head -n 1)"
-    fi
+    tag="${tag//%2F/\/}"
+    tag="${tag//%2f/\/}"
+    case "$tag" in "${TAG_PREFIX}"v?*) ;; *) tag="" ;; esac
+    while [ -z "$tag" ]; do
+        releases="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases?per_page=100&page=${page}" 2>/dev/null || true)"
+        tags="$(printf '%s' "$releases" | tr ',' '\n' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+        while IFS= read -r candidate; do
+            case "$candidate" in "${TAG_PREFIX}"v?*) tag="$candidate"; break ;; esac
+        done <<< "$tags"
+        count="$(printf '%s\n' "$tags" | awk 'NF { n++ } END { print n+0 }')"
+        if [ "$count" -lt 100 ]; then break; fi
+        page=$((page + 1))
+    done
     if [ -z "$tag" ]; then
         log_error "Could not determine the latest release of ${REPO}."
         log_info "Name it explicitly:  install.sh --version 0.0.1-rc2"
         exit 1
     fi
 
-    case "$tag" in
-        "${TAG_PREFIX}"v*) VERSION="${tag#"${TAG_PREFIX}"v}" ;;
-        v*) VERSION="${tag#v}" ;;
-        *) VERSION="$tag" ;;
-    esac
+    VERSION="${tag#"${TAG_PREFIX}"v}"
 }
 
 sha256_of() {

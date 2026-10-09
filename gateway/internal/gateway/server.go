@@ -23,6 +23,7 @@ import (
 	"github.com/cipherTing/sael/gateway/internal/policy"
 	"github.com/cipherTing/sael/gateway/internal/privacy"
 	"github.com/cipherTing/sael/gateway/internal/protocol"
+	"github.com/cipherTing/sael/gateway/internal/version"
 )
 
 var (
@@ -194,6 +195,7 @@ func (b *relayBuffers) Put(v []byte) { b.Pool.Put((*[32 * 1024]byte)(v)) }
 
 // Server handles supported AI requests and authenticated admin routes.
 type Server struct {
+	Updates                *version.Checker
 	ReviewCache            ReviewCache
 	Security               SecurityStore
 	MaxBodyBytes           int64
@@ -230,7 +232,7 @@ func New(store Store, classifier Classifier, adminPassword string) *Server {
 	transport.MaxIdleConnsPerHost = 1024
 	ctx, cancel := context.WithCancel(context.Background())
 	security, _ := store.(SecurityStore)
-	return &Server{transport: transport, Store: store, Security: security, MaxBodyBytes: 256 << 20, AsyncReviewConcurrency: 256, reviewContext: ctx, reviewCancel: cancel, Classifier: classifier, AdminPassword: adminPassword, Timeout: 5 * time.Second}
+	return &Server{Updates: version.New(version.Version, version.Revision), transport: transport, Store: store, Security: security, MaxBodyBytes: 256 << 20, AsyncReviewConcurrency: 256, reviewContext: ctx, reviewCancel: cancel, Classifier: classifier, AdminPassword: adminPassword, Timeout: 5 * time.Second}
 }
 
 // Close releases idle outbound connections owned by this gateway.

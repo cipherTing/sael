@@ -3,7 +3,7 @@
   "private": true,
   "scripts": {
     "docker:up": "cd gateway/deploy && docker compose up -d --wait",
-    "docker:rebuild": "cd gateway/deploy && docker compose up -d --build --wait gateway",
+    "docker:rebuild": "cd gateway/deploy && docker compose -f compose.yaml -f compose.dev.yaml up -d --build --wait gateway",
     "docker:ps": "cd gateway/deploy && docker compose ps",
     "docker:logs": "cd gateway/deploy && docker compose logs -f gateway",
     "docker:down": "cd gateway/deploy && docker compose down"

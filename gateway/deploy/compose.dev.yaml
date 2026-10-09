@@ -1,0 +1,8 @@
+# Explicit source development only: docker compose -f compose.yaml -f compose.dev.yaml up -d --wait
+services:
+  gateway:
+    image: sael-gateway:dev
+    pull_policy: build
+    build:
+      context: ../..
+      dockerfile: gateway/deploy/Dockerfile

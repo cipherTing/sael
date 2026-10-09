@@ -190,7 +190,9 @@ it("refreshes the displayed RPM every thirty seconds", async () => {
   vi.useFakeTimers();
   let responses = 100;
   vi.mocked(request).mockImplementation(async (url) =>
-    String(url).includes("risk-sources")
+    String(url) === "/admin/version"
+      ? { current_version: "devel" }
+      : String(url).includes("risk-sources")
       ? { keys: [], ips: [] }
       : { ...data, current_rpm: ++responses },
   );
@@ -245,6 +247,12 @@ const data: Analytics = {
   models: ["gpt-test"],
 };
 function mount(initialEntry = "/", reviewAPIEnabled = false) {
+  const implementation = vi.mocked(request).getMockImplementation()!;
+  vi.mocked(request).mockImplementation((url, init) =>
+    url === "/admin/version"
+      ? Promise.resolve({ current_version: "devel" })
+      : implementation(url, init),
+  );
   return render(
     <QueryClientProvider
       client={

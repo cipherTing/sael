@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -18,9 +19,14 @@ import (
 	"github.com/cipherTing/sael/gateway/internal/config"
 	"github.com/cipherTing/sael/gateway/internal/gateway"
 	"github.com/cipherTing/sael/gateway/internal/store"
+	"github.com/cipherTing/sael/gateway/internal/version"
 )
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "--version" {
+		fmt.Printf("sael-gateway %s (%s)\n", version.Version, version.Revision)
+		return
+	}
 	if err := run(); err != nil {
 		slog.Error("gateway stopped", "error", err)
 		os.Exit(1)
@@ -115,7 +121,7 @@ func run() error {
 			}
 		}
 	}()
-	slog.Info("gateway listening", "admin", cfg.AdminListen, "ingress", cfg.Listen)
+	slog.Info("gateway listening", "version", version.Version, "revision", version.Revision, "admin", cfg.AdminListen, "ingress", cfg.Listen)
 	return serve(ctx, servers, process.Done())
 }
 

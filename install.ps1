@@ -178,14 +178,25 @@ function Resolve-Version {
         # fallback, and it is the one that reports the failure if it also fails.
         $tag = ''
     }
+    $tag = [Uri]::UnescapeDataString($tag)
+    if (-not $tag.StartsWith($TagPrefix + 'v') -or $tag.Length -le ($TagPrefix.Length + 1)) { $tag = '' }
 
     if (-not $tag) {
         try {
-            # Unauthenticated API calls are rate-limited per IP, which a shared
-            # build agent can exhaust; the redirect above needs no quota, which
-            # is why it is tried first rather than the other way round.
-            $releases = @(Invoke-RestMethod -UseBasicParsing -Uri "https://api.github.com/repos/$Repo/releases?per_page=1")
-            if ($releases.Count -gt 0) { $tag = $releases[0].tag_name }
+            # Releases share a repository, so scan only the CLI namespace,
+            # including subsequent pages when gateway/SDK releases come first.
+            $page = 1
+            do {
+                $releases = @(Invoke-RestMethod -UseBasicParsing -Uri "https://api.github.com/repos/$Repo/releases?per_page=100&page=$page")
+                foreach ($release in $releases) {
+                    $candidate = [string]$release.tag_name
+                    if ($candidate.StartsWith($TagPrefix + 'v') -and $candidate.Length -gt ($TagPrefix.Length + 1)) {
+                        $tag = $candidate
+                        break
+                    }
+                }
+                $page++
+            } while (-not $tag -and $releases.Count -eq 100)
         } catch {
             # Rate-limited or offline; the message below says what to do about it.
             $tag = ''

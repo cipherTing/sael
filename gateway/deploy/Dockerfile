@@ -1,21 +1,33 @@
-FROM node:22-alpine AS web
+FROM --platform=$BUILDPLATFORM node:22-alpine AS web
 WORKDIR /src/gateway/web
 COPY gateway/web/package.json gateway/web/package-lock.json ./
 RUN npm ci --include=optional && node --input-type=module -e "import 'rolldown'"
 COPY gateway/web/ ./
 RUN npm run build
 
-FROM golang:1.26-alpine AS go-build
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS go-build
 WORKDIR /src
+ARG TARGETOS
+ARG TARGETARCH
+ARG GATEWAY_VERSION=devel
+ARG GATEWAY_REVISION=unknown
 ARG GOPROXY=https://proxy.golang.org,direct
 ENV GOPROXY=${GOPROXY}
 COPY sdk/ ./sdk/
 COPY cli/ ./cli/
 COPY gateway/ ./gateway/
-RUN cd cli && CGO_ENABLED=0 go build -trimpath -o /out/sael ./cmd/sael
-RUN cd gateway && CGO_ENABLED=0 go build -trimpath -o /out/sael-gateway ./cmd/sael-gateway
+RUN cd cli && CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -o /out/sael ./cmd/sael
+RUN cd gateway && CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \
+    -ldflags="-s -w -X github.com/cipherTing/sael/gateway/internal/version.Version=$GATEWAY_VERSION -X github.com/cipherTing/sael/gateway/internal/version.Revision=$GATEWAY_REVISION" \
+    -o /out/sael-gateway ./cmd/sael-gateway
 
 FROM alpine:3.22
+ARG GATEWAY_VERSION=devel
+ARG GATEWAY_REVISION=unknown
+LABEL org.opencontainers.image.title="Sael Gateway" \
+      org.opencontainers.image.source="https://github.com/cipherTing/sael" \
+      org.opencontainers.image.version=$GATEWAY_VERSION \
+      org.opencontainers.image.revision=$GATEWAY_REVISION
 RUN apk add --no-cache ca-certificates && addgroup -S sael && adduser -S -G sael sael && mkdir -p /var/lib/sael /opt/sael/web && chown -R sael:sael /var/lib/sael
 COPY --from=go-build /out/sael-gateway /usr/local/bin/sael-gateway
 COPY --from=go-build /out/sael /usr/local/bin/sael

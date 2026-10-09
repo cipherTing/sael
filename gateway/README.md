@@ -5,17 +5,32 @@
 ## Docker Compose
 
 ```sh
-cd gateway/deploy
+mkdir -p sael && cd sael
+curl -fsSLO https://raw.githubusercontent.com/cipherTing/sael/main/gateway/deploy/compose.yaml
+curl -fsSLO https://raw.githubusercontent.com/cipherTing/sael/main/gateway/deploy/.env.example
 cp .env.example .env
 # 编辑 .env：填写密码和加密密钥
 # 用 openssl rand -base64 32 生成 CREDENTIAL_ENCRYPTION_KEY 并保存到 .env
-docker compose up --build -d
+docker compose up -d --wait
 docker compose ps
 ```
 
-也可在仓库根目录运行 `npm run docker:up` 启动，或用 `npm run docker:rebuild` 重建网关。其他命令见[根目录快速启动](../README.md#快速启动)。
+也可从 [网关 Releases](https://github.com/cipherTing/sael/releases?q=gateway%2F) 下载 `compose.yaml` 和 `.env.example`。已经克隆源码的用户可在 `gateway/deploy` 执行相同命令，或在仓库根目录执行 `npm run docker:up`。
 
-首次构建需要下载 Node.js、Go、Alpine、PostgreSQL 和 Redis 镜像。历史数据保存在 PostgreSQL 卷；Redis 卷保存待入库统计、异常记录和会话冻结；Redis 不可用时写入独立的本地暂存卷。
+默认网关镜像为 `sundayting/sael-gateway:latest`，正式镜像由 GitHub Actions 构建并发布到 Docker Hub；部署机器只拉取镜像。历史数据保存在 PostgreSQL 卷；Redis 卷保存待入库统计、异常记录和会话冻结；Redis 不可用时写入独立的本地暂存卷。
+
+### 版本与更新
+
+首页展示当前网关版本和更新状态。正式构建从 `gateway/vX.Y.Z` 标签注入版本号，独立于 CLI、SDK；源码构建显示 `devel`。更新检查只读取已发布的 `gateway/v*` Release，正式版只检查正式更新，预发布版也检查预发布更新。结果在服务内缓存 6 小时，失败缓存 10 分钟；“检查更新”可手动刷新，每分钟最多一次。网络失败会明确显示检查失败。
+
+在部署目录执行：
+
+```sh
+docker compose pull gateway
+docker compose up -d --no-deps --wait gateway
+```
+
+`latest` 会在拉取时获取当前发布镜像，运行中的容器需要执行上述命令才更新。固定版本或使用预发布时，直接把 `compose.yaml` 的 `:latest` 改成发布的精确标签，例如 `:0.1.0` 或 `:0.1.0-rc.1`。更新命令保留数据库及数据卷。
 
 | 默认地址 | 用途 |
 | --- | --- |
@@ -179,6 +194,15 @@ Sael 不预测 Jev 的 Token 数，而是直接按 Unicode 字符数限制待审
 ## 本地开发与测试
 
 网关需要 Go 1.26，前端使用 Node.js 22、React、shadcn/ui、ECharts、TanStack Query/Table 与 dnd-kit。
+
+需要在 Docker 中调试源码时，显式加载开发覆盖文件：
+
+```sh
+cd gateway/deploy
+docker compose -f compose.yaml -f compose.dev.yaml up -d --build --wait
+```
+
+开发覆盖文件使用本地 `sael-gateway:dev` 镜像。仓库根目录的 `npm run docker:rebuild` 使用这一配置；`docker:up` 使用正式发布镜像。其他管理命令为 `docker:ps`、`docker:logs`、`docker:down`。
 
 ```sh
 cd gateway

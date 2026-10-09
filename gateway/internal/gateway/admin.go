@@ -52,6 +52,8 @@ func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch {
+	case r.URL.Path == "/admin/version" && (r.Method == http.MethodGet || r.Method == http.MethodPost):
+		writeJSON(w, s.Updates.Check(r.Context(), r.Method == http.MethodPost))
 	case r.URL.Path == "/admin/logout" && r.Method == http.MethodPost:
 		s.logout(w, r)
 	case r.URL.Path == "/admin/session" && r.Method == http.MethodGet:

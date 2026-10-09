@@ -58,6 +58,7 @@ import {
 } from "../components/common";
 import { notifyRetry } from "../notifications";
 import ReviewAPIStats from "../components/ReviewAPIStats";
+import GatewayVersion from "../components/GatewayVersion";
 import "../dashboard.css";
 
 export default function DashboardPage({
@@ -165,6 +166,7 @@ export default function DashboardPage({
           {enabled ? "审查已开启" : "审查已关闭"}
         </span>
       </PageHeading>
+      <GatewayVersion />
       <div className="filterbar dashboard-filterbar">
         <Choice
           label="端点筛选"

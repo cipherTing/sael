@@ -634,3 +634,26 @@
     min-width: 450px;
   }
 }
+
+.gateway-version {
+  margin: -8px 0 20px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.gateway-version-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.gateway-version-status a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.gateway-update-help pre {
+  overflow-x: auto;
+  padding: 12px;
+  background: var(--muted);
+  border-radius: 6px;
+}

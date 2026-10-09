@@ -37,6 +37,7 @@ git:
   # shipped it.
   ignore_tags:
     - 'sdk/v*'
+    - 'gateway/v*'
 
 builds:
   - id: sael

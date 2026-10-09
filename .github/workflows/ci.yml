@@ -8,6 +8,10 @@ on:
     # `v*` would match neither.
     tags: ['v*', 'sdk/v*', 'cli/v*']
   pull_request:
+  workflow_call:
+    secrets:
+      TYPESAFE_API_KEY:
+        required: false
   schedule:
     # Weekly, so a dependency or toolchain change surfaces as a red build rather
     # than as a surprise in someone's pull request.
@@ -77,6 +81,19 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
+
+  release-tools:
+    name: release tag and installer resolution
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: python -m unittest discover -s scripts -p '*_test.py'
 
   docker:
     name: gateway Docker image

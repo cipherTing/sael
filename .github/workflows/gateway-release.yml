@@ -1,0 +1,119 @@
+name: Gateway release
+
+on:
+  push:
+    tags: ['gateway/v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gateway-release
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    uses: ./.github/workflows/ci.yml
+    secrets:
+      TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+
+  publish:
+    needs: checks
+    runs-on: ubuntu-latest
+    environment: 通用
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    env:
+      IMAGE: sundayting/sael-gateway
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Read the triggering gateway version
+        id: version
+        run: python3 scripts/gateway-release.py "$GITHUB_REF_NAME" "$IMAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Check Docker Hub configuration
+        env:
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          test -n "$DOCKERHUB_USERNAME" || { echo 'Set DOCKERHUB_USERNAME in the 通用 environment variables'; exit 1; }
+          test -n "$DOCKERHUB_TOKEN" || { echo 'Set DOCKERHUB_TOKEN in the 通用 environment secrets'; exit 1; }
+
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push gateway image
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: gateway/deploy/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.version.outputs.tags }}
+          build-args: |
+            GATEWAY_VERSION=${{ steps.version.outputs.version }}
+            GATEWAY_REVISION=${{ github.sha }}
+          cache-from: type=gha,scope=gateway-release
+          cache-to: type=gha,mode=max,scope=gateway-release
+
+      - name: Verify published platforms and running versions
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+        run: |
+          test "$(docker buildx imagetools inspect "$IMAGE:$VERSION" --format '{{.Manifest.Digest}}')" = "$DIGEST"
+          docker buildx imagetools inspect "$IMAGE@$DIGEST" --raw > "$RUNNER_TEMP/gateway-manifest.json"
+          python3 - "$RUNNER_TEMP/gateway-manifest.json" <<'PY'
+          import json, sys
+          with open(sys.argv[1]) as file:
+              manifests = json.load(file)['manifests']
+          platforms = {(m['platform']['os'], m['platform']['architecture']) for m in manifests}
+          assert {('linux', 'amd64'), ('linux', 'arm64')} <= platforms, platforms
+          PY
+          for platform in linux/amd64 linux/arm64; do
+            test "$(docker run --rm --platform "$platform" "$IMAGE@$DIGEST" --version)" = "sael-gateway $VERSION ($GITHUB_SHA)"
+          done
+          if [ "$PRERELEASE" = false ]; then
+            test "$(docker buildx imagetools inspect "$IMAGE:latest" --format '{{.Manifest.Digest}}')" = "$DIGEST"
+          fi
+
+      - name: Publish gateway GitHub Release and deployment files
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          notes="$RUNNER_TEMP/gateway-release-notes.md"
+          cat > "$notes" <<EOF
+          Docker Hub: https://hub.docker.com/r/$IMAGE
+
+          Image: \`$IMAGE:$VERSION\`
+          Digest: \`$DIGEST\`
+          Platforms: linux/amd64, linux/arm64
+          Source: $GITHUB_SHA
+
+          Download compose.yaml and .env.example, fill .env, then run:
+          \`docker compose up -d --wait\`
+
+          Update: \`docker compose pull gateway && docker compose up -d --no-deps --wait gateway\`
+          Stable releases use \`$IMAGE:latest\` by default. For a prerelease or a pinned deployment, set the image tag to \`:$VERSION\` in compose.yaml.
+          EOF
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release edit "$GITHUB_REF_NAME" --notes-file "$notes" --latest=false
+            gh release upload "$GITHUB_REF_NAME" gateway/deploy/compose.yaml gateway/deploy/.env.example --clobber
+          else
+            args=(--verify-tag --latest=false --title "Sael Gateway $VERSION" --notes-file "$notes")
+            if [ "$PRERELEASE" = true ]; then args+=(--prerelease); fi
+            gh release create "$GITHUB_REF_NAME" "${args[@]}" gateway/deploy/compose.yaml gateway/deploy/.env.example
+          fi
