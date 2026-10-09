@@ -8,7 +8,7 @@
 2. 创建专用于 Actions、具有镜像推送权限的 Docker Hub Personal Access Token。
 3. 在 GitHub 仓库 **Settings → Environments → 通用** 配置：环境变量 `DOCKERHUB_USERNAME=sundayting`，环境秘密 `DOCKERHUB_TOKEN` 为该 PAT。Token 直接填入 GitHub Secrets。
 
-网关发布 job 显式使用 `environment: 通用`，因此可以读取该环境中的变量和秘密。CI 检查 job 无需 Docker Hub 凭据。
+网关发布 job 显式使用 `environment.name: 通用`，因此可以读取该环境中的变量和秘密；`deployment: false` 避免为镜像发布创建服务器部署记录。CI 检查 job 无需 Docker Hub 凭据。
 
 发布 job 使用 GitHub 自动提供的 `GITHUB_TOKEN` 创建 Release，权限为 `contents: write`；CI job 只读仓库。
 

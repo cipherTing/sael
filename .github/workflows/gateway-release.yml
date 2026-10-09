@@ -20,7 +20,9 @@ jobs:
   publish:
     needs: checks
     runs-on: ubuntu-latest
-    environment: 通用
+    environment:
+      name: 通用
+      deployment: false
     timeout-minutes: 45
     permissions:
       contents: write

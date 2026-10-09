@@ -59,7 +59,7 @@ MODULES := sdk cli gateway
 STATICCHECK_VERSION := v0.8.1
 GOLANGCI_VERSION    := v2.13.2
 GORELEASER_VERSION  := v2.18.2
-ACTIONLINT_VERSION  := v1.7.7
+ACTIONLINT_VERSION  := v1.7.12
 
 STATICCHECK := $(GO) run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION)
 GOLANGCI    := $(GO) run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)

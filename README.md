@@ -4,7 +4,7 @@
 
 # Sael
 
-![Sael logo](docs/images/sael-logo.png)
+<img src="docs/images/sael-logo.png" alt="Sael logo" width="180">
 
 **让 AI 请求的安全规则可配置、可验证、可追踪**
 
