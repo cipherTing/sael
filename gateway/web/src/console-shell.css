@@ -35,7 +35,8 @@
   border-bottom-color: #e7ebf2;
 }
 .content {
-  padding: 22px 24px 32px;
+  --content-padding-top: 22px;
+  padding: var(--content-padding-top) 24px 32px;
 }
 .page-heading h1 {
   color: #273449;
@@ -89,6 +90,7 @@
     padding-inline: 20px;
   }
   .content {
+    --content-padding-top: 20px;
     padding: 20px;
   }
 }
@@ -100,6 +102,7 @@
     padding-inline: 16px;
   }
   .content {
-    padding: 18px 16px 28px;
+    --content-padding-top: 18px;
+    padding: var(--content-padding-top) 16px 28px;
   }
 }

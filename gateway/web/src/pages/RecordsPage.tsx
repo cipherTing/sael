@@ -213,6 +213,19 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
             ),
           },
           {
+            id: "source",
+            header: "来源",
+            cell: ({ row }) => (
+              <span
+                className={`record-source ${row.original.request_source === "review_api" ? "review" : "gateway"}`}
+              >
+                {row.original.request_source === "review_api"
+                  ? "HTTP 审查"
+                  : "网关请求"}
+              </span>
+            ),
+          },
+          {
             id: "credential",
             header: "调用密钥",
             cell: ({ row }) => (
@@ -310,7 +323,10 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
                     : "放行"}
                 </span>
               ) : (
-                <ActionBadge action={row.original.decision.action} />
+                <ActionBadge
+                  action={row.original.decision.action}
+                  reason={row.original.decision.reason}
+                />
               ),
           },
           {
@@ -487,6 +503,17 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
                 value: e.id,
                 label: <EndpointLabel id={e.id} compact />,
               })),
+            ]}
+          />
+          <Choice
+            label="请求来源"
+            visibleLabel="来源"
+            value={params.get("request_source") || ""}
+            onChange={(value) => filter("request_source", value)}
+            options={[
+              { value: "", label: "全部来源" },
+              { value: "gateway", label: "网关请求" },
+              { value: "review_api", label: "HTTP 审查" },
             ]}
           />
           {kind === "hit" && (
@@ -729,8 +756,18 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
             <div className="record-detail-body">
               <section className="record-result-summary" aria-label="处理摘要">
                 <div className="record-result-line">
+                  <span
+                    className={`record-source ${current.request_source === "review_api" ? "review" : "gateway"}`}
+                  >
+                    {current.request_source === "review_api"
+                      ? "HTTP 审查"
+                      : "网关请求"}
+                  </span>
                   {current.kind === "hit" ? (
-                    <ActionBadge action={current.decision.action} />
+                    <ActionBadge
+                      action={current.decision.action}
+                      reason={current.decision.reason}
+                    />
                   ) : (
                     <>
                       <span
@@ -747,6 +784,21 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
                             : "Jev 调用失败")}
                       </span>
                     </>
+                  )}
+                  {current.execution_mode && (
+                    <span className="subtle-badge">
+                      {current.execution_mode === "blocking"
+                        ? "同步审核"
+                        : "后台审核"}
+                    </span>
+                  )}
+                  {current.decision.review_mode && (
+                    <span className="subtle-badge">
+                      场景：
+                      {current.decision.review_mode === "blocking"
+                        ? "阻塞"
+                        : "非阻塞"}
+                    </span>
                   )}
                   {current.decision.scene_name && (
                     <span className="record-effective-scene">
@@ -911,11 +963,11 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
                 {current.error_kind === "classifier_input_too_long" && (
                   <div className="record-input-limit">
                     <span>
-                      估算输入{" "}
+                      输入字符数{" "}
                       <b>
-                        {current.input_tokens_estimated === undefined
+                        {current.input_chars === undefined
                           ? "—"
-                          : `${count(current.input_tokens_estimated)} Token`}
+                          : `${count(current.input_chars)} 字符`}
                       </b>
                     </span>
                     <span>
@@ -923,7 +975,7 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
                       <b>
                         {current.jev_input_limit === undefined
                           ? "—"
-                          : `${count(current.jev_input_limit)} Token`}
+                          : `${count(current.jev_input_limit)} 字符`}
                       </b>
                     </span>
                   </div>

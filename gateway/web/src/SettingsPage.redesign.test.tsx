@@ -100,7 +100,7 @@ it("keeps save and discard actions available while viewing the trial tab", async
   fireEvent.click(screen.getByRole("button", { name: "保存并生效" }));
   await waitFor(() => expect(save).toHaveBeenCalledOnce());
   expect(save.mock.calls[0][0]).toEqual({
-    scenes: [{ ...policy.scenes[0], name: "新的名称" }],
+    scenes: [{ ...policy.scenes[0], name: "新的名称", review_mode: "blocking" }],
   });
 });
 

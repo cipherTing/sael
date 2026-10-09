@@ -6,7 +6,8 @@ import "../record-detail.css";
 
 type Comparison = {
   question: string;
-  value: number;
+  value?: number;
+  record_only?: boolean;
   threshold: number;
   matched: boolean;
 };
@@ -24,10 +25,14 @@ export function ScoreBreakdown({
   const samples = [
     ...scores,
     ...hits
-      .filter((hit) => !scores.some((score) => score.question === hit.question))
+      .filter(
+        (hit) =>
+          hit.value !== undefined &&
+          !scores.some((score) => score.question === hit.question),
+      )
       .map((hit) => ({
         question: hit.question,
-        value: hit.value,
+        value: hit.value!,
         type:
           hit.question === "gore" || hit.question === "sexual"
             ? "score"
@@ -63,10 +68,38 @@ export function ScoreBreakdown({
         max,
         threshold,
         matched: threshold !== undefined && score.value > threshold,
+        recordOnly: comparison?.record_only ?? hit?.record_only,
       },
     ];
   });
-  if (!rows.length) return null;
+  if (!rows.length) {
+    const facts = comparisons.length
+      ? comparisons
+      : hits.map((hit) => ({ ...hit, matched: true }));
+    if (!facts.length) return null;
+    return (
+      <section className="score-breakdown">
+        <h3>条件判定</h3>
+        <p>缓存判定，无原始分数</p>
+        <div className="risk-score-grid">
+          {facts.map((fact) => (
+            <article
+              key={fact.question}
+              className={`risk-score-card ${fact.matched ? "reached" : ""}`}
+            >
+              <strong>{questionName(fact.question)}</strong>
+              <p>阈值 &gt; {fact.threshold}</p>
+              <p>
+                {fact.matched ? "已命中" : "未命中"}
+                {fact.record_only !== undefined &&
+                  ` · ${fact.record_only ? "仅记录" : "拒绝"}`}
+              </p>
+            </article>
+          ))}
+        </div>
+      </section>
+    );
+  }
   const reached = rows.filter((row) => row.matched),
     below = rows.filter((row) => !row.matched && row.threshold !== undefined),
     unconfigured = rows.filter((row) => row.threshold === undefined);
@@ -122,6 +155,11 @@ export function ScoreBreakdown({
                 style={{ left: `${(100 * row.value) / row.max}%` }}
               />
             </div>
+            {row.recordOnly !== undefined && (
+              <p className="risk-condition-disposition">
+                命中处置：{row.recordOnly ? "仅记录" : "拒绝"}
+              </p>
+            )}
             <div className="risk-score-scale">
               {(row.max === 3 ? [0, 1, 2, 3] : [0, 1]).map((tick) => (
                 <span key={tick}>{tick}</span>

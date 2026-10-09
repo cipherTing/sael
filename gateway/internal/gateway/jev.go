@@ -9,12 +9,12 @@ import (
 
 // JevConfig is the saved connection used for production and operator tests.
 type JevConfig struct {
-	BaseURL        string    `json:"base_url"`
-	Model          string    `json:"model"`
-	APIKey         string    `json:"api_key"`
-	TimeoutMS      int       `json:"timeout_ms"`
-	MaxInputTokens int       `json:"max_input_tokens"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	BaseURL       string    `json:"base_url"`
+	Model         string    `json:"model"`
+	APIKey        string    `json:"api_key"`
+	TimeoutMS     int       `json:"timeout_ms"`
+	MaxInputChars int       `json:"max_input_chars"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 func (c JevConfig) timeout() time.Duration {
@@ -31,7 +31,7 @@ func (c JevConfig) validate() error {
 	if c.TimeoutMS < 0 || c.TimeoutMS > 120000 {
 		return errors.New("分类器超时须在 1–120000 毫秒之间")
 	}
-	if c.MaxInputTokens < 0 {
+	if c.MaxInputChars < 0 {
 		return errors.New("送审上限必须是正整数")
 	}
 	u, err := url.Parse(c.BaseURL)
@@ -43,11 +43,11 @@ func (c JevConfig) validate() error {
 
 func (c JevConfig) public() any {
 	return struct {
-		BaseURL        string    `json:"base_url"`
-		Model          string    `json:"model"`
-		APIKeySet      bool      `json:"api_key_set"`
-		TimeoutMS      int       `json:"timeout_ms"`
-		MaxInputTokens int       `json:"max_input_tokens"`
-		UpdatedAt      time.Time `json:"updated_at"`
+		BaseURL       string    `json:"base_url"`
+		Model         string    `json:"model"`
+		APIKeySet     bool      `json:"api_key_set"`
+		TimeoutMS     int       `json:"timeout_ms"`
+		MaxInputChars int       `json:"max_input_chars"`
+		UpdatedAt     time.Time `json:"updated_at"`
 	}{c.BaseURL, c.Model, c.APIKey != "", int(c.timeout().Milliseconds()), c.inputLimit(), c.UpdatedAt}
 }

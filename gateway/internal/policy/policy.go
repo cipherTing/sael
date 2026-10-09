@@ -34,6 +34,16 @@ var Questions = []Question{
 // Action determines whether a hit is forwarded or blocked.
 type Action string
 
+// ReviewMode determines when a gateway request waits for classification.
+type ReviewMode string
+
+const (
+	// Blocking waits for classification before forwarding.
+	Blocking ReviewMode = "blocking"
+	// NonBlocking classifies after forwarding and can only record hits.
+	NonBlocking ReviewMode = "non_blocking"
+)
+
 const (
 	// Allow records a hit and forwards the original request.
 	Allow Action = "allow"
@@ -53,9 +63,19 @@ const (
 
 // Condition compares one classifier score with a threshold belonging to a scene.
 type Condition struct {
-	Question  string  `json:"question"`
-	Threshold float64 `json:"threshold"`
+	Question   string  `json:"question"`
+	Threshold  float64 `json:"threshold"`
+	RecordOnly bool    `json:"record_only,omitempty"`
 }
+
+// ConditionKey identifies a comparison independently of its disposition.
+type ConditionKey struct {
+	Question  string
+	Threshold float64
+}
+
+// Key excludes disposition from the identity of a threshold comparison.
+func (c Condition) Key() ConditionKey { return ConditionKey{c.Question, c.Threshold} }
 
 // Scene combines score conditions into one ordered action rule.
 type Scene struct {
@@ -67,11 +87,46 @@ type Scene struct {
 	Questions              []string    `json:"questions,omitempty"` // Legacy policies are converted on load.
 	Match                  Match       `json:"match"`
 	Action                 Action      `json:"action"`
+	ReviewMode             ReviewMode  `json:"review_mode,omitempty"`
 	Enabled                *bool       `json:"enabled,omitempty"`
 	Endpoints              []string    `json:"endpoints,omitempty"`
 	Models                 []string    `json:"models,omitempty"`
 	SessionBlockEnabled    bool        `json:"session_block_enabled,omitempty"`
 	SessionBlockTTLSeconds int         `json:"session_block_ttl_seconds,omitempty"`
+}
+
+// Mode also supports policies that have not yet been converted on load.
+func (s Scene) Mode() ReviewMode {
+	if s.ReviewMode != "" {
+		return s.ReviewMode
+	}
+	if s.Action == Allow {
+		return NonBlocking
+	}
+	return Blocking
+}
+
+func (s Scene) recordsOnly(c Condition) bool {
+	if s.ReviewMode == "" {
+		return s.Action == Allow
+	}
+	if s.Match == All {
+		return s.Action == Allow
+	}
+	return c.RecordOnly
+}
+
+// CanReject controls configuration of freezing, not whether this input hits.
+func (s Scene) CanReject() bool {
+	if s.Mode() == NonBlocking {
+		return false
+	}
+	for _, c := range s.Conditions {
+		if !s.recordsOnly(c) {
+			return true
+		}
+	}
+	return false
 }
 
 // Active preserves the enabled state of scenes created before per-scene switches existed.
@@ -114,6 +169,7 @@ func RequiredQuestions(p Policy, endpoint, model string) []string {
 type Policy struct {
 	TrustedKeyIdleDays int                `json:"trusted_key_idle_days"`
 	Enabled            bool               `json:"enabled"`
+	ReviewAPIEnabled   bool               `json:"review_api_enabled"`
 	Thresholds         map[string]float64 `json:"thresholds,omitempty"` // Legacy policies are converted on load.
 	Scenes             []Scene            `json:"scenes"`
 	UnmatchedAction    Action             `json:"unmatched_action,omitempty"` // Legacy policies are converted on load.
@@ -150,19 +206,22 @@ type Answer struct {
 
 // Hit preserves a score and the threshold it exceeded.
 type Hit struct {
-	Question  string  `json:"question"`
-	Value     float64 `json:"value"`
-	Threshold float64 `json:"threshold"`
+	Question   string   `json:"question"`
+	Value      *float64 `json:"value,omitempty"`
+	Threshold  float64  `json:"threshold"`
+	RecordOnly *bool    `json:"record_only,omitempty"`
 }
 
 // Decision holds the first matching scene and final action.
 type Decision struct {
-	Action        Action   `json:"action"`
-	Hits          []Hit    `json:"hits"`
-	SceneID       string   `json:"scene_id,omitempty"`
-	SceneName     string   `json:"scene_name,omitempty"`
-	ScenePriority int      `json:"scene_priority,omitempty"`
-	AlsoMatched   []string `json:"also_matched,omitempty"`
+	Action        Action     `json:"action"`
+	ReviewMode    ReviewMode `json:"review_mode,omitempty"`
+	Reason        string     `json:"reason,omitempty"`
+	Hits          []Hit      `json:"hits"`
+	SceneID       string     `json:"scene_id,omitempty"`
+	SceneName     string     `json:"scene_name,omitempty"`
+	ScenePriority int        `json:"scene_priority,omitempty"`
+	AlsoMatched   []string   `json:"also_matched,omitempty"`
 }
 
 // UpgradeLegacy moves the old shared thresholds into each scene once.
@@ -180,6 +239,24 @@ func UpgradeLegacy(p *Policy) {
 			}
 		}
 		scene.Questions = nil
+		if scene.ReviewMode == "" && (scene.Action == Allow || scene.Action == Block) {
+			scene.ReviewMode = scene.Mode()
+			for j := range scene.Conditions {
+				scene.Conditions[j].RecordOnly = scene.Action == Allow
+			}
+			if scene.Action == Allow {
+				scene.SessionBlockEnabled = false
+			}
+		}
+		if scene.Match == Any && scene.ReviewMode != "" {
+			scene.Action = Allow
+			for _, c := range scene.Conditions {
+				if !c.RecordOnly {
+					scene.Action = Block
+					break
+				}
+			}
+		}
 		if len(scene.Endpoints) > 0 {
 			normalized := []string{}
 			for _, endpoint := range scene.Endpoints {
@@ -245,6 +322,19 @@ func Validate(p Policy) error {
 	}
 	seen := map[string]bool{}
 	for _, scene := range p.Scenes {
+		if scene.ReviewMode != "" && scene.ReviewMode != Blocking && scene.ReviewMode != NonBlocking {
+			return fmt.Errorf("场景 %s 的审查方式无效", scene.Name)
+		}
+		if scene.ReviewMode == NonBlocking {
+			for _, c := range scene.Conditions {
+				if !scene.recordsOnly(c) {
+					return fmt.Errorf("非阻塞场景 %s 只能仅记录", scene.Name)
+				}
+			}
+		}
+		if scene.ReviewMode != "" && scene.SessionBlockEnabled && !scene.CanReject() {
+			return fmt.Errorf("仅记录场景 %s 不能冻结会话", scene.Name)
+		}
 		if scene.SessionBlockEnabled && (scene.SessionBlockTTLSeconds < 1 || scene.SessionBlockTTLSeconds > 9223372036) {
 			return fmt.Errorf("场景 %s 的会话冻结时长无效", scene.Name)
 		}
@@ -295,10 +385,11 @@ func Validate(p Policy) error {
 
 // ConditionTrace preserves the actual comparison used during a simulation.
 type ConditionTrace struct {
-	Question  string  `json:"question"`
-	Value     float64 `json:"value"`
-	Threshold float64 `json:"threshold"`
-	Matched   bool    `json:"matched"`
+	Question   string   `json:"question"`
+	Value      *float64 `json:"value,omitempty"`
+	Threshold  float64  `json:"threshold"`
+	Matched    bool     `json:"matched"`
+	RecordOnly *bool    `json:"record_only,omitempty"`
 }
 
 // SceneTrace explains why a scene was selected or skipped.
@@ -325,14 +416,6 @@ func Evaluate(p Policy, answers []Answer, endpoint ...string) (Decision, error) 
 
 // EvaluateDetailed produces the production decision and its comparison trace in one pass.
 func EvaluateDetailed(p Policy, answers []Answer, endpoint string, model ...string) (Decision, []SceneTrace, error) {
-	if err := Validate(p); err != nil {
-		return Decision{}, nil, err
-	}
-	decision := Decision{Action: Allow, Hits: []Hit{}, AlsoMatched: []string{}}
-	traces := []SceneTrace{}
-	if !p.Enabled {
-		return decision, traces, nil
-	}
 	requestModel := ""
 	if len(model) > 0 {
 		requestModel = model[0]
@@ -341,8 +424,39 @@ func EvaluateDetailed(p Policy, answers []Answer, endpoint string, model ...stri
 	if err != nil {
 		return Decision{}, nil, err
 	}
+	return evaluateConditions(p, endpoint, requestModel, func(c Condition) (*float64, bool, error) {
+		value := byKey[c.Question].Value
+		return &value, value > c.Threshold, nil
+	})
+}
+
+// EvaluatePredicates reuses condition facts without fabricating classifier scores.
+func EvaluatePredicates(p Policy, facts map[ConditionKey]bool, endpoint, model string) (Decision, []SceneTrace, error) {
+	return evaluateConditions(p, endpoint, model, func(c Condition) (*float64, bool, error) {
+		matched, ok := facts[c.Key()]
+		if !ok {
+			return nil, false, fmt.Errorf("missing cached condition %s", c.Question)
+		}
+		return nil, matched, nil
+	})
+}
+
+func evaluateConditions(p Policy, endpoint, requestModel string, compare func(Condition) (*float64, bool, error)) (Decision, []SceneTrace, error) {
+	if err := Validate(p); err != nil {
+		return Decision{}, nil, err
+	}
+	decision := Decision{Action: Allow, Hits: []Hit{}, AlsoMatched: []string{}}
+	traces := []SceneTrace{}
+	if !p.Enabled {
+		return decision, traces, nil
+	}
 	for i, scene := range p.Scenes {
 		trace := SceneTrace{ID: scene.ID, Name: scene.Name, Status: "not_matched", Conditions: []ConditionTrace{}}
+		if decision.SceneID != "" {
+			trace.Status = "priority_skipped"
+			traces = append(traces, trace)
+			continue
+		}
 		if !scene.Active() {
 			trace.Status = "disabled"
 			traces = append(traces, trace)
@@ -359,23 +473,37 @@ func EvaluateDetailed(p Policy, answers []Answer, endpoint string, model ...stri
 			continue
 		}
 		hits := []Hit{}
+		action := Allow
 		for _, condition := range scene.Conditions {
-			value := byKey[condition.Question].Value
-			matched := value > condition.Threshold
-			trace.Conditions = append(trace.Conditions, ConditionTrace{condition.Question, value, condition.Threshold, matched})
+			value, matched, err := compare(condition)
+			if err != nil {
+				return Decision{}, nil, err
+			}
+			recordOnly := scene.recordsOnly(condition)
+			trace.Conditions = append(trace.Conditions, ConditionTrace{condition.Question, value, condition.Threshold, matched, &recordOnly})
 			if matched {
-				hits = append(hits, Hit{condition.Question, value, condition.Threshold})
+				hits = append(hits, Hit{condition.Question, value, condition.Threshold, &recordOnly})
+				if !recordOnly {
+					action = Block
+				}
 			}
 		}
 		matched := (scene.Match == Any && len(hits) > 0) || (scene.Match == All && len(hits) == len(scene.Conditions))
 		if matched {
-			if decision.SceneID == "" {
-				decision.SceneID, decision.SceneName, decision.ScenePriority, decision.Action, decision.Hits = scene.ID, scene.Name, i+1, scene.Action, hits
-				trace.Status = "effective"
-			} else {
-				decision.AlsoMatched = append(decision.AlsoMatched, scene.ID)
-				trace.Status = "shadowed"
+			decision.SceneID, decision.SceneName, decision.ScenePriority, decision.Action, decision.Hits = scene.ID, scene.Name, i+1, action, hits
+			decision.ReviewMode = scene.Mode()
+			decision.Reason = "reject"
+			if action == Allow {
+				switch {
+				case scene.Mode() == NonBlocking:
+					decision.Reason = "non_blocking"
+				case scene.Match == All:
+					decision.Reason = "scene_record_only"
+				default:
+					decision.Reason = "condition_record_only"
+				}
 			}
+			trace.Status = "effective"
 		}
 		traces = append(traces, trace)
 	}

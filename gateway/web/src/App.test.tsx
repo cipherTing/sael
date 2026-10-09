@@ -1,16 +1,31 @@
 import {
   cleanup,
+  configure,
   fireEvent,
   render,
   screen,
   waitFor,
 } from "@testing-library/react";
 import { BrowserRouter } from "react-router";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 import App from "./App";
+configure({ asyncUtilTimeout: 5000 });
+// Load real route modules before asserting on the UI. Cold Vite transforms
+// otherwise consume the DOM wait timeout before Suspense can render a page.
+beforeAll(async () => {
+  await Promise.all([
+    import("./pages/DashboardPage"),
+    import("./pages/RecordsPage"),
+    import("./SettingsPage"),
+    import("./pages/SettingsConsole"),
+    import("./JevSettingsPage"),
+    import("./pages/ReviewAPIPage"),
+  ]);
+}, 60000);
 const policy = {
   enabled: false,
+  review_api_enabled: false,
   scenes: [],
   preview_chars: null,
   retention_days: null,
@@ -72,8 +87,78 @@ it("logs in and exposes four pages with access inside settings", async () => {
   expect(repository.querySelector("img")?.getAttribute("src")).toBe(
     "/brands/github.svg",
   );
+  expect(
+    screen.getAllByRole("img", { name: "Sael" })[0].getAttribute("src"),
+  ).toBe("/sael-logo.png");
   expect(screen.queryByRole("link", { name: "接入配置" })).toBeNull();
 }, 30000);
+it("opens the review integration from Settings and persists its independent switch", async () => {
+  window.history.pushState({}, "", "/review-api");
+  let current = { ...policy, review_api_enabled: false };
+  const fetch = vi.fn(async (path: string, init?: RequestInit) => {
+    if (path === "/admin/policy") {
+      if (init?.method === "PATCH")
+        current = { ...current, ...JSON.parse(init.body as string) };
+      return Response.json(current);
+    }
+    if (path.startsWith("/admin/review-api/overview"))
+      return Response.json({
+        requests: 40,
+        rpm: 3,
+        allowed: 25,
+        hits: 10,
+        blocked: 6,
+        errors: 5,
+        cache_hits: 4,
+        p50_ms: 25,
+        p95_ms: 500,
+        outcomes: [],
+        scenes: [],
+        keys: [],
+        trend: [],
+      });
+    if (path === "/admin/access")
+      return Response.json({
+        ingress_url: "http://localhost:8081",
+        endpoints: [
+          { id: "openai_responses", name: "Responses", path: "/v1/responses" },
+        ],
+      });
+    return Response.json({ authenticated: true });
+  });
+  vi.stubGlobal("fetch", fetch);
+  render(
+    <BrowserRouter>
+      <App />
+    </BrowserRouter>,
+  );
+  const enable = await screen.findByRole(
+    "switch",
+    { name: "HTTP 审核接口" },
+    { timeout: 10000 },
+  );
+  expect(screen.getByRole("link", { name: "设置" })).toBeTruthy();
+  expect(screen.queryByRole("link", { name: "审核 API" })).toBeNull();
+  expect(await screen.findByRole("tab", { name: "接入说明" })).toBeTruthy();
+  expect(screen.getByText("http://localhost:8081/v1/moderations")).toBeTruthy();
+  expect(screen.getByText("openai_responses")).toBeTruthy();
+  fireEvent.click(enable);
+  const toggle = await screen.findByRole("switch", { name: "HTTP 审核接口" });
+  expect(await screen.findByText("接口已启用")).toBeTruthy();
+  expect(current.review_api_enabled).toBe(true);
+  expect(current.enabled).toBe(false);
+  fireEvent.click(toggle);
+  await screen.findByText("接口未启用");
+  expect(current.review_api_enabled).toBe(false);
+  expect(
+    fetch.mock.calls
+      .filter(
+        ([path, init]) => path === "/admin/policy" && init?.method === "PATCH",
+      )
+      .map(([, init]) => JSON.parse(init!.body as string)),
+  ).toEqual([{ review_api_enabled: true }, { review_api_enabled: false }]);
+}, 20000);
+
 it("preserves endpoint, error and exact time filters on the next records page", async () => {
   window.history.pushState(
     {},
@@ -179,7 +264,7 @@ it.each([true, false])(
           model: "jev-test",
           api_key_set: true,
           timeout_ms: 5000,
-          max_input_tokens: 28800,
+          max_input_chars: 5000,
         });
       if (path === "/admin/runtime")
         return Response.json({ classifier: "not_checked" });
@@ -279,7 +364,7 @@ it.each([
             model: "jev-test",
             api_key_set: true,
             timeout_ms: 5000,
-            max_input_tokens: 28800,
+            max_input_chars: 5000,
           });
         if (path === "/admin/runtime") {
           runtimeCalls++;
@@ -429,7 +514,7 @@ it("saves configurable trusted-key inactivity without losing the scenes", async 
           base_url: "https://example.test",
           model: "jev",
           timeout_ms: 5000,
-          max_input_tokens: 28800,
+          max_input_chars: 5000,
         });
       if (path.startsWith("/admin/trusted-keys"))
         return Response.json({ items: [], total: 0 });
@@ -541,7 +626,11 @@ it("loads full record text before using a record as a scene sample", async () =>
       <App />
     </BrowserRouter>,
   );
-  const input = await screen.findByRole("textbox", { name: "测试文本" });
+  const input = await screen.findByRole(
+    "textbox",
+    { name: "测试文本" },
+    { timeout: 10000 },
+  );
   await waitFor(() =>
     expect((input as HTMLTextAreaElement).value).toBe(
       "完整用户输入，应该进入试算",

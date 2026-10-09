@@ -1,6 +1,11 @@
-import type { Action } from "./policy";
+import type { Action, ReviewMode } from "./policy";
 
-export type Hit = { question: string; value: number; threshold: number };
+export type Hit = {
+  question: string;
+  value?: number;
+  threshold: number;
+  record_only?: boolean;
+};
 export type Answer = { question: string; type: string; value: number };
 export type RequestParameters = {
   reasoning_effort?: string;
@@ -28,7 +33,10 @@ export type Event = {
   request_bytes?: number;
   credential_id?: string;
   masked_key?: string;
+  execution_mode?: ReviewMode;
   review_source?: "jev" | "cache";
+  request_source?: "gateway" | "review_api";
+  review_api_key_id?: string;
   endpoint_group?: string;
   image_operation?: "generation" | "edit";
   client_ip?: string;
@@ -45,7 +53,8 @@ export type Event = {
     status: string;
     conditions: {
       question: string;
-      value: number;
+      value?: number;
+      record_only?: boolean;
       threshold: number;
       matched: boolean;
     }[];
@@ -65,11 +74,12 @@ export type Event = {
   scores?: Answer[];
   classifier_ms?: number;
   error_kind?: string;
-  input_tokens_estimated?: number;
   input_chars?: number;
   jev_input_limit?: number;
   decision: {
     action: Action;
+    review_mode?: ReviewMode;
+    reason?: string;
     hits: Hit[];
     scene_id?: string;
     scene_name?: string;

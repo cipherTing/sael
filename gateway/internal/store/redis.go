@@ -27,11 +27,12 @@ const sessionPrefix = "sael:session:"
 const telemetryShutdownTimeout = 5 * time.Second
 
 type ingestBatch struct {
-	RPM      []rpmPoint      `json:"rpm,omitempty"`
-	Producer string          `json:"producer"`
-	Sequence int64           `json:"sequence"`
-	Rows     []aggregateRow  `json:"rows,omitempty"`
-	Events   []gateway.Event `json:"events,omitempty"`
+	RPM         []rpmPoint              `json:"rpm,omitempty"`
+	Producer    string                  `json:"producer"`
+	Sequence    int64                   `json:"sequence"`
+	Rows        []aggregateRow          `json:"rows,omitempty"`
+	Events      []gateway.Event         `json:"events,omitempty"`
+	ReviewStats []gateway.ReviewAPIStat `json:"review_api_stats,omitempty"`
 }
 type configSnapshot struct {
 	policy   policy.Policy
@@ -39,9 +40,10 @@ type configSnapshot struct {
 	upstream gateway.UpstreamConfig
 }
 type ingestItem struct {
-	rpm   *rpmPoint
-	count *gateway.Count
-	event *gateway.Event
+	rpm    *rpmPoint
+	count  *gateway.Count
+	event  *gateway.Event
+	review *gateway.ReviewAPIStat
 }
 
 // RedisStore serves configuration from memory and durably batches telemetry in Redis.
@@ -224,6 +226,11 @@ func (s *RedisStore) WriteEvent(ctx context.Context, e gateway.Event) error {
 	return s.enqueue(ctx, ingestItem{event: &e})
 }
 
+// RecordReviewAPIStat queues an independent review API measurement.
+func (s *RedisStore) RecordReviewAPIStat(ctx context.Context, stat gateway.ReviewAPIStat) error {
+	return s.enqueue(ctx, ingestItem{review: &stat})
+}
+
 func (s *RedisStore) produce() {
 	defer close(s.producerDone)
 	producerCtx := s.producerCtx
@@ -268,6 +275,7 @@ func (s *RedisStore) produce() {
 		timer.Stop()
 		a := newAggregate()
 		var events []gateway.Event
+		var reviewStats []gateway.ReviewAPIStat
 		for _, item := range items {
 			if item.count != nil {
 				a.add(*item.count)
@@ -275,9 +283,12 @@ func (s *RedisStore) produce() {
 			if item.event != nil {
 				events = append(events, *item.event)
 			}
+			if item.review != nil {
+				reviewStats = append(reviewStats, *item.review)
+			}
 		}
 		sequence++
-		batch := ingestBatch{Producer: producer, Sequence: sequence, Rows: a.rows(), Events: events, RPM: collectRPM(items)}
+		batch := ingestBatch{Producer: producer, Sequence: sequence, Rows: a.rows(), Events: events, ReviewStats: reviewStats, RPM: collectRPM(items)}
 		for {
 			ctx, cancel := context.WithTimeout(producerCtx, 250*time.Millisecond)
 			err := s.persist(ctx, batch)

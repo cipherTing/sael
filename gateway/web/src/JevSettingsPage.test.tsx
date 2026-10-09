@@ -16,18 +16,43 @@ const config = {
   updated_at: "",
 };
 afterEach(cleanup);
-it("defaults to the Jev token budget and prevents disabling the guard with zero", () => {
+it("defaults to 5000 characters and prevents disabling the guard with zero", () => {
   render(<JevSettingsPage config={config} onSave={vi.fn()} onTest={vi.fn()} />);
   const limit = screen.getByRole("spinbutton", {
-    name: "送审上限（估算 Token）",
+    name: "送审上限（字符）",
   }) as HTMLInputElement;
-  expect(limit.value).toBe("28800");
+  expect(limit.value).toBe("5000");
   fireEvent.change(limit, { target: { value: "0" } });
   expect(
     screen
       .getByRole("button", { name: "保存 Jev 配置" })
       .hasAttribute("disabled"),
   ).toBe(true);
+});
+
+it("saves the edited character limit", async () => {
+  const onSave = vi
+    .fn()
+    .mockResolvedValue({ ...config, max_input_chars: 5000 });
+  render(
+    <JevSettingsPage
+      config={{ ...config, max_input_chars: 5000 }}
+      onSave={onSave}
+      onTest={vi.fn()}
+    />,
+  );
+  expect(
+    (screen.getByLabelText("送审上限（字符）") as HTMLInputElement).value,
+  ).toBe("5000");
+  fireEvent.change(screen.getByLabelText("送审上限（字符）"), {
+    target: { value: "6000" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "保存 Jev 配置" }));
+  await waitFor(() =>
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({ max_input_chars: 6000 }),
+    ),
+  );
 });
 it("requires a key for the first save and clears its input after saving", async () => {
   const onSave = vi.fn().mockResolvedValue(config);
@@ -59,7 +84,7 @@ it("requires a key for the first save and clears its input after saving", async 
       model: "jev-test",
       api_key: "secret-key",
       timeout_ms: 5000,
-      max_input_tokens: 28800,
+      max_input_chars: 5000,
     }),
   );
   await waitFor(() =>

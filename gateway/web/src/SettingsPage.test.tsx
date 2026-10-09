@@ -37,6 +37,68 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it("edits record-only conditions independently of blocking review", async () => {
+  const save = vi.fn().mockResolvedValue(undefined);
+  render(<SettingsPage policy={policy} onSave={save} />);
+  fireEvent.click(screen.getByRole("button", { name: "满足任一" }));
+  fireEvent.click(screen.getByRole("switch", { name: "血腥程度仅记录" }));
+  expect(
+    screen
+      .getByRole("button", { name: "阻塞性审查" })
+      .getAttribute("aria-pressed"),
+  ).toBe("true");
+  fireEvent.click(screen.getByRole("button", { name: "保存并生效" }));
+  await waitFor(() => expect(save).toHaveBeenCalledOnce());
+  expect(save.mock.calls[0][0].scenes[0]).toMatchObject({
+    review_mode: "blocking",
+    conditions: [
+      { question: "gore", record_only: true },
+      { question: "self_harm" },
+    ],
+  });
+});
+
+it("converts whole-scene recording to condition switches and disables freezing", async () => {
+  const save = vi.fn().mockResolvedValue(undefined);
+  render(<SettingsPage policy={policy} onSave={save} />);
+  fireEvent.click(screen.getByRole("button", { name: "仅记录" }));
+  expect(
+    screen
+      .getByRole("switch", { name: "命中后冻结会话" })
+      .hasAttribute("disabled"),
+  ).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "满足任一" }));
+  expect(
+    screen
+      .getByRole("switch", { name: "血腥程度仅记录" })
+      .getAttribute("aria-checked"),
+  ).toBe("true");
+  expect(
+    screen
+      .getByRole("switch", { name: "自伤风险仅记录" })
+      .getAttribute("aria-checked"),
+  ).toBe("true");
+  fireEvent.click(screen.getByRole("button", { name: "非阻塞性审查" }));
+  expect(
+    screen
+      .getByRole("switch", { name: "血腥程度仅记录" })
+      .hasAttribute("disabled"),
+  ).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "阻塞性审查" }));
+  expect(
+    screen
+      .getByRole("switch", { name: "血腥程度仅记录" })
+      .getAttribute("aria-checked"),
+  ).toBe("true");
+  fireEvent.click(screen.getByRole("button", { name: "保存并生效" }));
+  await waitFor(() => expect(save).toHaveBeenCalledOnce());
+  expect(save.mock.calls[0][0].scenes[0]).toMatchObject({
+    review_mode: "blocking",
+    action: "allow",
+    session_block_enabled: false,
+  });
+});
+
 it("shows the bottom saving actions only while the scene draft has changes", () => {
   render(<SettingsPage policy={policy} onSave={vi.fn()} />);
   expect(screen.queryByText("场景已生效")).toBeNull();

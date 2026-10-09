@@ -76,6 +76,7 @@ it("groups gateway controls and relay addresses in one tab and keeps retention w
   expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
     "网关",
     "Jev 分类器",
+    "审核接口",
     "可信密钥",
     "数据与缓存",
   ]);

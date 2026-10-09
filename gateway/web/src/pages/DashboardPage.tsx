@@ -57,9 +57,16 @@ import {
   Panel,
 } from "../components/common";
 import { notifyRetry } from "../notifications";
+import ReviewAPIStats from "../components/ReviewAPIStats";
 import "../dashboard.css";
 
-export default function DashboardPage({ enabled }: { enabled: boolean }) {
+export default function DashboardPage({
+  enabled,
+  reviewAPIEnabled = false,
+}: {
+  enabled: boolean;
+  reviewAPIEnabled?: boolean;
+}) {
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const [dimension, setDimension] = useState<"endpoint" | "model">("endpoint");
@@ -546,6 +553,14 @@ export default function DashboardPage({ enabled }: { enabled: boolean }) {
                 )}
               </Panel>
             </section>
+            {reviewAPIEnabled && (
+              <section
+                className="dashboard-section dashboard-review-api"
+                aria-label="审核接口统计"
+              >
+                <ReviewAPIStats enabled />
+              </section>
+            )}
             <section
               className="dashboard-section dashboard-details"
               aria-label="流量明细"

@@ -4,6 +4,7 @@ import { questionMeta, questionName } from "../questionMeta";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Slider } from "./ui/slider";
+import { Switch } from "./ui/switch";
 import { Choice, Help } from "./common";
 
 type Props = {
@@ -12,6 +13,8 @@ type Props = {
   index: number;
   invalid: boolean;
   sampleScore?: number;
+  showDisposition?: boolean;
+  dispositionDisabled?: boolean;
   onChange: (patch: Partial<Condition>) => void;
   onRemove: () => void;
 };
@@ -22,6 +25,8 @@ export function ConditionEditor({
   index,
   invalid,
   sampleScore,
+  showDisposition,
+  dispositionDisabled,
   onChange,
   onRemove,
 }: Props) {
@@ -81,6 +86,20 @@ export function ConditionEditor({
           <Trash2 size={13} />
         </Button>
       </div>
+      {showDisposition && (
+        <label className="condition-record-only">
+          <Switch
+            aria-label={`${name}仅记录`}
+            checked={Boolean(condition.record_only)}
+            disabled={dispositionDisabled}
+            onCheckedChange={(record_only) => onChange({ record_only })}
+          />
+          <span>命中时仅记录</span>
+          <Help>
+            此条件命中只记录并放行；同场景中其他拒绝条件命中时，仍会拒绝。
+          </Help>
+        </label>
+      )}
       {max === undefined ? (
         <span className="condition-unavailable">审核项不可用</span>
       ) : (

@@ -9,6 +9,9 @@ import (
 // previewEvent prepares the default operator response without changing the
 // stored event or loading text through the list API.
 func previewEvent(e Event) Event {
+	if e.RequestSource == "" {
+		e.RequestSource = "gateway"
+	}
 	if e.Text != "" {
 		e.TextAvailable = true
 		e.TextChars = utf8.RuneCountInString(e.Text)
@@ -33,6 +36,9 @@ func textPreview(text string) string {
 
 // Redact prepares a record for persistence, including database outage spools.
 func (e *Event) Redact() {
+	if e.RequestSource == "" {
+		e.RequestSource = "gateway"
+	}
 	e.Text = privacy.RedactText(e.Text)
 	e.TextPreview = privacy.RedactText(e.TextPreview)
 	for _, value := range []*string{&e.UserAgent, &e.SessionID, &e.ClientRequestID, &e.Parameters.ReasoningEffort, &e.Parameters.ServiceTier, &e.Parameters.ToolChoice, &e.Parameters.ResponseFormat, &e.Parameters.ThinkingType, &e.Parameters.PreviousResponseID, &e.Parameters.ConversationID, &e.Parameters.ImageSize, &e.Parameters.ImageQuality, &e.Parameters.ImageOutputFormat} {

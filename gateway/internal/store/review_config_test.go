@@ -55,17 +55,22 @@ func TestJevInputDefaultIsSeededOnceAndConsoleEditsSurviveRestart(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.pool.Exec(ctx, "UPDATE gateway_jev SET max_input_tokens=NULL WHERE id=1"); err != nil {
+	if _, err := s.pool.Exec(ctx, "UPDATE gateway_jev SET max_input_chars=NULL WHERE id=1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SeedJevDefaults(ctx, 25000); err != nil {
+	s.Close()
+	s, err = Open(ctx, dsn, spool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SeedJevDefaults(ctx, 0); err != nil {
 		t.Fatal(err)
 	}
 	c, err := s.Jev(ctx)
-	if err != nil || c.MaxInputTokens != 25000 {
+	if err != nil || c.MaxInputChars != 5000 {
 		t.Fatalf("default not imported: %+v %v", c, err)
 	}
-	c.MaxInputTokens = 20000
+	c.MaxInputChars = 20000
 	if _, err := s.UpdateJev(ctx, c); err != nil {
 		t.Fatal(err)
 	}
@@ -75,11 +80,48 @@ func TestJevInputDefaultIsSeededOnceAndConsoleEditsSurviveRestart(t *testing.T) 
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if err := s.SeedJevDefaults(ctx, 28800); err != nil {
+	if err := s.SeedJevDefaults(ctx, 5000); err != nil {
 		t.Fatal(err)
 	}
 	c, err = s.Jev(ctx)
-	if err != nil || c.MaxInputTokens != 20000 {
+	if err != nil || c.MaxInputChars != 20000 {
 		t.Fatalf("restart overwrote administrator edit: %+v %v", c, err)
+	}
+}
+
+func TestJevTokenLimitUpgradeResetsToDefaultCharacters(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not set")
+	}
+	ctx := context.Background()
+	spool := filepath.Join(t.TempDir(), "spool.jsonl")
+	s, err := Open(ctx, dsn, spool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Recreate the pre-upgrade schema with an administrator's old token limit.
+	_, err = s.pool.Exec(ctx, `
+		ALTER TABLE gateway_jev DROP COLUMN max_input_chars;
+		ALTER TABLE gateway_jev ADD COLUMN max_input_tokens integer;
+		UPDATE gateway_jev SET max_input_tokens=28800 WHERE id=1;
+	`)
+	s.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err = Open(ctx, dsn, spool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	c, err := s.Jev(ctx)
+	if err != nil || c.MaxInputChars != 5000 {
+		t.Fatalf("old token limit was not reset to 5000 characters: %+v %v", c, err)
+	}
+	var legacyColumns int
+	err = s.pool.QueryRow(ctx, `SELECT count(*) FROM pg_attribute WHERE attrelid='gateway_jev'::regclass AND attname='max_input_tokens' AND NOT attisdropped`).Scan(&legacyColumns)
+	if err != nil || legacyColumns != 0 {
+		t.Fatalf("legacy token column remains: %d %v", legacyColumns, err)
 	}
 }

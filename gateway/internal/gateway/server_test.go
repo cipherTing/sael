@@ -239,6 +239,45 @@ func TestBlockedRequestDoesNotReachUpstream(t *testing.T) {
 	}
 }
 
+func TestBusinessIngressForwardsUpstreamAdminNamespace(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(map[bool]string{false: "review_disabled", true: "review_enabled"}[enabled], func(t *testing.T) {
+			p := activePolicy()
+			p.Enabled = enabled
+			classifier := &testClassifier{}
+			server, _, upstreamCalls := makeServer(t, p, classifier)
+			for _, tc := range []struct {
+				method string
+				path   string
+				body   string
+			}{
+				{method: http.MethodGet, path: "/admin"},
+				{method: http.MethodGet, path: "/admin/"},
+				{method: http.MethodGet, path: "/admin/usage?range=7d"},
+				{method: http.MethodGet, path: "/admin/policy"},
+				{method: http.MethodPost, path: "/admin/login", body: `{"username":"user"}`},
+			} {
+				before := *upstreamCalls
+				w := httptest.NewRecorder()
+				request := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+				server.ServeHTTP(w, request)
+				if w.Code != http.StatusCreated || *upstreamCalls != before+1 {
+					t.Errorf("%s %s: status=%d upstreamCalls=%d", tc.method, tc.path, w.Code, *upstreamCalls)
+				}
+			}
+			before := *upstreamCalls
+			w := httptest.NewRecorder()
+			server.AdminHandler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/admin/policy", http.NoBody))
+			if w.Code != http.StatusUnauthorized || *upstreamCalls != before {
+				t.Fatalf("Sael management API escaped its listener: status=%d upstreamCalls=%d", w.Code, *upstreamCalls)
+			}
+			if classifier.calls != 0 {
+				t.Fatalf("ordinary admin pages entered moderation: %d", classifier.calls)
+			}
+		})
+	}
+}
+
 func TestBlockedResponseUsesProtocolEnvelopeWithoutRiskDetails(t *testing.T) {
 	for _, tc := range []struct {
 		path, body, protocol string
@@ -293,7 +332,7 @@ func TestPromptOverConfiguredJevLimitIsWarnedAndForwarded(t *testing.T) {
 	p := activePolicy()
 	c := &testClassifier{answers: fullAnswers(nil)}
 	s, store, calls := makeServer(t, p, c)
-	store.jev.MaxInputTokens = 3
+	store.jev.MaxInputChars = 3
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, authorizedRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"test","messages":[{"role":"user","content":"1234567890"}]}`)))
 	if w.Code != 201 || *calls != 1 || c.calls != 0 || len(store.events) != 1 || store.events[0].Kind != "warning" || store.events[0].ErrorKind != "classifier_input_too_long" || store.counts[0].Outcome != "input_too_long" {
@@ -340,7 +379,7 @@ func TestAllowedHitForwardsOriginalRequest(t *testing.T) {
 	}
 }
 
-func TestNonBlockingReviewHitFreezesSessionAfterForwarding(t *testing.T) {
+func TestNonBlockingReviewHitDoesNotFreezeSessionAfterForwarding(t *testing.T) {
 	p := activePolicy()
 	p.Scenes[0].Action = policy.Allow
 	p.Scenes[0].SessionBlockEnabled = true
@@ -354,7 +393,7 @@ func TestNonBlockingReviewHitFreezesSessionAfterForwarding(t *testing.T) {
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, first)
 	s.reviewWG.Wait()
-	if w.Code != 201 || *calls != 1 || len(store.events) != 1 || store.events[0].Kind != "hit" || len(store.blocked) < 1 {
+	if w.Code != 201 || *calls != 1 || len(store.events) != 1 || store.events[0].Kind != "hit" || len(store.blocked) != 0 {
 		t.Fatalf("first status=%d upstream=%d events=%+v blocks=%v", w.Code, *calls, store.events, store.blocked)
 	}
 	second := authorizedRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"test","messages":[{"role":"user","content":"safe"}]}`))
@@ -362,7 +401,8 @@ func TestNonBlockingReviewHitFreezesSessionAfterForwarding(t *testing.T) {
 	second.Header.Set("Authorization", "Bearer test-user")
 	w = httptest.NewRecorder()
 	s.ServeHTTP(w, second)
-	if w.Code != 403 || *calls != 1 || c.calls != 1 {
+	s.reviewWG.Wait()
+	if w.Code != 201 || *calls != 2 || c.calls != 2 || len(store.blocked) != 0 {
 		t.Fatalf("second status=%d upstream=%d classifier=%d events=%+v", w.Code, *calls, c.calls, store.events)
 	}
 }

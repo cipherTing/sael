@@ -3,11 +3,53 @@ package store
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/cipherTing/sael/gateway/internal/gateway"
+	"github.com/cipherTing/sael/gateway/internal/policy"
 )
+
+func TestPostgresPersistsConditionDispositionAndCacheAuditFacts(t *testing.T) {
+	p, _ := redisFixture(t)
+	ctx := context.Background()
+	next := policy.Policy{Enabled: true, Scenes: []policy.Scene{{ID: "observe", Name: "observe", Match: policy.Any, ReviewMode: policy.Blocking, Action: policy.Block, Conditions: []policy.Condition{{Question: "gore", Threshold: 1.5, RecordOnly: true}}}}}
+	if _, err := p.UpdatePolicy(ctx, gateway.PolicyUpdate{Replace: &next}, "test"); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := Open(ctx, os.Getenv("TEST_DATABASE_URL"), filepath.Join(t.TempDir(), "spool"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.Close()
+	loaded, err := restarted.Policy(ctx)
+	if err != nil || loaded.Scenes[0].ReviewMode != policy.Blocking || !loaded.Scenes[0].Conditions[0].RecordOnly || loaded.Scenes[0].Action != policy.Allow {
+		t.Fatalf("policy roundtrip: %+v %v", loaded, err)
+	}
+	decision, trace, err := policy.EvaluatePredicates(loaded, map[policy.ConditionKey]bool{{Question: "gore", Threshold: 1.5}: true}, "openai_responses", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	event := gateway.Event{ID: "cached-condition-facts", Time: now, Kind: "hit", RequestID: "request", Protocol: "openai_responses", ReviewSource: "cache", ExecutionMode: policy.Blocking, Decision: decision, Trace: trace}
+	if err := p.WriteEvent(ctx, event); err != nil {
+		t.Fatal(err)
+	}
+	items, err := p.Events(ctx, gateway.EventFilter{Since: now.Add(-time.Minute), Limit: 50})
+	if err != nil || len(items) != 1 {
+		t.Fatalf("list=%+v error=%v", items, err)
+	}
+	detail, err := p.Event(ctx, event.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, got := range []gateway.Event{items[0], detail} {
+		if got.ExecutionMode != policy.Blocking || got.Decision.Reason != "condition_record_only" || len(got.Decision.Hits) != 1 || got.Decision.Hits[0].Value != nil || got.Decision.Hits[0].RecordOnly == nil || !*got.Decision.Hits[0].RecordOnly || got.Trace[0].Conditions[0].Value != nil {
+			t.Fatalf("audit projection lost facts: %+v", got)
+		}
+	}
+}
 
 func TestRedisReviewCacheExpirationConfigurationAndReconnect(t *testing.T) {
 	p, _ := redisFixture(t)

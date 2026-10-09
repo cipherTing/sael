@@ -40,13 +40,21 @@ func TestJevConfigRequiresAllFieldsAndNeverReturnsSecret(t *testing.T) {
 
 func TestJevConfigAcceptsInputGuardSettings(t *testing.T) {
 	s, store, _ := makeServer(t, activePolicy(), &testClassifier{})
-	w := adminRequest(t, s, http.MethodPut, "/admin/jev", `{"base_url":"https://api.example/v1","model":"jev-test","api_key":"secret-key","max_input_tokens":28000}`)
-	if w.Code != http.StatusOK || store.jev.MaxInputTokens != 28000 {
+	w := adminRequest(t, s, http.MethodPut, "/admin/jev", `{"base_url":"https://api.example/v1","model":"jev-test","api_key":"secret-key","max_input_chars":28000}`)
+	if w.Code != http.StatusOK || store.jev.MaxInputChars != 28000 {
 		t.Fatalf("status=%d store=%+v body=%s", w.Code, store.jev, w.Body.String())
 	}
-	w = adminRequest(t, s, http.MethodPut, "/admin/jev", `{"base_url":"https://api.example/v1","model":"jev-test","max_input_tokens":-1}`)
+	w = adminRequest(t, s, http.MethodPut, "/admin/jev", `{"base_url":"https://api.example/v1","model":"jev-test","max_input_chars":-1}`)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("negative input limit status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestJevConfigAcceptsCharacterLimit(t *testing.T) {
+	s, store, _ := makeServer(t, activePolicy(), &testClassifier{})
+	w := adminRequest(t, s, http.MethodPut, "/admin/jev", `{"base_url":"https://api.example/v1","model":"jev-test","api_key":"secret-key","max_input_chars":5000}`)
+	if w.Code != http.StatusOK || store.jev.MaxInputChars != 5000 || strings.Contains(w.Body.String(), "max_input_tokens") {
+		t.Fatalf("status=%d store=%+v body=%s", w.Code, store.jev, w.Body.String())
 	}
 }
 

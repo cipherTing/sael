@@ -1,0 +1,514 @@
+.review-api-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+.review-api-navigation {
+  position: sticky;
+  top: calc(var(--settings-navigation-height) - var(--content-padding-top));
+  z-index: 20;
+  padding: 4px 0;
+  background: #f4f6fa;
+}
+.review-api-tabs {
+  display: flex;
+  flex-direction: row;
+  width: fit-content;
+  max-width: 100%;
+  height: 40px;
+  gap: 3px;
+  padding: 4px;
+  border: 1px solid #e3e9f2;
+  background: #edf1f7;
+  border-radius: 8px;
+}
+.review-api-tabs [data-slot="tabs-trigger"] {
+  justify-content: center;
+  padding: 8px 14px;
+  text-align: center;
+}
+.review-api-tabs [data-state="active"] {
+  background: #fff;
+  color: #3856bc;
+  box-shadow: 0 1px 3px #23315c12;
+}
+.review-api-content {
+  min-width: 0;
+}
+.review-api-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #7a8597;
+}
+.review-api-status i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #a5adbc;
+}
+.review-api-status.on i {
+  background: #47a084;
+}
+.review-api-enable {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  min-height: 96px;
+  margin-bottom: 16px;
+  padding: 18px 21px;
+  border: 1px solid #e1e7f0;
+  border-radius: 10px;
+  background: #fff;
+  transition:
+    border-color 150ms ease,
+    background-color 150ms ease;
+}
+.review-api-enable.is-enabled {
+  border-color: #b9e4d5;
+  background: linear-gradient(100deg, #f2fbf7 0%, #fff 65%);
+}
+.review-api-enable-icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 9px;
+  background: #eef3fc;
+  color: #4b65bd;
+}
+.review-api-enable.is-enabled .review-api-enable-icon {
+  background: #e2f6ed;
+  color: #27856b;
+}
+.review-api-enable-copy {
+  min-width: 0;
+}
+.review-api-enable-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.review-api-enable-title h2 {
+  margin: 0;
+  color: #34435d;
+  font-size: 15px;
+  font-weight: 650;
+}
+.review-api-enable-copy p {
+  margin: 5px 0 0;
+  color: #758198;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.review-api-enable [role="switch"] {
+  width: 42px;
+  height: 24px;
+}
+.review-api-enable [role="switch"] [data-slot="switch-thumb"] {
+  width: 18px;
+  height: 18px;
+}
+.review-api-docs .panel {
+  overflow: hidden;
+}
+.review-api-doc-body {
+  display: grid;
+  gap: 17px;
+  padding: 16px 18px 20px;
+  color: #59677d;
+  font-size: 13px;
+  line-height: 1.65;
+}
+.review-api-doc-body > p {
+  margin: 0;
+}
+.review-api-doc-body h3 {
+  margin: 2px 0 -9px;
+  color: #35445c;
+  font-size: 13px;
+}
+.review-api-facts {
+  display: grid;
+  gap: 1px;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid #e8edf4;
+  border-radius: 8px;
+  background: #e8edf4;
+}
+.review-api-facts > div {
+  display: grid;
+  grid-template-columns: 116px minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+  min-height: 44px;
+  padding: 8px 13px;
+  background: #fff;
+}
+.review-api-facts dt {
+  color: #78859a;
+  font-size: 12px;
+}
+.review-api-facts dd {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.review-api-facts dd code {
+  color: #354764;
+}
+.review-api-table-wrap {
+  overflow-x: auto;
+  border: 1px solid #e8edf4;
+  border-radius: 8px;
+}
+.review-api-param-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 12px;
+}
+.review-api-param-table th,
+.review-api-param-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #edf0f5;
+  vertical-align: top;
+}
+.review-api-param-table th {
+  color: #68768c;
+  background: #f7f9fc;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.review-api-param-table tr:last-child td {
+  border-bottom: 0;
+}
+.review-api-endpoints {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid #e8edf4;
+  border-radius: 8px;
+}
+.review-api-endpoints > div {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.7fr) minmax(130px, 0.8fr) minmax(
+      180px,
+      1fr
+    );
+  gap: 12px;
+  align-items: center;
+  min-height: 38px;
+  padding: 7px 12px;
+  border-bottom: 1px solid #edf0f5;
+  background: #fff;
+}
+.review-api-endpoints > div:last-child {
+  border-bottom: 0;
+}
+.review-api-endpoints code {
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+.review-api-doc-note {
+  color: #738097;
+  font-size: 12px;
+}
+.review-api-code-example {
+  position: relative;
+  min-width: 0;
+  border: 1px solid #e7ebf2;
+  border-radius: 8px;
+  background: #f8fafd;
+}
+.review-api-code-example > strong {
+  display: block;
+  padding: 10px 13px 0;
+  color: #67758a;
+  font-size: 11px;
+  font-weight: 600;
+}
+.review-api-code-example > button {
+  position: absolute;
+  top: 7px;
+  right: 8px;
+}
+.review-api-code-example pre {
+  max-width: 100%;
+  margin: 0;
+  padding: 11px 13px;
+  overflow: auto;
+  color: #34445d;
+  font:
+    11px/1.65 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  white-space: pre;
+}
+.review-api-code-example strong + button + pre {
+  padding-top: 7px;
+}
+.review-api-error-list {
+  display: grid;
+  gap: 4px;
+  padding: 11px 13px;
+  border-radius: 8px;
+  background: #f8fafd;
+}
+.review-api-error-list p {
+  margin: 0;
+}
+.review-api-error-list code {
+  display: inline-block;
+  min-width: 36px;
+  color: #4a5fb0;
+  font-weight: 650;
+}
+.review-api-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #536078;
+  font-size: 12px;
+}
+.review-api-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+.review-api-dashboard-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.review-api-dashboard-heading h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.review-api-dashboard-heading p {
+  margin: 4px 0 0;
+  color: var(--muted, #7b8494);
+  font-size: 12px;
+}
+.review-api-disabled {
+  min-height: 280px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 10px;
+  padding: 24px;
+  text-align: center;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: #6d7890;
+}
+.review-api-disabled h2 {
+  font-size: 18px;
+  color: #34435d;
+}
+.review-api-disabled p {
+  margin-bottom: 8px;
+}
+.review-api-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.review-api-metric {
+  padding: 14px 16px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.review-api-metric span {
+  display: block;
+  color: #738097;
+  font-size: 12px;
+}
+.review-api-metric strong {
+  display: block;
+  margin-top: 7px;
+  font-size: 21px;
+  color: #2e3d58;
+}
+.review-api-scope {
+  margin: 0 0 16px;
+  color: #7a879b;
+  font-size: 12px;
+}
+.review-api-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.review-api-grid .panel {
+  min-width: 0;
+}
+.review-api-wide {
+  grid-column: 1/-1;
+}
+.review-api-grid .chart-viewport {
+  min-height: 180px;
+}
+.review-api-key-form {
+  display: grid;
+  gap: 14px;
+  padding: 0 18px 18px;
+}
+.review-api-key-form label {
+  display: grid;
+  gap: 6px;
+  color: #5e6c83;
+  font-size: 12px;
+}
+.review-api-secret {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 18px 18px;
+  padding: 11px;
+  background: #f5f8ff;
+  border: 1px solid #dce5ff;
+  border-radius: 6px;
+}
+.review-api-secret code {
+  overflow-wrap: anywhere;
+}
+.review-api-secret > div {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+.review-api-secret code,
+.review-api-key-row code {
+  font-family: ui-monospace, monospace;
+}
+.review-api-key-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 16px;
+  border-bottom: 1px solid #edf0f5;
+}
+.review-api-key-row > div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+.review-api-key-row > div > span {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.review-api-key-row p {
+  margin: 0;
+  color: #68778d;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.review-api-key-row small {
+  color: #7a8597;
+}
+.review-api-keys {
+  display: grid;
+  gap: 16px;
+}
+@media (max-width: 760px) {
+  .review-api-tabs {
+    width: 100%;
+  }
+  .review-api-tabs [data-slot="tabs-trigger"] {
+    flex: 1;
+    justify-content: center;
+    text-align: center;
+  }
+  .review-api-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .review-api-grid {
+    grid-template-columns: 1fr;
+  }
+  .review-api-wide {
+    grid-column: auto;
+  }
+  .review-api-secret {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .review-api-secret > div {
+    margin-left: 0;
+  }
+  .review-api-key-row {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .review-api-key-row > button {
+    margin-left: auto;
+  }
+  .review-api-enable {
+    grid-template-columns: 38px minmax(0, 1fr) auto;
+    gap: 10px;
+    padding: 15px;
+  }
+  .review-api-enable-icon {
+    width: 36px;
+    height: 36px;
+  }
+  .review-api-facts > div {
+    grid-template-columns: 94px minmax(0, 1fr);
+    gap: 8px;
+  }
+  .review-api-endpoints > div {
+    grid-template-columns: minmax(110px, 0.7fr) minmax(105px, 0.8fr);
+  }
+  .review-api-endpoints > div code:last-child {
+    grid-column: 1 / -1;
+    color: #77849a;
+  }
+}
+@media (max-width: 480px) {
+  .review-api-enable {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+  }
+  .review-api-enable-icon {
+    display: none;
+  }
+  .review-api-enable-copy {
+    grid-column: 1;
+  }
+  .review-api-enable > [role="switch"] {
+    grid-column: 2;
+    grid-row: 1;
+    margin-top: 1px;
+  }
+  .review-api-facts > div {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+  .review-api-doc-body {
+    padding: 13px;
+  }
+  .review-api-param-table {
+    min-width: 620px;
+  }
+}

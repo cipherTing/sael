@@ -52,7 +52,7 @@ func Open(ctx context.Context, dsn, spoolPath string) (*PG, error) {
 		pool.Close()
 		return nil, err
 	}
-	for _, name := range []string{"migrations/001_init.sql", "migrations/002_jev.sql", "migrations/003_metrics.sql", "migrations/004_connections.sql", "migrations/005_remove_upstream_errors.sql", "migrations/006_analytics.sql", "migrations/007_session_blocks.sql", "migrations/008_jev_input_limits.sql", "migrations/009_ingest_cursor.sql", "migrations/010_review_cache_credentials.sql", "migrations/011_remove_policy_version.sql", "migrations/012_risk_source_fields.sql"} {
+	for _, name := range []string{"migrations/001_init.sql", "migrations/002_jev.sql", "migrations/003_metrics.sql", "migrations/004_connections.sql", "migrations/005_remove_upstream_errors.sql", "migrations/006_analytics.sql", "migrations/007_session_blocks.sql", "migrations/008_jev_input_limits.sql", "migrations/009_ingest_cursor.sql", "migrations/010_review_cache_credentials.sql", "migrations/011_remove_policy_version.sql", "migrations/012_risk_source_fields.sql", "migrations/013_review_api.sql", "migrations/014_jev_input_chars.sql"} {
 		sql, err := migrations.ReadFile(name)
 		if err != nil {
 			pool.Close()
@@ -131,7 +131,7 @@ func (s *PG) SeedUpstream(ctx context.Context, baseURL string) error {
 // Jev returns the current saved classifier connection.
 func (s *PG) Jev(ctx context.Context) (gateway.JevConfig, error) {
 	var c gateway.JevConfig
-	err := s.pool.QueryRow(ctx, "SELECT base_url,model,api_key,timeout_ms,COALESCE(max_input_tokens,28800),updated_at FROM gateway_jev WHERE id=1").Scan(&c.BaseURL, &c.Model, &c.APIKey, &c.TimeoutMS, &c.MaxInputTokens, &c.UpdatedAt)
+	err := s.pool.QueryRow(ctx, "SELECT base_url,model,api_key,timeout_ms,COALESCE(max_input_chars,5000),updated_at FROM gateway_jev WHERE id=1").Scan(&c.BaseURL, &c.Model, &c.APIKey, &c.TimeoutMS, &c.MaxInputChars, &c.UpdatedAt)
 	if err != nil {
 		s.jevMu.RLock()
 		defer s.jevMu.RUnlock()
@@ -151,10 +151,10 @@ func (s *PG) UpdateJev(ctx context.Context, c gateway.JevConfig) (gateway.JevCon
 	if c.TimeoutMS == 0 {
 		c.TimeoutMS = 5000
 	}
-	if c.MaxInputTokens == 0 {
-		c.MaxInputTokens = gateway.DefaultJevInputTokens
+	if c.MaxInputChars == 0 {
+		c.MaxInputChars = gateway.DefaultJevInputChars
 	}
-	err := s.pool.QueryRow(ctx, "UPDATE gateway_jev SET base_url=$1, model=$2, api_key=$3, timeout_ms=$4, max_input_tokens=$5, updated_at=now() WHERE id=1 RETURNING updated_at", c.BaseURL, c.Model, c.APIKey, c.TimeoutMS, c.MaxInputTokens).Scan(&c.UpdatedAt)
+	err := s.pool.QueryRow(ctx, "UPDATE gateway_jev SET base_url=$1, model=$2, api_key=$3, timeout_ms=$4, max_input_chars=$5, updated_at=now() WHERE id=1 RETURNING updated_at", c.BaseURL, c.Model, c.APIKey, c.TimeoutMS, c.MaxInputChars).Scan(&c.UpdatedAt)
 	if err == nil {
 		s.jevMu.Lock()
 		s.cachedJev, s.hasCachedJev = c, true
@@ -164,11 +164,11 @@ func (s *PG) UpdateJev(ctx context.Context, c gateway.JevConfig) (gateway.JevCon
 }
 
 // SeedJevDefaults initializes the guard once; later console edits survive restarts.
-func (s *PG) SeedJevDefaults(ctx context.Context, maxInputTokens int) error {
-	if maxInputTokens <= 0 {
-		maxInputTokens = gateway.DefaultJevInputTokens
+func (s *PG) SeedJevDefaults(ctx context.Context, maxInputChars int) error {
+	if maxInputChars <= 0 {
+		maxInputChars = gateway.DefaultJevInputChars
 	}
-	_, err := s.pool.Exec(ctx, "UPDATE gateway_jev SET max_input_tokens=$1 WHERE id=1 AND max_input_tokens IS NULL", maxInputTokens)
+	_, err := s.pool.Exec(ctx, "UPDATE gateway_jev SET max_input_chars=$1 WHERE id=1 AND max_input_chars IS NULL", maxInputChars)
 	return err
 }
 
@@ -465,7 +465,7 @@ func (s *PG) Overview(ctx context.Context, since, until time.Time) (gateway.Over
 	if updatedAt != nil {
 		out.UpdatedAt = *updatedAt
 	}
-	rows, err = s.pool.Query(ctx, `SELECT coalesce(nullif(body->'decision'->>'scene_name',''),nullif(body->'decision'->>'scene_id',''),'unmatched'),count(*) FROM audit_events WHERE kind='hit' AND time >= $1 AND time < $2 GROUP BY 1 ORDER BY 2 DESC`, since, until)
+	rows, err = s.pool.Query(ctx, `SELECT coalesce(nullif(body->'decision'->>'scene_name',''),nullif(body->'decision'->>'scene_id',''),'unmatched'),count(*) FROM audit_events WHERE kind='hit' AND request_source='gateway' AND time >= $1 AND time < $2 GROUP BY 1 ORDER BY 2 DESC`, since, until)
 	if err != nil {
 		return out, err
 	}
@@ -482,7 +482,7 @@ func (s *PG) Overview(ctx context.Context, since, until time.Time) (gateway.Over
 	if err != nil {
 		return out, err
 	}
-	rows, err = s.pool.Query(ctx, `SELECT hit->>'question',count(*) FROM audit_events CROSS JOIN LATERAL jsonb_array_elements(body->'decision'->'hits') hit WHERE kind='hit' AND time >= $1 AND time < $2 GROUP BY 1 ORDER BY 2 DESC`, since, until)
+	rows, err = s.pool.Query(ctx, `SELECT hit->>'question',count(*) FROM audit_events CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(body->'decision'->'hits')='array' THEN body->'decision'->'hits' ELSE '[]'::jsonb END) hit WHERE kind='hit' AND request_source='gateway' AND time >= $1 AND time < $2 GROUP BY 1 ORDER BY 2 DESC`, since, until)
 	if err != nil {
 		return out, err
 	}
@@ -505,7 +505,8 @@ func (s *PG) Events(ctx context.Context, f gateway.EventFilter) ([]gateway.Event
 		f.Limit = 50
 	}
 	rows, err := s.pool.Query(ctx, `SELECT (body - 'text') || jsonb_build_object(
-		'text_available', coalesce(body->>'text','') <> '',
+		'request_source',request_source,
+        'text_available', coalesce(body->>'text','') <> '',
 		'text_chars', char_length(coalesce(body->>'text','')),
 		'text_preview', left(coalesce(nullif(body->>'text',''),body->>'text_preview',''),500)
 	) FROM audit_events WHERE time >= $1
@@ -514,11 +515,12 @@ func (s *PG) Events(ctx context.Context, f gateway.EventFilter) ([]gateway.Event
         AND ($9='' OR body->>'model'=$9) AND ($10='' OR body->'decision'->>'scene_id'=$10)
         AND ($11='' OR body->>'error_kind'=$11)
  AND ($14='' OR body->>'credential_id'=$14) AND ($12='' OR body->>'client_ip'=$12) AND ($13='' OR body->>'session_id'=$13)
+ AND ($15='' OR request_source=$15)
         AND ($4='' OR request_id ILIKE '%'||$4||'%' OR body->>'text' ILIKE '%'||$4||'%' OR body->>'text_preview' ILIKE '%'||$4||'%' OR body->>'model' ILIKE '%'||$4||'%'
  OR body->>'client_ip' ILIKE '%'||$4||'%' OR body->>'session_id' ILIKE '%'||$4||'%'
  OR body->>'client_request_id' ILIKE '%'||$4||'%' OR body->'parameters'->>'conversation_id' ILIKE '%'||$4||'%'
  OR body->'parameters'->>'previous_response_id' ILIKE '%'||$4||'%')
-		ORDER BY time DESC LIMIT $5 OFFSET $6`, f.Since, f.Kind, f.Action, f.Search, f.Limit, f.Offset, optionalTime(f.Until), f.Endpoint, f.Model, f.Scene, f.ErrorKind, f.ClientIP, f.SessionID, f.CredentialID)
+		ORDER BY time DESC LIMIT $5 OFFSET $6`, f.Since, f.Kind, f.Action, f.Search, f.Limit, f.Offset, optionalTime(f.Until), f.Endpoint, f.Model, f.Scene, f.ErrorKind, f.ClientIP, f.SessionID, f.CredentialID, f.RequestSource)
 	if err != nil {
 		return nil, err
 	}
@@ -551,7 +553,7 @@ func (s *PG) Events(ctx context.Context, f gateway.EventFilter) ([]gateway.Event
 func (s *PG) Event(ctx context.Context, id string) (gateway.Event, error) {
 	var raw []byte
 	var out gateway.Event
-	err := s.pool.QueryRow(ctx, "SELECT body FROM audit_events WHERE id=$1", id).Scan(&raw)
+	err := s.pool.QueryRow(ctx, "SELECT body || jsonb_build_object('request_source',request_source) FROM audit_events WHERE id=$1", id).Scan(&raw)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return out, gateway.ErrNotFound
 	}

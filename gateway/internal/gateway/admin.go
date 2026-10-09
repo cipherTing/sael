@@ -19,11 +19,11 @@ import (
 )
 
 type jevConfigInput struct {
-	BaseURL        string `json:"base_url"`
-	Model          string `json:"model"`
-	APIKey         string `json:"api_key"`
-	TimeoutMS      int    `json:"timeout_ms"`
-	MaxInputTokens *int   `json:"max_input_tokens"`
+	BaseURL       string `json:"base_url"`
+	Model         string `json:"model"`
+	APIKey        string `json:"api_key"`
+	TimeoutMS     int    `json:"timeout_ms"`
+	MaxInputChars *int   `json:"max_input_chars"`
 }
 
 func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
@@ -45,6 +45,9 @@ func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
+	if s.adminReviewAPI(w, r) {
+		return
+	}
 	if s.adminFeatures(w, r) {
 		return
 	}
@@ -113,13 +116,13 @@ func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Jev 配置暂不可用", http.StatusServiceUnavailable)
 			return
 		}
-		input := JevConfig{BaseURL: strings.TrimSpace(raw.BaseURL), Model: strings.TrimSpace(raw.Model), APIKey: raw.APIKey, TimeoutMS: raw.TimeoutMS, MaxInputTokens: previous.inputLimit()}
-		if raw.MaxInputTokens != nil {
-			if *raw.MaxInputTokens <= 0 {
+		input := JevConfig{BaseURL: strings.TrimSpace(raw.BaseURL), Model: strings.TrimSpace(raw.Model), APIKey: raw.APIKey, TimeoutMS: raw.TimeoutMS, MaxInputChars: previous.inputLimit()}
+		if raw.MaxInputChars != nil {
+			if *raw.MaxInputChars <= 0 {
 				http.Error(w, "送审上限必须是正整数", http.StatusBadRequest)
 				return
 			}
-			input.MaxInputTokens = *raw.MaxInputTokens
+			input.MaxInputChars = *raw.MaxInputChars
 		}
 		if input.APIKey == "" {
 			input.APIKey = previous.APIKey
@@ -165,7 +168,7 @@ func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if next.Enabled {
+		if next.Enabled || next.ReviewAPIEnabled {
 			settings, err := s.Store.Jev(r.Context())
 			if err != nil {
 				http.Error(w, "Jev 配置暂不可用", http.StatusServiceUnavailable)
@@ -209,7 +212,12 @@ func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
 		if offset < 0 {
 			offset = 0
 		}
-		items, err := s.Store.Events(r.Context(), EventFilter{Since: f.Since, Until: f.Until, Endpoint: f.Endpoint, Model: f.Model, Scene: q.Get("scene"), ErrorKind: q.Get("error_kind"), Kind: q.Get("kind"), Action: q.Get("action"), Search: q.Get("search"), CredentialID: q.Get("credential_id"), ClientIP: q.Get("client_ip"), SessionID: q.Get("session_id"), Limit: 50, Offset: offset})
+		source := q.Get("request_source")
+		if source != "" && source != "gateway" && source != "review_api" {
+			http.Error(w, "记录来源无效", 400)
+			return
+		}
+		items, err := s.Store.Events(r.Context(), EventFilter{Since: f.Since, Until: f.Until, Endpoint: f.Endpoint, Model: f.Model, Scene: q.Get("scene"), ErrorKind: q.Get("error_kind"), Kind: q.Get("kind"), Action: q.Get("action"), Search: q.Get("search"), CredentialID: q.Get("credential_id"), ClientIP: q.Get("client_ip"), SessionID: q.Get("session_id"), RequestSource: source, Limit: 50, Offset: offset})
 		if err != nil {
 			http.Error(w, "events unavailable", http.StatusServiceUnavailable)
 			return

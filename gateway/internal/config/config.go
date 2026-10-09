@@ -33,12 +33,12 @@ type Config struct {
 	CLIPath                 string
 	SpoolPath               string
 	Timeout                 time.Duration
-	JevMaxInputTokens       int
+	JevMaxInputChars        int
 }
 
 // Load reads and validates a gateway configuration.
 func Load(getenv func(string) string) (Config, error) {
-	c := Config{DatabaseURL: getenv("DATABASE_URL"), AdminPassword: getenv("ADMIN_PASSWORD"), CredentialEncryptionKey: getenv("CREDENTIAL_ENCRYPTION_KEY"), ReviewCacheRedisURL: getenv("REVIEW_CACHE_REDIS_URL"), Listen: getenv("LISTEN_ADDR"), WebDir: getenv("WEB_DIR"), SpoolPath: getenv("SPOOL_PATH"), Timeout: 5 * time.Second, JevMaxInputTokens: 28800}
+	c := Config{DatabaseURL: getenv("DATABASE_URL"), AdminPassword: getenv("ADMIN_PASSWORD"), CredentialEncryptionKey: getenv("CREDENTIAL_ENCRYPTION_KEY"), ReviewCacheRedisURL: getenv("REVIEW_CACHE_REDIS_URL"), Listen: getenv("LISTEN_ADDR"), WebDir: getenv("WEB_DIR"), SpoolPath: getenv("SPOOL_PATH"), Timeout: 5 * time.Second, JevMaxInputChars: 5000}
 	c.CLIPath = getenv("SAEL_CLI_PATH")
 	if c.CLIPath == "" {
 		c.CLIPath = "sael"
@@ -137,12 +137,12 @@ func Load(getenv func(string) string) (Config, error) {
 			return c, errors.New("CLASSIFIER_TIMEOUT must be positive")
 		}
 	}
-	if raw := strings.TrimSpace(getenv("JEV_MAX_INPUT_TOKENS")); raw != "" {
+	if raw := strings.TrimSpace(getenv("JEV_MAX_INPUT_CHARS")); raw != "" {
 		value, err := strconv.Atoi(raw)
 		if err != nil || value <= 0 {
-			return c, errors.New("JEV_MAX_INPUT_TOKENS must be a positive integer")
+			return c, errors.New("JEV_MAX_INPUT_CHARS must be a positive integer")
 		}
-		c.JevMaxInputTokens = value
+		c.JevMaxInputChars = value
 	}
 	c.MaxRequestBodySize = 256 << 20
 	c.MaxHeaderBytes = 64 << 10

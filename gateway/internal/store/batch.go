@@ -123,7 +123,7 @@ var aggregateSQL = []string{
  ON CONFLICT(bucket,protocol,model,kind) DO UPDATE SET count=gateway_jev_errors_minute.count+EXCLUDED.count`,
 }
 
-func writeAggregate(ctx context.Context, tx pgx.Tx, a aggregate, events []gateway.Event) error {
+func writeAggregate(ctx context.Context, tx pgx.Tx, a aggregate, events []gateway.Event, reviewStats ...[]gateway.ReviewAPIStat) error {
 	batch := &pgx.Batch{}
 	if len(a) > 0 {
 		raw, err := marshalPostgresJSON(a.rows())
@@ -141,7 +141,34 @@ func writeAggregate(ctx context.Context, tx pgx.Tx, a aggregate, events []gatewa
 		}
 		batch.Queue(`INSERT INTO audit_events(id,time,kind,action,request_id,body)
    SELECT e->>'id',(e->>'time')::timestamptz,e->>'kind',e->'decision'->>'action',e->>'request_id',e
-   FROM jsonb_array_elements($1::jsonb) e ON CONFLICT(id) DO NOTHING`, raw)
+			FROM jsonb_array_elements($1::jsonb) e ON CONFLICT(id) DO NOTHING`, raw)
+	}
+	if len(reviewStats) > 0 {
+		for _, stat := range reviewStats[0] {
+			bucket := stat.Time.UTC().Truncate(time.Minute)
+			batch.Queue(`INSERT INTO review_api_requests_second(second,count) VALUES($1,1)
+ON CONFLICT(second) DO UPDATE SET count=review_api_requests_second.count+1`, stat.Time.UTC().Truncate(time.Second))
+			batch.Queue(`INSERT INTO review_api_counts_minute(bucket,key_id,outcome,count,duration_sum_ms,duration_samples,cache_hits)
+VALUES($1,$2,$3,1,$4,1,$5)
+ON CONFLICT(bucket,key_id,outcome) DO UPDATE SET count=review_api_counts_minute.count+1,duration_sum_ms=review_api_counts_minute.duration_sum_ms+EXCLUDED.duration_sum_ms,duration_samples=review_api_counts_minute.duration_samples+1,cache_hits=review_api_counts_minute.cache_hits+EXCLUDED.cache_hits`, bucket, stat.APIKeyID, stat.Outcome, stat.DurationMS, boolInt(stat.CacheHit))
+			scenes := stat.Scenes
+			if len(scenes) == 0 && stat.SceneID != "" {
+				scenes = []gateway.ReviewAPIScene{{ID: stat.SceneID, Name: stat.SceneName}}
+			}
+			for _, scene := range scenes {
+				batch.Queue(`INSERT INTO review_api_scene_counts_minute(bucket,key_id,scene_id,scene_name,count) VALUES($1,$2,$3,$4,1)
+ON CONFLICT(bucket,key_id,scene_id) DO UPDATE SET count=review_api_scene_counts_minute.count+1,scene_name=EXCLUDED.scene_name`, bucket, stat.APIKeyID, scene.ID, postgresText(scene.Name))
+			}
+			batch.Queue(`INSERT INTO review_api_latency_minute(bucket,upper_ms,count) VALUES($1,$2,1)
+ON CONFLICT(bucket,upper_ms) DO UPDATE SET count=review_api_latency_minute.count+1`, bucket, reviewAPIUpperMS(stat.DurationMS))
+		}
 	}
 	return tx.SendBatch(ctx, batch).Close()
+}
+
+func boolInt(value bool) int64 {
+	if value {
+		return 1
+	}
+	return 0
 }

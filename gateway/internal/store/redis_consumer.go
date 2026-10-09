@@ -48,6 +48,7 @@ func (s *PG) applyStream(ctx context.Context, messages []redis.XMessage) error {
 	}
 	a := newAggregate()
 	var events []gateway.Event
+	var reviewStats []gateway.ReviewAPIStat
 	for _, m := range messages {
 		if !streamAfter(m.ID, last) {
 			continue
@@ -64,9 +65,10 @@ func (s *PG) applyStream(ctx context.Context, messages []redis.XMessage) error {
 			a.merge(r)
 		}
 		events = append(events, b.Events...)
+		reviewStats = append(reviewStats, b.ReviewStats...)
 		last = m.ID
 	}
-	if err := writeAggregate(ctx, tx, a, events); err != nil {
+	if err := writeAggregate(ctx, tx, a, events, reviewStats); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, "UPDATE gateway_ingest_cursor SET last_id=$2 WHERE name=$1", ingestStream, last); err != nil {

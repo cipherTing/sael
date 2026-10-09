@@ -40,14 +40,21 @@ type Props = {
   policy: PolicyResponse;
   onSave: (p: PolicyPatch) => Promise<void>;
   jev: ReactNode;
+  reviewAPI?: ReactNode;
 };
 const tabs = [
   { id: "gateway", label: "网关", icon: Network },
   { id: "jev", label: "Jev 分类器", icon: PlugZap },
+  { id: "review-api", label: "审核接口", icon: ShieldCheck },
   { id: "keys", label: "可信密钥", icon: KeyRound },
   { id: "data", label: "数据与缓存", icon: Database },
 ];
-export default function SettingsConsole({ policy, onSave, jev }: Props) {
+export default function SettingsConsole({
+  policy,
+  onSave,
+  jev,
+  reviewAPI = null,
+}: Props) {
   const [params, setParams] = useSearchParams();
   const requested = params.get("tab") || "gateway";
   const resolved =
@@ -58,7 +65,13 @@ export default function SettingsConsole({ policy, onSave, jev }: Props) {
       >
     )[requested] || requested;
   const tab = tabs.some(({ id }) => id === resolved) ? resolved : "gateway";
+  const tabList = useRef<HTMLDivElement>(null);
   const [visited, setVisited] = useState([tab]);
+  useEffect(() => {
+    tabList.current
+      ?.querySelector<HTMLElement>('[aria-selected="true"]')
+      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [tab]);
   useEffect(() => {
     setVisited((current) =>
       current.includes(tab) ? current : [...current, tab],
@@ -72,14 +85,20 @@ export default function SettingsConsole({ policy, onSave, jev }: Props) {
         onValueChange={(value) => setParams({ tab: value })}
         className="settings-console"
       >
-        <TabsList className="settings-tabs">
-          {tabs.map(({ id, label, icon: Icon }) => (
-            <TabsTrigger key={id} value={id}>
-              <Icon size={14} />
-              {label}
-            </TabsTrigger>
-          ))}
-        </TabsList>
+        <div className="settings-navigation">
+          <TabsList
+            ref={tabList}
+            className="settings-tabs"
+            aria-label="设置分类"
+          >
+            {tabs.map(({ id, label, icon: Icon }) => (
+              <TabsTrigger key={id} value={id}>
+                <Icon size={14} />
+                {label}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </div>
         <TabsContent
           value="gateway"
           forceMount={visited.includes("gateway") ? true : undefined}
@@ -93,6 +112,13 @@ export default function SettingsConsole({ policy, onSave, jev }: Props) {
           hidden={tab !== "jev"}
         >
           {jev}
+        </TabsContent>
+        <TabsContent
+          value="review-api"
+          forceMount={visited.includes("review-api") ? true : undefined}
+          hidden={tab !== "review-api"}
+        >
+          {reviewAPI}
         </TabsContent>
         <TabsContent
           value="keys"

@@ -12,7 +12,7 @@ func (s *PG) RiskSources(ctx context.Context, f gateway.AnalyticsFilter) (gatewa
 	out := gateway.RiskSources{Keys: []gateway.RiskKeySource{}, IPs: []gateway.RiskIPSource{}}
 	rows, err := s.pool.Query(ctx, `WITH filtered AS MATERIALIZED (
  SELECT risk_credential_id, risk_client_ip FROM audit_events
- WHERE kind='hit' AND time >= $1 AND time < $2
+ WHERE kind='hit' AND request_source='gateway' AND time >= $1 AND time < $2
  AND risk_protocol IN ('openai_chat','openai_responses','anthropic','openai_images','openai_images_generations','openai_images_edits')
  AND ($3='' OR risk_protocol=$3 OR ($3='openai_images' AND risk_protocol IN ('openai_images_generations','openai_images_edits')))
  AND ($4='' OR risk_model=$4)

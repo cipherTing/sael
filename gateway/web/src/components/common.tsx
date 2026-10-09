@@ -170,22 +170,41 @@ export function CopyButton({
     </Button>
   );
 }
-export function ActionBadge({ action }: { action: string }) {
+export function ActionBadge({
+  action,
+  reason,
+}: {
+  action: string;
+  reason?: string;
+}) {
   return (
     <span
       className={`action-badge ${action === "block" ? "blocked" : "allowed"}`}
     >
-      {action === "block" ? "拦截" : "记录放行"}
+      {action === "block"
+        ? "拦截"
+        : reason === "condition_record_only"
+          ? "条件仅记录"
+          : reason === "scene_record_only"
+            ? "场景仅记录"
+            : reason === "non_blocking"
+              ? "非阻塞仅记录"
+              : "记录放行"}
     </span>
   );
 }
 
-export function SceneModeBadge({ action }: { action: string }) {
+export function SceneModeBadge({
+  action,
+  mode,
+}: {
+  action?: string;
+  mode?: "blocking" | "non_blocking";
+}) {
+  const blocking = mode ? mode === "blocking" : action === "block";
   return (
-    <span
-      className={`action-badge ${action === "block" ? "blocked" : "allowed"}`}
-    >
-      {action === "block" ? "阻塞性审查" : "非阻塞性审查"}
+    <span className={`action-badge ${blocking ? "blocked" : "allowed"}`}>
+      {blocking ? "阻塞性审查" : "非阻塞性审查"}
     </span>
   );
 }

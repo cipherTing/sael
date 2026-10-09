@@ -5,9 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"slices"
 	"time"
-	"unicode/utf8"
 
 	"github.com/cipherTing/sael/gateway/internal/policy"
 )
@@ -37,57 +35,70 @@ func (s *Server) observeIngress(ctx context.Context, c Count) {
 
 // review owns classification and persistence; it never writes to the client's response.
 func (s *Server) review(parent context.Context, event Event, p policy.Policy, count Count) (Count, policy.Decision) {
+	event.ExecutionMode = policy.Blocking
+	result, decision, _ := s.reviewWithEvent(parent, event, p, count, true)
+	return result, decision
+}
+
+// reviewWithEvent shares the decision engine while letting callers own persistence.
+func (s *Server) reviewWithEvent(parent context.Context, event Event, p policy.Policy, count Count, record bool) (Count, policy.Decision, Event) {
 	decision := policy.Decision{Action: policy.Allow}
 	required := policy.RequiredQuestions(p, event.Protocol, event.Model)
 	if len(required) == 0 {
 		count.Outcome = "clean"
-		return count, decision
+		return count, decision, event
 	}
 	config, configErr := s.Store.Jev(parent)
 	inputLimit := config.inputLimit()
-	inputTokens, tokenErr := inputTokensOverLimit(event.Text, inputLimit)
-	if tokenErr != nil {
-		slog.Warn("input token estimate failed", "request_id", event.RequestID, "error", tokenErr)
-	}
-	if tokenErr == nil && inputTokens > inputLimit {
+	inputChars, overLimit := inputCharsOverLimit(event.Text, inputLimit)
+	if overLimit {
 		count.Outcome = "input_too_long"
 		event.Kind, event.ErrorKind = "warning", "classifier_input_too_long"
-		event.InputChars, event.InputTokens, event.JevInputLimit = utf8.RuneCountInString(event.Text), inputTokens, inputLimit
+		event.InputChars, event.JevInputLimit = inputChars, inputLimit
 		event.Decision = decision
 		event.TextPreview = preview(event.Text, 500)
-		s.writeEvent(parent, event)
-		return count, decision
+		if record {
+			s.writeEvent(parent, event)
+		}
+		return count, decision, event
 	}
 	keys := []string{}
-	byScene := map[string]string{}
+	byCondition := map[policy.ConditionKey]string{}
 	cacheAvailable := false
 	if s.ReviewCache != nil && configErr == nil {
 		for _, scene := range p.Scenes {
 			if scene.AppliesTo(event.Protocol) && scene.AppliesToModel(event.Model) {
-				key := sceneCacheKey(config, scene, event.Text)
-				keys = append(keys, key)
-				byScene[scene.ID] = key
+				for _, condition := range scene.Conditions {
+					if _, exists := byCondition[condition.Key()]; exists {
+						continue
+					}
+					key := conditionCacheKey(config, condition, event.Text)
+					keys = append(keys, key)
+					byCondition[condition.Key()] = key
+				}
 			}
 		}
 		count.CacheLookup = len(keys) > 0
 		values, err := s.ReviewCache.Lookup(parent, keys)
 		cacheAvailable = err == nil
 		if err == nil && len(keys) > 0 {
-			verdicts := map[string]bool{}
+			verdicts := map[policy.ConditionKey]bool{}
 			complete := true
-			for id, key := range byScene {
+			for condition, key := range byCondition {
 				value, ok := values[key]
 				if !ok {
 					complete = false
 					break
 				}
-				verdicts[id] = value
+				verdicts[condition] = value
 			}
 			if complete {
-				count.CacheHit = true
-				event.ReviewSource = "cache"
-				event.Decision, event.Trace = cachedDecision(p, verdicts, event.Protocol, event.Model)
-				return s.finishReview(parent, event, p, count)
+				event.Decision, event.Trace, err = policy.EvaluatePredicates(p, verdicts, event.Protocol, event.Model)
+				if err == nil {
+					count.CacheHit = true
+					event.ReviewSource = "cache"
+					return s.finishReview(parent, event, p, count, record)
+				}
 			}
 		}
 	}
@@ -120,15 +131,16 @@ func (s *Server) review(parent context.Context, event Event, p policy.Policy, co
 	}
 	if errors.Is(parent.Err(), context.Canceled) {
 		count.Outcome = "client_canceled"
-		return count, decision
+		return count, decision, event
 	}
 	timedOut := errors.Is(ctx.Err(), context.DeadlineExceeded)
 	s.markClassifier(err, timedOut)
 	count.ClassifierSample = true
 	count.ClassifierMS = time.Since(started).Milliseconds()
 	if err == nil && decision.SceneID == "" {
+		event.Scores, event.Decision, event.Trace = scores, decision, trace
 		count.Outcome = "clean"
-		return count, decision
+		return count, decision, event
 	}
 	event.ReviewSource = "jev"
 	event.ClassifierMS = count.ClassifierMS
@@ -137,51 +149,50 @@ func (s *Server) review(parent context.Context, event Event, p policy.Policy, co
 		event.Kind, event.ErrorKind = "failure", classifierErrorKind(err, timedOut)
 		count.ErrorKind = event.ErrorKind
 		count.Outcome = "unreviewed"
-		s.writeEvent(parent, event)
-		return count, decision
-	}
-	if s.ReviewCache != nil && cacheAvailable && len(keys) > 0 {
-		values := map[string]bool{}
-		matched := map[string]bool{}
-		for _, t := range trace {
-			matched[t.ID] = t.Status == "effective" || t.Status == "shadowed"
+		if record {
+			s.writeEvent(parent, event)
 		}
-		// Cache every applicable scene predicate once the prompt has at least one
-		// hit. False values are meaningful here: without them a later lookup can
-		// never prove that all current scenes were evaluated.
-		if decision.SceneID != "" {
-			for _, scene := range p.Scenes {
-				if key, ok := byScene[scene.ID]; ok {
-					values[key] = matched[scene.ID]
-				}
-			}
+		return count, decision, event
+	}
+	if s.ReviewCache != nil && cacheAvailable && decision.SceneID != "" {
+		byQuestion := map[string]float64{}
+		for _, score := range scores {
+			byQuestion[score.Question] = score.Value
+		}
+		values := map[string]bool{}
+		// A winning scene enables retention of all applicable condition facts,
+		// including false facts and conditions in later, unevaluated scenes.
+		for condition, key := range byCondition {
+			values[key] = byQuestion[condition.Question] > condition.Threshold
 		}
 		if err := s.ReviewCache.Save(parent, values); err != nil {
 			slog.Warn("review cache write failed", "error", err)
 		}
 	}
 	count.Scores = scores
-	return s.finishReview(parent, event, p, count)
+	return s.finishReview(parent, event, p, count, record)
 }
 
-func (s *Server) finishReview(ctx context.Context, event Event, p policy.Policy, count Count) (Count, policy.Decision) {
+func (s *Server) finishReview(ctx context.Context, event Event, p policy.Policy, count Count, record bool) (Count, policy.Decision, Event) {
 	decision := event.Decision
 	if decision.SceneID == "" {
 		count.Outcome = "clean"
-		return count, decision
+		return count, decision, event
 	}
 	for _, scene := range p.Scenes {
-		if scene.ID == decision.SceneID || slices.Contains(decision.AlsoMatched, scene.ID) {
-			count.SceneMatches = append(count.SceneMatches, SceneMatch{SceneID: scene.ID, Name: scene.Name, Action: string(scene.Action), WinnerID: decision.SceneID, WinnerName: decision.SceneName})
+		if scene.ID == decision.SceneID {
+			count.SceneMatches = append(count.SceneMatches, SceneMatch{SceneID: scene.ID, Name: scene.Name, Action: string(decision.Action), WinnerID: decision.SceneID, WinnerName: decision.SceneName})
 		}
 	}
 	event.Kind = "hit"
-	s.writeEvent(ctx, event)
+	if record {
+		s.writeEvent(ctx, event)
+	}
 	count.Outcome = "hit_allowed"
 	if decision.Action == policy.Block {
 		count.Outcome = "blocked"
 	}
-	return count, decision
+	return count, decision, event
 }
 
 func (s *Server) startReview(event Event, p policy.Policy, count Count, blockPlan sessionBlockPlan) bool {
@@ -198,18 +209,22 @@ func (s *Server) startReview(event Event, p policy.Policy, count Count, blockPla
 	go func() {
 		defer s.reviewWG.Done()
 		defer func() { s.reviewMu.Lock(); s.reviewActive--; s.reviewMu.Unlock() }()
-		result, decision := s.review(s.reviewContext, event, p, count)
+		event.ExecutionMode = policy.NonBlocking
+		result, decision, _ := s.reviewWithEvent(s.reviewContext, event, p, count, true)
 		s.recordCount(result)
-		if ttl := winningSceneFreezeTTL(p, decision.SceneID); ttl > 0 {
+		if ttl := winningSceneFreezeTTL(p, decision); ttl > 0 {
 			s.rememberSessionBlock(s.reviewContext, blockPlan, ttl)
 		}
 	}()
 	return true
 }
 
-func winningSceneFreezeTTL(p policy.Policy, sceneID string) time.Duration {
+func winningSceneFreezeTTL(p policy.Policy, decision policy.Decision) time.Duration {
+	if decision.Action != policy.Block {
+		return 0
+	}
 	for _, scene := range p.Scenes {
-		if scene.ID == sceneID && scene.Active() && scene.SessionBlockEnabled {
+		if scene.ID == decision.SceneID && scene.Active() && scene.SessionBlockEnabled {
 			return time.Duration(scene.SessionBlockTTLSeconds) * time.Second
 		}
 	}

@@ -78,7 +78,7 @@ func TestPreviewOnlyHistoryDeclaresThatFullTextIsUnavailable(t *testing.T) {
 
 func TestOversizedInputKeepsRedactedFullTextForExplicitReading(t *testing.T) {
 	s, store, _ := makeServer(t, activePolicy(), &testClassifier{})
-	store.jev.MaxInputTokens = 3
+	store.jev.MaxInputChars = 3
 	text := strings.Repeat("中", 600) + " password=never-store user@example.com"
 	raw, _ := json.Marshal(map[string]string{"input": text})
 	w := httptest.NewRecorder()

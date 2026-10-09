@@ -52,7 +52,7 @@ func run() error {
 			return err
 		}
 	}
-	if err := db.SeedJevDefaults(ctx, cfg.JevMaxInputTokens); err != nil {
+	if err := db.SeedJevDefaults(ctx, cfg.JevMaxInputChars); err != nil {
 		return err
 	}
 	runtimeStore, err := store.OpenRedis(ctx, db, cfg.RedisURL)

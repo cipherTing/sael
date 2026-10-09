@@ -91,7 +91,7 @@ func TestPostgresPolicyEventsAndCounts(t *testing.T) {
 		t.Fatalf("changes: %+v %v", changes, err)
 	}
 	now := time.Now().UTC()
-	event := gateway.Event{ID: "event-1", Time: now, Kind: "hit", RequestID: "request-1", Protocol: "openai_chat", Model: "test", Decision: policy.Decision{Action: policy.Block, SceneID: "scene", SceneName: "cyber", Hits: []policy.Hit{{Question: "cyber_abuse", Value: 0.9, Threshold: 0.8}}}}
+	event := gateway.Event{ID: "event-1", Time: now, Kind: "hit", RequestID: "request-1", Protocol: "openai_chat", Model: "test", Decision: policy.Decision{Action: policy.Block, SceneID: "scene", SceneName: "cyber", Hits: []policy.Hit{{Question: "cyber_abuse", Value: scorePointer(0.9), Threshold: 0.8}}}}
 	if err := s.WriteEvent(ctx, event); err != nil {
 		t.Fatal(err)
 	}
@@ -310,3 +310,5 @@ func TestFailedCountWriteReplaysExactlyOnce(t *testing.T) {
 		t.Fatalf("replayed count: %+v %v", overview, err)
 	}
 }
+
+func scorePointer(value float64) *float64 { return &value }

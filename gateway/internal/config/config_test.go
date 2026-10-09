@@ -61,18 +61,18 @@ func TestLoadAllowsAdminToConfigureUpstreamAfterStartup(t *testing.T) {
 
 func TestLoadReadsJevInputLimitDeploymentSettings(t *testing.T) {
 	env := map[string]string{"REDIS_URL": "redis://localhost:6379",
-		"DATABASE_URL":         "postgres://example",
-		"ADMIN_PASSWORD":       "secret",
-		"JEV_MAX_INPUT_TOKENS": "120000",
+		"DATABASE_URL":        "postgres://example",
+		"ADMIN_PASSWORD":      "secret",
+		"JEV_MAX_INPUT_CHARS": "120000",
 	}
 	cfg, err := Load(func(k string) string { return env[k] })
-	if err != nil || cfg.JevMaxInputTokens != 120000 {
+	if err != nil || cfg.JevMaxInputChars != 120000 {
 		t.Fatalf("config=%+v err=%v", cfg, err)
 	}
 }
 
 func TestLoadRejectsInvalidJevInputLimitSettings(t *testing.T) {
-	env := map[string]string{"REDIS_URL": "redis://localhost:6379", "DATABASE_URL": "postgres://example", "ADMIN_PASSWORD": "secret", "JEV_MAX_INPUT_TOKENS": "-1"}
+	env := map[string]string{"REDIS_URL": "redis://localhost:6379", "DATABASE_URL": "postgres://example", "ADMIN_PASSWORD": "secret", "JEV_MAX_INPUT_CHARS": "-1"}
 	if _, err := Load(func(k string) string { return env[k] }); err == nil {
 		t.Fatal("negative Jev input limit must fail")
 	}

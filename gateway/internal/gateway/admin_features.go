@@ -26,7 +26,7 @@ func (s *Server) policyInput(r *http.Request) (PolicyUpdate, error) {
 	if len(patch) == 0 {
 		return update, errors.New("没有要保存的配置")
 	}
-	allowed := map[string]bool{"scenes": true, "enabled": true, "trusted_key_idle_days": true, "preview_chars": true, "retention_days": true, "block_message": true}
+	allowed := map[string]bool{"scenes": true, "enabled": true, "review_api_enabled": true, "trusted_key_idle_days": true, "preview_chars": true, "retention_days": true, "block_message": true}
 	for k := range patch {
 		if !allowed[k] {
 			return update, errors.New("不支持的策略配置字段")

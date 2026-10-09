@@ -103,9 +103,9 @@ func (s *Server) testPolicy(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		inputTokens, tokenErr := inputTokensOverLimit(input.Text, settings.inputLimit())
-		if tokenErr == nil && inputTokens > settings.inputLimit() {
-			writeJSON(w, map[string]any{"skipped": true, "reason": "classifier_input_too_long", "input_tokens_estimated": inputTokens, "input_limit_tokens": settings.inputLimit(), "scores": []policy.Answer{}, "decision": policy.Decision{Action: policy.Allow, Hits: []policy.Hit{}}, "trace": []policy.SceneTrace{}, "policy_ready": len(p.Scenes) > 0, "classifier_ms": 0})
+		inputChars, overLimit := inputCharsOverLimit(input.Text, settings.inputLimit())
+		if overLimit {
+			writeJSON(w, map[string]any{"skipped": true, "reason": "classifier_input_too_long", "input_chars": inputChars, "input_limit_chars": settings.inputLimit(), "scores": []policy.Answer{}, "decision": policy.Decision{Action: policy.Allow, Hits: []policy.Hit{}}, "trace": []policy.SceneTrace{}, "policy_ready": len(p.Scenes) > 0, "classifier_ms": 0})
 			return
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), settings.timeout())

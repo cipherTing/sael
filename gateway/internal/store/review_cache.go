@@ -15,7 +15,7 @@ import (
 	"github.com/cipherTing/sael/gateway/internal/gateway"
 )
 
-// ReviewCache stores disposable scene verdicts in a separate Redis instance.
+// ReviewCache stores disposable condition predicates in a separate Redis instance.
 type ReviewCache struct {
 	primary *redis.Client
 	pg      *PG

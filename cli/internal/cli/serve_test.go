@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -15,6 +16,95 @@ import (
 
 	"github.com/cipherTing/sael/cli/internal/questions"
 )
+
+func TestServeOwnerDisconnectClosesIncompleteRequests(t *testing.T) {
+	s := startService(t)
+	conn, err := net.Dial("tcp", s.address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	// Reading 100 Continue proves the server accepted the connection and is
+	// blocked reading this request body, without relying on scheduling sleeps.
+	_, err = io.WriteString(conn, "POST /check HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer "+s.token+"\r\nContent-Length: 100\r\nExpect: 100-continue\r\n\r\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := bufio.NewReader(conn)
+	line, err := reader.ReadString('\n')
+	if err != nil || !strings.Contains(line, "100 Continue") {
+		t.Fatalf("continue: %q %v", line, err)
+	}
+	if _, err = reader.ReadString('\n'); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.owner.Close()
+	select {
+	case err := <-s.done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("owner disconnect waited for an incomplete HTTP request")
+	}
+	if _, err := reader.ReadByte(); err == nil {
+		t.Fatal("incomplete request connection remained open")
+	}
+}
+
+func TestServeOwnerDisconnectCancelsActiveJevAndUnusedConnection(t *testing.T) {
+	entered, canceled := make(chan struct{}), make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		close(entered)
+		<-r.Context().Done()
+		close(canceled)
+	}))
+	defer upstream.Close()
+	s := startService(t)
+	unused, err := net.Dial("tcp", s.address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unused.Close()
+	keys := []string{"gore"}
+	raw, _ := json.Marshal(map[string]any{"text": "test", "base_url": upstream.URL, "api_key": "key", "model": "model", "questions": keys, "deadline": time.Now().Add(time.Minute)})
+	req, _ := http.NewRequest("POST", "http://"+s.address+"/check", bytes.NewReader(raw))
+	req.Header.Set("Authorization", "Bearer "+s.token)
+	requestDone := make(chan struct{})
+	go func() {
+		defer close(requestDone)
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Jev request did not start")
+	}
+	_ = s.owner.Close()
+	select {
+	case err := <-s.done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("service did not exit")
+	}
+	select {
+	case <-canceled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("in-flight Jev was not canceled")
+	}
+	select {
+	case <-requestDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("local request remained open")
+	}
+}
 
 type serviceFixture struct {
 	address, token string
@@ -219,7 +309,9 @@ func TestServeKeepsOneAuthenticatedSessionAndPoolsUpstreamConnections(t *testing
 			}
 		}
 	}
-	if calls.Load() != 20 || connections.Load() != 1 {
+	// Transport may finish a speculative dial while an existing connection
+	// becomes idle. Verify reuse, without requiring exactly one TCP connection.
+	if calls.Load() != 20 || connections.Load() >= calls.Load() {
 		t.Fatalf("lost request or connection reuse: %d calls, %d connections", calls.Load(), connections.Load())
 	}
 	_ = s.owner.Close()
@@ -245,7 +337,13 @@ func TestServeSlowRequestDoesNotSerializeNewConfiguration(t *testing.T) {
 		serveAnswer(w)
 	}))
 	defer first.Close()
-	defer close(release)
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
 	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
 		if r.Header.Get("Authorization") != "Bearer new-key" || !strings.Contains(string(raw), `"model":"new-model"`) {
@@ -274,5 +372,11 @@ func TestServeSlowRequestDoesNotSerializeNewConfiguration(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatal("slow request blocked independent request")
+	}
+	close(release)
+	select {
+	case <-firstDone:
+	case <-time.After(time.Second):
+		t.Fatal("first request did not finish after release")
 	}
 }

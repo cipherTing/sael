@@ -49,7 +49,6 @@ func BenchmarkGatewayRequest(b *testing.B) {
 				text := strings.Repeat("The current user asks a routine question. ", size/40+1)[:size]
 				raw, _ := json.Marshal(map[string]any{"model": "benchmark", "input": text})
 				body := string(raw)
-				_, _ = estimateInputTokens(text)
 				b.ReportAllocs()
 				b.ResetTimer()
 				for b.Loop() {
@@ -68,12 +67,11 @@ func BenchmarkInputPreflight(b *testing.B) {
 		b.Run(fmt.Sprintf("%dB", size), func(b *testing.B) {
 			part := "用户当前输入一段普通文本进行分类。"
 			text := strings.Repeat(part, size/len(part)+1)
-			_, _ = estimateInputTokens(text)
 			b.ReportAllocs()
 			b.ResetTimer()
 			for b.Loop() {
-				if _, err := estimateInputTokens(text); err != nil {
-					b.Fatal(err)
+				if chars, _ := inputCharsOverLimit(text, DefaultJevInputChars); chars == 0 {
+					b.Fatal("empty input")
 				}
 			}
 		})

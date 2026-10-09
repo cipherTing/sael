@@ -719,7 +719,7 @@ it("compares the final scene freeze duration rather than only its blocking actio
   ).toBeTruthy();
 });
 
-it("shows a nonblocking hit freezing subsequent requests but never freezes an unmatched sample", async () => {
+it("never freezes a nonblocking hit or an unmatched sample", async () => {
   const recording = {
     ...active,
     scenes: [
@@ -742,7 +742,7 @@ it("shows a nonblocking hit freezing subsequent requests but never freezes an un
     <PolicyTest policy={recording} sample={sample} />,
   );
   await screen.findByText("记录放行");
-  expect(screen.getByText("冻结后续会话 · 30 分钟")).toBeTruthy();
+  expect(screen.queryByText(/冻结后续会话/)).toBeNull();
   rerender(
     <PolicyTest
       policy={{

@@ -20,6 +20,7 @@ RUN apk add --no-cache ca-certificates && addgroup -S sael && adduser -S -G sael
 COPY --from=go-build /out/sael-gateway /usr/local/bin/sael-gateway
 COPY --from=go-build /out/sael /usr/local/bin/sael
 COPY --from=web /src/gateway/web/dist/ /opt/sael/web/
+RUN chmod -R a+rX /opt/sael/web
 COPY --chmod=755 gateway/deploy/healthcheck.sh /usr/local/bin/sael-healthcheck
 USER sael
 ENV WEB_DIR=/opt/sael/web SPOOL_PATH=/var/lib/sael/spool.jsonl ADMIN_LISTEN_ADDR=:8080 INGRESS_LISTEN_ADDR=:8081

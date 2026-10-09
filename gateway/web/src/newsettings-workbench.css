@@ -323,7 +323,22 @@
   font-variant-numeric: tabular-nums;
 }
 
+.settings-console {
+  --settings-navigation-height: 54px;
+}
+.settings-navigation {
+  position: sticky;
+  top: calc(-1 * var(--content-padding-top));
+  z-index: 21;
+  height: var(--settings-navigation-height);
+  padding: 4px 0;
+  background: #f4f6fa;
+}
 .settings-console .settings-tabs {
+  height: 46px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scroll-padding-inline: 4px;
   padding: 4px;
   gap: 3px;
   border: 1px solid #e3e9f2;
@@ -596,10 +611,7 @@
 }
 @media (max-width: 700px) {
   .settings-console .settings-tabs {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
     width: 100%;
-    height: auto;
     gap: 2px;
   }
   .settings-console .settings-tabs [role="tab"] {

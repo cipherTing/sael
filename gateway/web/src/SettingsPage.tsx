@@ -57,6 +57,10 @@ import { questionName } from "./questionMeta";
 import { ConditionEditor } from "./components/ConditionEditor";
 import "./scene-editor.css";
 import {
+  changeScene,
+  normalizeScene,
+  sceneReviewMode,
+  sceneCanReject,
   type Condition,
   type Policy,
   type PolicyResponse,
@@ -87,7 +91,7 @@ type Props = {
 };
 const copyPolicy = (p: PolicyResponse): Policy => ({
   enabled: p.enabled,
-  scenes: structuredClone(p.scenes),
+  scenes: p.scenes.map(normalizeScene),
   preview_chars: p.preview_chars,
   retention_days: p.retention_days,
   block_message: p.block_message,
@@ -185,7 +189,7 @@ function SceneRow({
                 </span>
               ))}
           </div>
-          <SceneModeBadge action={scene.action} />
+          <SceneModeBadge mode={sceneReviewMode(scene)} />
         </div>
       </button>
     </div>
@@ -296,7 +300,10 @@ export default function SettingsPage({
           if (cached) {
             const saved = JSON.parse(cached) as Pick<Policy, "scenes">;
             if (Array.isArray(saved.scenes))
-              return { ...copyPolicy(policy), scenes: saved.scenes };
+              return {
+                ...copyPolicy(policy),
+                scenes: saved.scenes.map(normalizeScene),
+              };
           }
         } catch {
           /* use server snapshot */
@@ -305,7 +312,7 @@ export default function SettingsPage({
       return copyPolicy(policy);
     }),
     [baseScenes, setBaseScenes] = useState<Scene[]>(() =>
-      structuredClone(policy.scenes),
+      policy.scenes.map(normalizeScene),
     ),
     [selected, setSelected] = useState(
       initialScene || policy.scenes[0]?.id || "",
@@ -330,7 +337,7 @@ export default function SettingsPage({
     lastPolicyScenes.current = serialized;
     if (!dirty) {
       setDraft(copyPolicy(policy));
-      setBaseScenes(structuredClone(policy.scenes));
+      setBaseScenes(policy.scenes.map(normalizeScene));
     }
   }, [policy, dirty]);
   useEffect(() => {
@@ -366,7 +373,7 @@ export default function SettingsPage({
       setDraft((p) => ({
         ...p,
         scenes: p.scenes.map((s) =>
-          s.id === scene.id ? { ...s, ...patch } : s,
+          s.id === scene.id ? changeScene(s, patch) : s,
         ),
       }));
   }
@@ -392,6 +399,7 @@ export default function SettingsPage({
           models: [],
           conditions: [],
           match: "any",
+          review_mode: "blocking",
           action: "block",
           session_block_enabled: false,
           session_block_ttl_seconds: 3600,
@@ -729,6 +737,10 @@ export default function SettingsPage({
                           <ConditionEditor
                             key={i}
                             index={i}
+                            showDisposition={scene.match === "any"}
+                            dispositionDisabled={
+                              sceneReviewMode(scene) === "non_blocking"
+                            }
                             condition={c}
                             invalid={invalid}
                             questions={policy.questions.filter(
@@ -781,27 +793,57 @@ export default function SettingsPage({
                     </div>
                     <div className="action-options">
                       <button
-                        className={`action-option block ${scene.action === "block" ? "selected" : ""}`}
-                        aria-pressed={scene.action === "block"}
-                        onClick={() => patch({ action: "block" })}
+                        className={`action-option block ${sceneReviewMode(scene) === "blocking" ? "selected" : ""}`}
+                        aria-pressed={sceneReviewMode(scene) === "blocking"}
+                        onClick={() => patch({ review_mode: "blocking" })}
                       >
                         <Ban size={16} />
                         阻塞性审查
                       </button>
                       <button
-                        className={`action-option ${scene.action === "allow" ? "selected" : ""}`}
-                        aria-pressed={scene.action === "allow"}
-                        onClick={() => patch({ action: "allow" })}
+                        className={`action-option ${sceneReviewMode(scene) === "non_blocking" ? "selected" : ""}`}
+                        aria-pressed={sceneReviewMode(scene) === "non_blocking"}
+                        onClick={() => patch({ review_mode: "non_blocking" })}
                       >
                         <FileCheck2 size={16} />
                         非阻塞性审查
                       </button>
                     </div>
+                    <p className="scene-treatment-help">
+                      {sceneReviewMode(scene) === "blocking"
+                        ? "等待审核结果后，再按命中处置决定拒绝或放行。"
+                        : "先转发，后台审核仅记录，不拒绝请求或冻结会话。"}
+                    </p>
+                    {scene.match === "all" && (
+                      <div className="scene-hit-treatment">
+                        <h3>全部条件命中后</h3>
+                        <div className="action-options">
+                          <button
+                            className={`action-option block ${scene.action === "block" ? "selected" : ""}`}
+                            aria-pressed={scene.action === "block"}
+                            disabled={sceneReviewMode(scene) === "non_blocking"}
+                            onClick={() => patch({ action: "block" })}
+                          >
+                            <Ban size={16} />
+                            拒绝
+                          </button>
+                          <button
+                            className={`action-option ${scene.action === "allow" ? "selected" : ""}`}
+                            aria-pressed={scene.action === "allow"}
+                            onClick={() => patch({ action: "allow" })}
+                          >
+                            <FileCheck2 size={16} />
+                            仅记录
+                          </button>
+                        </div>
+                      </div>
+                    )}
                     <div className="scene-freeze">
                       <label className="scene-freeze-toggle">
                         <Switch
                           aria-label="命中后冻结会话"
                           checked={Boolean(scene.session_block_enabled)}
+                          disabled={!sceneCanReject(scene)}
                           onCheckedChange={(enabled) =>
                             patch({
                               session_block_enabled: enabled,
@@ -811,6 +853,9 @@ export default function SettingsPage({
                           }
                         />
                         <span>命中后冻结会话</span>
+                        <Help>
+                          只有实际拒绝的命中才冻结会话；仅记录不冻结。
+                        </Help>
                       </label>
                       {scene.session_block_enabled && (
                         <label className="field scene-freeze-duration">
@@ -890,7 +935,7 @@ export default function SettingsPage({
                 disabled={saving}
                 onClick={() => {
                   setDraft(copyPolicy(policy));
-                  setBaseScenes(structuredClone(policy.scenes));
+                  setBaseScenes(policy.scenes.map(normalizeScene));
                   setAttempted(false);
                 }}
               >

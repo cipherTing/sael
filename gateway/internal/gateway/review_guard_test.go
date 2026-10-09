@@ -85,7 +85,7 @@ func TestSessionFreezeDoesNotBlockUnrelatedInputWithoutSessionID(t *testing.T) {
 	}
 }
 
-func TestMixedScenesFreezeWinningRecordScene(t *testing.T) {
+func TestMixedScenesDoNotFreezeWinningRecordScene(t *testing.T) {
 	p := activePolicy()
 	record := p.Scenes[0]
 	record.ID, record.Name, record.Action = "record", "record", policy.Allow
@@ -104,8 +104,8 @@ func TestMixedScenesFreezeWinningRecordScene(t *testing.T) {
 	if call() != http.StatusCreated {
 		t.Fatal("record scene blocked the initial request")
 	}
-	if call() != http.StatusForbidden || c.calls != 1 || *upstream != 1 {
-		t.Fatal("winning record scene did not freeze its follow-up")
+	if call() != http.StatusCreated || c.calls != 2 || *upstream != 2 {
+		t.Fatal("winning record scene froze its follow-up")
 	}
 }
 
@@ -337,7 +337,7 @@ func TestBlockResponseUsesSavedMessageTemplateAndDefault(t *testing.T) {
 func TestDefaultJevGuardSkipsVeryLongPromptWithoutClassifierFailure(t *testing.T) {
 	c := &testClassifier{answers: fullAnswers(nil)}
 	s, store, upstream := makeServer(t, activePolicy(), c)
-	raw, _ := json.Marshal(map[string]string{"input": strings.Repeat(" a", 32000)})
+	raw, _ := json.Marshal(map[string]string{"input": strings.Repeat("字", 5001)})
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, authorizedRequest("POST", "/v1/responses", strings.NewReader(string(raw))))
 	if w.Code != 201 || *upstream != 1 || c.calls != 0 {
@@ -351,24 +351,49 @@ func TestDefaultJevGuardSkipsVeryLongPromptWithoutClassifierFailure(t *testing.T
 	}
 }
 
-func TestJevGuardRejectsExplicitZeroAndUsesTokenUnits(t *testing.T) {
+func TestJevGuardUsesConfiguredCharacterLimitWithoutTokenPrediction(t *testing.T) {
+	c := &testClassifier{answers: fullAnswers(nil)}
+	s, store, _ := makeServer(t, activePolicy(), c)
+	store.jev = JevConfig{BaseURL: "https://example.test", Model: "jev", APIKey: "secret", MaxInputChars: 5}
+	for _, text := range []string{"你好世界啊", "你好世界啊!"} {
+		c.calls = 0
+		store.events = nil
+		raw, _ := json.Marshal(map[string]string{"input": text})
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, authorizedRequest("POST", "/v1/responses", strings.NewReader(string(raw))))
+		if text == "你好世界啊" && c.calls != 1 {
+			t.Fatalf("text at character limit was skipped: calls=%d", c.calls)
+		}
+		if text == "你好世界啊!" && c.calls != 0 {
+			t.Fatalf("text over character limit reached Jev: calls=%d", c.calls)
+		}
+		if text == "你好世界啊!" {
+			raw, _ := json.Marshal(store.events[0])
+			if !strings.Contains(string(raw), `"input_chars":6`) || store.events[0].JevInputLimit != 5 {
+				t.Fatalf("warning lost character count: %s", raw)
+			}
+		}
+	}
+}
+
+func TestJevGuardRejectsExplicitZeroAndUsesCharacterUnits(t *testing.T) {
 	s, _, _ := makeServer(t, activePolicy(), &testClassifier{})
-	w := adminRequest(t, s, "PUT", "/admin/jev", "{\"base_url\":\"https://example.test\",\"api_key\":\"test\",\"model\":\"jev\",\"max_input_tokens\":0}")
+	w := adminRequest(t, s, "PUT", "/admin/jev", "{\"base_url\":\"https://example.test\",\"api_key\":\"test\",\"model\":\"jev\",\"max_input_chars\":0}")
 	if w.Code != 400 {
 		t.Fatalf("zero limit accepted: %d", w.Code)
 	}
 	w = adminRequest(t, s, "GET", "/admin/jev", "")
 	var got map[string]any
 	_ = json.Unmarshal(w.Body.Bytes(), &got)
-	if got["max_input_tokens"] != float64(28800) {
-		t.Fatalf("missing default token limit: %s", w.Body.String())
+	if got["max_input_chars"] != float64(5000) {
+		t.Fatalf("missing default character limit: %s", w.Body.String())
 	}
 }
 
 func TestDraftTextTestUsesProductionInputGuard(t *testing.T) {
 	c := &testClassifier{answers: fullAnswers(nil)}
 	s, store, _ := makeServer(t, activePolicy(), c)
-	store.jev = JevConfig{BaseURL: "https://example.test", Model: "jev", APIKey: "secret", MaxInputTokens: 3}
+	store.jev = JevConfig{BaseURL: "https://example.test", Model: "jev", APIKey: "secret", MaxInputChars: 3}
 	for _, path := range []string{"/admin/jev/test", "/admin/policy/test"} {
 		w := adminRequest(t, s, "POST", path, "{\"text\":\"a b c d e f g\"}")
 		if w.Code != 200 || !strings.Contains(w.Body.String(), "\"skipped\":true") || c.calls != 0 {
@@ -471,13 +496,13 @@ func TestFrozenSessionRespectsSceneScopeAndDoesNotRenewOnRetry(t *testing.T) {
 func TestJevInputAtLimitIsReviewedAndOverLimitIsSkipped(t *testing.T) {
 	c := &testClassifier{answers: fullAnswers(nil)}
 	s, store, _ := makeServer(t, activePolicy(), c)
-	store.jev.MaxInputTokens = 3
+	store.jev.MaxInputChars = 3
 	for _, tc := range []struct {
 		text      string
 		wantCalls int
 		outcome   string
 	}{
-		{"a b c", 1, "clean"}, {"a b c d", 1, "input_too_long"},
+		{"a b", 1, "clean"}, {"a b!", 1, "input_too_long"},
 	} {
 		raw, _ := json.Marshal(map[string]string{"input": tc.text})
 		w := httptest.NewRecorder()
@@ -507,14 +532,14 @@ func TestNormalRequestKeepsAggregatesWithoutScoresOrAuditRecord(t *testing.T) {
 	}
 }
 
-func TestByteLengthDoesNotRejectTextBelowTokenLimit(t *testing.T) {
+func TestByteLengthDoesNotRejectTextAtCharacterLimit(t *testing.T) {
 	c := &testClassifier{answers: fullAnswers(nil)}
 	s, store, _ := makeServer(t, activePolicy(), c)
-	store.jev.MaxInputTokens = 3
+	store.jev.MaxInputChars = 3
 	w := httptest.NewRecorder()
-	s.ServeHTTP(w, authorizedRequest("POST", "/v1/responses", strings.NewReader(`{"input":"hello world"}`)))
+	s.ServeHTTP(w, authorizedRequest("POST", "/v1/responses", strings.NewReader(`{"input":"你好🙂"}`)))
 	if w.Code != 201 || c.calls != 1 || len(store.events) != 0 {
-		t.Fatal("byte size was incorrectly used as the token limit")
+		t.Fatal("byte size was incorrectly used as the character limit")
 	}
 }
 

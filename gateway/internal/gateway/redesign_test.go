@@ -148,12 +148,12 @@ func TestPausedSceneDoesNotBlock(t *testing.T) {
 	}
 }
 
-func TestIngressDoesNotExposeManagementAPI(t *testing.T) {
-	s, _, _ := makeServer(t, activePolicy(), &testClassifier{})
+func TestIngressForwardsManagementPathsToUpstream(t *testing.T) {
+	s, _, upstreamCalls := makeServer(t, activePolicy(), &testClassifier{})
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, authorizedRequest("POST", "/admin/login", strings.NewReader(`{"password":"secret"}`)))
-	if w.Code != http.StatusNotFound || len(w.Result().Cookies()) != 0 {
-		t.Fatalf("ingress exposed login: %d", w.Code)
+	if w.Code != http.StatusCreated || *upstreamCalls != 1 || len(w.Result().Cookies()) != 0 {
+		t.Fatalf("ingress did not forward downstream login: status=%d upstream=%d", w.Code, *upstreamCalls)
 	}
 }
 

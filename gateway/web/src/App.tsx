@@ -22,7 +22,6 @@ import {
   LogOut,
   Menu,
   Settings2,
-  Shield,
   Workflow,
 } from "lucide-react";
 import { request, APIError, AUTH_EXPIRED_EVENT } from "./api";
@@ -55,6 +54,7 @@ const RecordsPage = lazy(() => import("./pages/RecordsPage"));
 const ScenesPage = lazy(() => import("./SettingsPage"));
 const SettingsConsole = lazy(() => import("./pages/SettingsConsole"));
 const JevSettingsPage = lazy(() => import("./JevSettingsPage"));
+const ReviewAPIPage = lazy(() => import("./pages/ReviewAPIPage"));
 const navigation = [
   { path: "/", name: "总览", icon: LayoutDashboard },
   { path: "/scenes", name: "场景", icon: Workflow },
@@ -102,9 +102,7 @@ function Login({ onLogin }: { onLogin: () => void }) {
     <div className="login-page">
       <form className="login-form" onSubmit={(event) => void submit(event)}>
         <div className="brand">
-          <span className="brand-mark">
-            <Shield size={19} />
-          </span>
+          <img className="brand-logo" src="/sael-logo.png" alt="Sael" />
           Sael
         </div>
         <h1>登录运维平台</h1>
@@ -406,9 +404,7 @@ function Console() {
   const nav = (
     <>
       <div className="brand">
-        <span className="brand-mark">
-          <Shield size={18} />
-        </span>
+        <img className="brand-logo" src="/sael-logo.png" alt="Sael" />
         Sael
       </div>
       <div className="nav-section">工作空间</div>
@@ -495,7 +491,12 @@ function Console() {
                 <Routes>
                   <Route
                     path="/"
-                    element={<DashboardPage enabled={policy.data.enabled} />}
+                    element={
+                      <DashboardPage
+                        enabled={policy.data.enabled}
+                        reviewAPIEnabled={policy.data.review_api_enabled}
+                      />
+                    }
                   />
                   <Route
                     path="/scenes"
@@ -526,8 +527,18 @@ function Console() {
                         policy={policy.data}
                         onSave={savePolicy}
                         jev={<JevRoute />}
+                        reviewAPI={
+                          <ReviewAPIPage
+                            policy={policy.data}
+                            onSave={savePolicy}
+                          />
+                        }
                       />
                     }
+                  />
+                  <Route
+                    path="/review-api"
+                    element={<Navigate to="/settings?tab=review-api" replace />}
                   />
                   <Route path="*" element={<Navigate to="/" replace />} />
                 </Routes>

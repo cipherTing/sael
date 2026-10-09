@@ -64,6 +64,88 @@ function mount(initialEntry = "/") {
   );
 }
 
+it("explains cached condition-only recording without inventing scores", async () => {
+  const item = {
+    ...event,
+    review_source: "cache",
+    scores: [],
+    execution_mode: "blocking",
+    decision: {
+      ...event.decision,
+      action: "allow",
+      review_mode: "blocking",
+      reason: "condition_record_only",
+      hits: [{ question: "gore", threshold: 1.5, record_only: true }],
+    },
+    trace: [
+      {
+        id: "scene-old",
+        name: "历史场景",
+        status: "effective",
+        conditions: [
+          {
+            question: "gore",
+            threshold: 1.5,
+            matched: true,
+            record_only: true,
+          },
+        ],
+      },
+    ],
+  };
+  vi.mocked(request).mockImplementation(async (path) =>
+    path === "/admin/events/event-1" ? item : [item],
+  );
+  mount();
+  const row = await screen.findByRole("row", { name: "查看请求 request-1" });
+  expect(within(row).getByText("条件仅记录")).toBeTruthy();
+  fireEvent.click(row);
+  const dialog = await screen.findByRole("dialog");
+  expect(await within(dialog).findByText("缓存判定，无原始分数")).toBeTruthy();
+  expect(within(dialog).queryByRole("img", { name: /原始刻度/ })).toBeNull();
+});
+
+it("filters records by request source", async () => {
+  vi.mocked(request).mockResolvedValue([
+    { ...event, id: "http-event", request_source: "review_api" },
+  ]);
+  mount("/events?request_source=review_api");
+  await screen.findByText("HTTP 审查");
+  expect(request).toHaveBeenCalledWith(
+    expect.stringContaining("request_source=review_api"),
+  );
+  expect(screen.getByRole("combobox", { name: "请求来源" })).toBeTruthy();
+});
+
+it("labels HTTP and legacy gateway records in the combined list", async () => {
+  vi.mocked(request).mockResolvedValue([
+    { ...event, id: "http-event", request_source: "review_api" },
+    event,
+  ]);
+  mount();
+  const rows = await screen.findAllByRole("row", {
+    name: "查看请求 request-1",
+  });
+  expect(within(rows[0]).getByText("HTTP 审查")).toBeTruthy();
+  expect(within(rows[1]).getByText("网关请求")).toBeTruthy();
+});
+
+it.each([
+  ["review_api", "HTTP 审查"],
+  [undefined, "网关请求"],
+])("shows the %s request source in record details", async (source, label) => {
+  const item = { ...event, request_source: source };
+  vi.mocked(request).mockImplementation(async (path) =>
+    path === "/admin/events/event-1" ? item : [item],
+  );
+  mount();
+  fireEvent.click(
+    await screen.findByRole("row", { name: "查看请求 request-1" }),
+  );
+  const dialog = await screen.findByRole("dialog");
+  expect(await within(dialog).findByText(label!)).toBeTruthy();
+});
+
 it("copies the masked key and IP directly from a record row without opening its details", async () => {
   const item = {
     ...event,
@@ -683,7 +765,6 @@ it("loads the redacted full text only on request and can return to the explicit 
     text_available: true,
     text_chars: Array.from(fullValue).length,
     input_chars: 750000,
-    input_tokens_estimated: 618802,
     jev_input_limit: 60000,
     scores: undefined,
   };
@@ -697,7 +778,7 @@ it("loads the redacted full text only on request and can return to the explicit 
   );
   await screen.findByRole("heading", { name: "用户输入预览" });
   expect(screen.getByText(/原始输入 750,000 字/)).toBeTruthy();
-  expect(screen.getByText("618,802 Token")).toBeTruthy();
+  expect(screen.getByText("750,000 字符")).toBeTruthy();
   expect(vi.mocked(request).mock.calls.some(([p]) => p.endsWith("/text"))).toBe(
     false,
   );

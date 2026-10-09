@@ -101,11 +101,9 @@ func serveClassifier(parent context.Context, owner io.Reader, output io.Writer) 
 		}
 	}
 	cancel()
-	shutdown, stop := context.WithTimeout(context.Background(), 3*time.Second)
-	defer stop()
-	if server.Shutdown(shutdown) != nil {
-		_ = server.Close()
-	}
+	// This private service belongs to the gateway. Once its owner disappears,
+	// no caller can use a graceful response; close even incomplete requests.
+	_ = server.Close()
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}

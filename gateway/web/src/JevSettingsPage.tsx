@@ -25,7 +25,7 @@ export type JevConfig = {
   model: string;
   api_key_set: boolean;
   timeout_ms?: number;
-  max_input_tokens?: number;
+  max_input_chars?: number;
   updated_at: string;
 };
 export type JevRuntime = {
@@ -38,7 +38,7 @@ export type JevInput = {
   model: string;
   api_key: string;
   timeout_ms: number;
-  max_input_tokens: number;
+  max_input_chars: number;
 };
 export type JevTestResult = {
   scores: Answer[];
@@ -51,8 +51,8 @@ export type JevTestResult = {
   policy_ready: boolean;
   classifier_ms: number;
   skipped?: boolean;
-  input_tokens_estimated?: number;
-  input_limit_tokens?: number;
+  input_chars?: number;
+  input_limit_chars?: number;
 };
 type Props = {
   config: JevConfig;
@@ -78,8 +78,8 @@ export default function JevSettingsPage({
   const [model, setModel] = useState(config.model);
   const [key, setKey] = useState("");
   const [timeout, setTimeout] = useState(config.timeout_ms || 5000);
-  const [maxInputTokens, setMaxInputTokens] = useState(
-    config.max_input_tokens || 28800,
+  const [maxInputChars, setMaxInputChars] = useState(
+    config.max_input_chars || 5000,
   );
   const [saved, setSaved] = useState(config);
   const [saving, setSaving] = useState(false);
@@ -93,7 +93,7 @@ export default function JevSettingsPage({
     setModel(value.model);
     setKey("");
     setTimeout(value.timeout_ms || 5000);
-    setMaxInputTokens(value.max_input_tokens || 28800);
+    setMaxInputChars(value.max_input_chars || 5000);
   }
   function clearTest() {
     serial.current++;
@@ -106,7 +106,7 @@ export default function JevSettingsPage({
   }, [config]);
   useEffect(() => {
     clearTest();
-  }, [baseURL, model, key, timeout, maxInputTokens]);
+  }, [baseURL, model, key, timeout, maxInputChars]);
 
   let urlValid = false;
   try {
@@ -127,20 +127,20 @@ export default function JevSettingsPage({
     Number.isInteger(timeout) &&
     timeout >= 1 &&
     timeout <= 120000 &&
-    Number.isInteger(maxInputTokens) &&
-    maxInputTokens > 0;
+    Number.isInteger(maxInputChars) &&
+    maxInputChars > 0;
   const dirty =
     baseURL !== saved.base_url ||
     model !== saved.model ||
     key !== "" ||
     timeout !== (saved.timeout_ms || 5000) ||
-    maxInputTokens !== (saved.max_input_tokens || 28800);
+    maxInputChars !== (saved.max_input_chars || 5000);
   const input = (): JevInput => ({
     base_url: baseURL.trim(),
     model: model.trim(),
     api_key: key.trim(),
     timeout_ms: timeout,
-    max_input_tokens: maxInputTokens,
+    max_input_chars: maxInputChars,
   });
 
   async function save() {
@@ -304,9 +304,8 @@ export default function JevSettingsPage({
               <span>
                 送审上限{" "}
                 <Help>
-                  Jev 限制为输入文本加最长审核题不超过 32k Token，整包不超过
-                  64k。默认 28,800 是预留 10% 后的文本估算阈值；使用
-                  cl100k_base 近似计数，超出后放行并记录警告。
+                  按 Unicode 字符数判断。默认 5000 字；超出这个上限的文本将跳过
+                  Jev 审查并直接放行，避免压缩请求等长文本撑爆 Jev 的输入上限。
                 </Help>
               </span>
               <div className="jev-unit-input">
@@ -314,14 +313,14 @@ export default function JevSettingsPage({
                   type="number"
                   min={1}
                   step={1}
-                  aria-label="送审上限（估算 Token）"
-                  value={maxInputTokens || ""}
+                  aria-label="送审上限（字符）"
+                  value={maxInputChars || ""}
                   onChange={(event) =>
-                    setMaxInputTokens(Number(event.target.value))
+                    setMaxInputChars(Number(event.target.value))
                   }
                   disabled={saving}
                 />
-                <span>Token</span>
+                <span>字符</span>
               </div>
             </label>
           </div>
@@ -483,15 +482,15 @@ export default function JevSettingsPage({
                 {result?.skipped && (
                   <div className="jev-skipped-budget">
                     <span>
-                      估算输入{" "}
+                      输入字符数{" "}
                       <strong>
-                        {result.input_tokens_estimated?.toLocaleString()} Token
+                        {result.input_chars?.toLocaleString()} 字符
                       </strong>
                     </span>
                     <span>
                       送审上限{" "}
                       <strong>
-                        {result.input_limit_tokens?.toLocaleString()} Token
+                        {result.input_limit_chars?.toLocaleString()} 字符
                       </strong>
                     </span>
                   </div>

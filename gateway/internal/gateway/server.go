@@ -48,7 +48,10 @@ type Event struct {
 	sessionPlan     *sessionBlockPlan
 	ContentType     string              `json:"content_type,omitempty"`
 	RequestBytes    int64               `json:"request_bytes,omitempty"`
+	ExecutionMode   policy.ReviewMode   `json:"execution_mode,omitempty"`
 	ReviewSource    string              `json:"review_source,omitempty"`
+	RequestSource   string              `json:"request_source,omitempty"`
+	ReviewAPIKeyID  string              `json:"review_api_key_id,omitempty"`
 	CredentialID    string              `json:"credential_id,omitempty"`
 	MaskedKey       string              `json:"masked_key,omitempty"`
 	EndpointGroup   string              `json:"endpoint_group,omitempty"`
@@ -78,7 +81,6 @@ type Event struct {
 	Decision        policy.Decision     `json:"decision"`
 	ClassifierMS    int64               `json:"classifier_ms,omitempty"`
 	InputChars      int                 `json:"input_chars,omitempty"`
-	InputTokens     int                 `json:"input_tokens_estimated,omitempty"`
 	JevInputLimit   int                 `json:"jev_input_limit,omitempty"`
 	ErrorKind       string              `json:"error_kind,omitempty"`
 }
@@ -143,6 +145,7 @@ type EventFilter struct {
 	Kind, Action, Search              string
 	Endpoint, Model, Scene, ErrorKind string
 	ClientIP, SessionID, CredentialID string
+	RequestSource                     string
 	Limit, Offset                     int
 }
 
@@ -194,6 +197,7 @@ type Server struct {
 	ReviewCache            ReviewCache
 	Security               SecurityStore
 	MaxBodyBytes           int64
+	reviewAPIActive        atomic.Int64
 	reviewMu               sync.Mutex
 	reviewWG               sync.WaitGroup
 	reviewActive           int
@@ -249,11 +253,11 @@ func (s *Server) Close() {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if !s.limitBody(w, r) {
+	if r.URL.Path == "/v1/moderations" {
+		s.reviewAPI(w, r)
 		return
 	}
-	if r.URL.Path == "/admin" || strings.HasPrefix(r.URL.Path, "/admin/") {
-		http.NotFound(w, r)
+	if !s.limitBody(w, r) {
 		return
 	}
 	if r.URL.Path == "/healthz" {
@@ -445,7 +449,7 @@ func (s *Server) proxyRequest(w http.ResponseWriter, r *http.Request) {
 		s.forward(w, r)
 		return
 	}
-	if !slices.ContainsFunc(p.Scenes, func(scene policy.Scene) bool { return applies(scene) && scene.Action == policy.Block }) {
+	if !slices.ContainsFunc(p.Scenes, func(scene policy.Scene) bool { return applies(scene) && scene.Mode() == policy.Blocking }) {
 		if !s.startReview(event, p, count, blockPlan) {
 			count.Outcome = "review_busy"
 			now := time.Now().Unix()
@@ -463,7 +467,7 @@ func (s *Server) proxyRequest(w http.ResponseWriter, r *http.Request) {
 	if r.Context().Err() != nil {
 		return
 	}
-	if ttl := winningSceneFreezeTTL(p, decision.SceneID); ttl > 0 {
+	if ttl := winningSceneFreezeTTL(p, decision); ttl > 0 {
 		s.rememberSessionBlock(r.Context(), blockPlan, ttl)
 	}
 	if decision.Action == policy.Block {

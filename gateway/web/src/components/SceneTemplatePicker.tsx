@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Copy, Search } from "lucide-react";
-import type { Scene } from "../policy";
+import { sceneReviewMode, type Scene } from "../policy";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import {
@@ -78,7 +78,7 @@ export function SceneTemplatePicker({
                   <strong>{s.name}</strong>
                   {s.note && <p>{s.note}</p>}
                 </div>
-                <SceneModeBadge action={s.action} />
+                <SceneModeBadge mode={sceneReviewMode(s)} />
               </button>
             ))
           ) : (

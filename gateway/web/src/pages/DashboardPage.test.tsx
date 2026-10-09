@@ -83,6 +83,36 @@ it("uses endpoint and mutually exclusive outcome rings with a separate real-samp
   expect(screen.getByText("时间粒度")).toBeTruthy();
 });
 
+it("shows independent review API statistics in the total overview", async () => {
+  vi.mocked(request).mockImplementation(async (url) => {
+    if (String(url).includes("risk-sources")) return { keys: [], ips: [] };
+    if (String(url).includes("review-api/overview"))
+      return {
+        enabled: true,
+        requests: 4,
+        rpm: 1,
+        allowed: 2,
+        hits: 2,
+        blocked: 1,
+        errors: 0,
+        cache_hits: 1,
+        p50_ms: 20,
+        p95_ms: 40,
+        outcomes: [],
+        scenes: [],
+        keys: [],
+        trend: [],
+      };
+    return data;
+  });
+  mount("/", true);
+  const section = await screen.findByRole("region", { name: "审核接口统计" });
+  expect(within(section).getByRole("heading", { name: "审核接口统计" })).toBeTruthy();
+  expect(await within(section).findByText("请求数")).toBeTruthy();
+  expect(within(section).getByText("4")).toBeTruthy();
+  expect(vi.mocked(request).mock.calls.some(([url]) => String(url).includes("review-api/overview"))).toBe(true);
+});
+
 it("shows no latency samples instead of a zero-valued distribution for cache-only requests", async () => {
   vi.mocked(request).mockImplementation(async (url) =>
     String(url).includes("risk-sources")
@@ -214,7 +244,7 @@ const data: Analytics = {
   errors: [],
   models: ["gpt-test"],
 };
-function mount(initialEntry = "/") {
+function mount(initialEntry = "/", reviewAPIEnabled = false) {
   return render(
     <QueryClientProvider
       client={
@@ -222,7 +252,7 @@ function mount(initialEntry = "/") {
       }
     >
       <MemoryRouter initialEntries={[initialEntry]}>
-        <DashboardPage enabled />
+        <DashboardPage enabled reviewAPIEnabled={reviewAPIEnabled} />
       </MemoryRouter>
     </QueryClientProvider>,
   );

@@ -30,8 +30,8 @@ import "./newpolicy-test.css";
 export type Simulation = {
   scores: Answer[];
   skipped?: boolean;
-  input_tokens_estimated?: number;
-  input_limit_tokens?: number;
+  input_chars?: number;
+  input_limit_chars?: number;
   classifier_ms: number;
   policy_ready: boolean;
   decision: {
@@ -48,6 +48,7 @@ export type Simulation = {
       value: number;
       threshold: number;
       matched: boolean;
+      record_only?: boolean;
     }[];
   }[];
 };
@@ -119,7 +120,8 @@ function freezeSeconds(
   const scene = policy.scenes.find(
     (item) => item.id === result.decision.scene_id,
   );
-  return scene?.session_block_enabled &&
+  return result.decision.action === "block" &&
+    scene?.session_block_enabled &&
     scene.enabled !== false &&
     !scene.needs_endpoint_selection
     ? scene.session_block_ttl_seconds || 0
@@ -166,6 +168,7 @@ function completePolicy(policy: Policy) {
 const statuses: Record<string, string> = {
   effective: "生效",
   shadowed: "低优先级命中",
+  priority_skipped: "前序场景已命中，未继续匹配",
   not_matched: "未命中",
   endpoint_skipped: "端点不适用",
   disabled: "已暂停",
@@ -235,6 +238,9 @@ function ResultCard({
                   &gt; {condition.threshold}
                 </span>
                 {condition.matched && <Check size={11} />}
+                {condition.record_only !== undefined && (
+                  <span>{condition.record_only ? "仅记录" : "拒绝"}</span>
+                )}
               </span>
             ))}
           </div>
@@ -305,12 +311,12 @@ function ResultCard({
           {result.skipped ? (
             <div className="trial-limit">
               <span>
-                估算输入
-                <b>{result.input_tokens_estimated?.toLocaleString()} Token</b>
+                输入字符数
+                <b>{result.input_chars?.toLocaleString()} 字符</b>
               </span>
               <span>
                 送审上限
-                <b>{result.input_limit_tokens?.toLocaleString()} Token</b>
+                <b>{result.input_limit_chars?.toLocaleString()} 字符</b>
               </span>
             </div>
           ) : (
@@ -663,7 +669,7 @@ export function PolicyTest({
           />
         </label>
         <div className="trial-sample-meta">
-          <span>{text.length.toLocaleString()} 字符</span>
+          <span>{Array.from(text).length.toLocaleString()} 字符</span>
           {classifierMs > 0 && (
             <span>
               <Clock3 size={12} />
