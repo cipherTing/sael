@@ -78,13 +78,13 @@ jobs:
           with open(sys.argv[1]) as file:
               manifests = json.load(file)['manifests']
           platforms = {(m['platform']['os'], m['platform']['architecture']): m['digest'] for m in manifests}
-          assert {('linux', 'amd64'), ('linux', 'arm64')} <= platforms, platforms
+          assert {('linux', 'amd64'), ('linux', 'arm64')} <= platforms.keys(), platforms
           with open(sys.argv[2], 'w') as file:
               for architecture in ('amd64', 'arm64'):
-                  file.write(f"{platforms[('linux', architecture)]}\n")
+                  file.write(f"{architecture} {platforms[('linux', architecture)]}\n")
           PY
-          while IFS= read -r platform_digest; do
-            test "$(docker run --rm "$IMAGE@$platform_digest" --version)" = "sael-gateway $VERSION ($GITHUB_SHA)"
+          while read -r architecture platform_digest; do
+            test "$(docker run --rm --platform "linux/$architecture" "$IMAGE@$platform_digest" --version)" = "sael-gateway $VERSION ($GITHUB_SHA)"
           done < "$RUNNER_TEMP/platform-digests.env"
           if [ "$PRERELEASE" = false ]; then
             test "$(docker buildx imagetools inspect "$IMAGE:latest" --format '{{.Manifest.Digest}}')" = "$DIGEST"
