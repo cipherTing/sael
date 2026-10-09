@@ -98,6 +98,7 @@ jobs:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           notes="$RUNNER_TEMP/gateway-release-notes.md"
+          cp gateway/deploy/.env.example "$RUNNER_TEMP/env.example"
           cat > "$notes" <<EOF
           Docker Hub: https://hub.docker.com/r/$IMAGE
 
@@ -106,7 +107,7 @@ jobs:
           Platforms: linux/amd64, linux/arm64
           Source: $GITHUB_SHA
 
-          Download compose.yaml and .env.example, fill .env, then run:
+          Download compose.yaml and env.example, copy env.example to .env and fill it, then run:
           \`docker compose up -d --wait\`
 
           Update: \`docker compose pull gateway && docker compose up -d --no-deps --wait gateway\`
@@ -114,9 +115,9 @@ jobs:
           EOF
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release edit "$GITHUB_REF_NAME" --notes-file "$notes" --latest=false
-            gh release upload "$GITHUB_REF_NAME" gateway/deploy/compose.yaml gateway/deploy/.env.example --clobber
+            gh release upload "$GITHUB_REF_NAME" gateway/deploy/compose.yaml "$RUNNER_TEMP/env.example" --clobber
           else
             args=(--verify-tag --latest=false --title "Sael Gateway $VERSION" --notes-file "$notes")
             if [ "$PRERELEASE" = true ]; then args+=(--prerelease); fi
-            gh release create "$GITHUB_REF_NAME" "${args[@]}" gateway/deploy/compose.yaml gateway/deploy/.env.example
+            gh release create "$GITHUB_REF_NAME" "${args[@]}" gateway/deploy/compose.yaml "$RUNNER_TEMP/env.example"
           fi

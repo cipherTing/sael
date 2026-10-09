@@ -37,11 +37,11 @@ Actions 先调用同一提交的完整 CI，检查成功后构建 `linux/amd64`�
 
 镜像内包含同一源码提交构建的网关、CLI 和前端，保持内部协议一致；网关镜像版本不要求 CLI 或 SDK 同时发版。网关二进制、启动日志及 OCI 标签携带网关版本与源码提交。
 
-发布流程验证两个目标平台及程序 `--version`，然后创建 `gateway/v*` GitHub Release，附带 `compose.yaml`、`.env.example`、镜像 digest 和部署说明。网关 Release 设置 `--latest=false`，保留仓库整体 Latest 给 CLI；CLI 安装脚本也只筛选 `cli/v*`。网关主页按 `gateway/v*` 筛选 Release 检测更新。
+发布流程验证两个目标平台及程序 `--version`，然后创建 `gateway/v*` GitHub Release，附带 `compose.yaml`、`env.example`、镜像 digest 和部署说明。Release 附件使用 `env.example`，因为 GitHub 会改写以点开头的附件名；源码中的配置模板仍为 `.env.example`。网关 Release 设置 `--latest=false`，保留仓库整体 Latest 给 CLI；CLI 安装脚本也只筛选 `cli/v*`。网关主页按 `gateway/v*` 筛选 Release 检测更新。
 
 ## 用户部署
 
-下载部署文件，复制 `.env.example` 为 `.env` 并填写密码、加密密钥：
+从 Release 下载部署文件，复制 `env.example` 为 `.env` 并填写密码、加密密钥：
 
 ```sh
 docker compose up -d --wait
