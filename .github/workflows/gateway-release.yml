@@ -73,16 +73,19 @@ jobs:
         run: |
           test "$(docker buildx imagetools inspect "$IMAGE:$VERSION" --format '{{.Manifest.Digest}}')" = "$DIGEST"
           docker buildx imagetools inspect "$IMAGE@$DIGEST" --raw > "$RUNNER_TEMP/gateway-manifest.json"
-          python3 - "$RUNNER_TEMP/gateway-manifest.json" <<'PY'
+          python3 - "$RUNNER_TEMP/gateway-manifest.json" "$RUNNER_TEMP/platform-digests.env" <<'PY'
           import json, sys
           with open(sys.argv[1]) as file:
               manifests = json.load(file)['manifests']
-          platforms = {(m['platform']['os'], m['platform']['architecture']) for m in manifests}
+          platforms = {(m['platform']['os'], m['platform']['architecture']): m['digest'] for m in manifests}
           assert {('linux', 'amd64'), ('linux', 'arm64')} <= platforms, platforms
+          with open(sys.argv[2], 'w') as file:
+              for architecture in ('amd64', 'arm64'):
+                  file.write(f"{platforms[('linux', architecture)]}\n")
           PY
-          for platform in linux/amd64 linux/arm64; do
-            test "$(docker run --rm --platform "$platform" "$IMAGE@$DIGEST" --version)" = "sael-gateway $VERSION ($GITHUB_SHA)"
-          done
+          while IFS= read -r platform_digest; do
+            test "$(docker run --rm "$IMAGE@$platform_digest" --version)" = "sael-gateway $VERSION ($GITHUB_SHA)"
+          done < "$RUNNER_TEMP/platform-digests.env"
           if [ "$PRERELEASE" = false ]; then
             test "$(docker buildx imagetools inspect "$IMAGE:latest" --format '{{.Manifest.Digest}}')" = "$DIGEST"
           fi
