@@ -737,9 +737,9 @@ export default function SettingsPage({
                           <ConditionEditor
                             key={i}
                             index={i}
-                            showDisposition={scene.match === "any"}
-                            dispositionDisabled={
-                              sceneReviewMode(scene) === "non_blocking"
+                            showDisposition={
+                              scene.match === "any" &&
+                              sceneReviewMode(scene) === "blocking"
                             }
                             condition={c}
                             invalid={invalid}

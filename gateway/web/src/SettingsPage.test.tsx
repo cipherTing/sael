@@ -80,10 +80,8 @@ it("converts whole-scene recording to condition switches and disables freezing",
   ).toBe("true");
   fireEvent.click(screen.getByRole("button", { name: "非阻塞性审查" }));
   expect(
-    screen
-      .getByRole("switch", { name: "血腥程度仅记录" })
-      .hasAttribute("disabled"),
-  ).toBe(true);
+    screen.queryByRole("switch", { name: "血腥程度仅记录" }),
+  ).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "阻塞性审查" }));
   expect(
     screen

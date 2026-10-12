@@ -14,7 +14,6 @@ type Props = {
   invalid: boolean;
   sampleScore?: number;
   showDisposition?: boolean;
-  dispositionDisabled?: boolean;
   onChange: (patch: Partial<Condition>) => void;
   onRemove: () => void;
 };
@@ -26,7 +25,6 @@ export function ConditionEditor({
   invalid,
   sampleScore,
   showDisposition,
-  dispositionDisabled,
   onChange,
   onRemove,
 }: Props) {
@@ -91,7 +89,6 @@ export function ConditionEditor({
           <Switch
             aria-label={`${name}仅记录`}
             checked={Boolean(condition.record_only)}
-            disabled={dispositionDisabled}
             onCheckedChange={(record_only) => onChange({ record_only })}
           />
           <span>命中时仅记录</span>

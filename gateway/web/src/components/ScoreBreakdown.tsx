@@ -62,6 +62,7 @@ export function ScoreBreakdown({
       rawThreshold <= max
         ? rawThreshold
         : undefined;
+    if (threshold === undefined) return [];
     return [
       {
         ...score,
@@ -89,11 +90,14 @@ export function ScoreBreakdown({
             >
               <strong>{questionName(fact.question)}</strong>
               <p>阈值 &gt; {fact.threshold}</p>
-              <p>
-                {fact.matched ? "已命中" : "未命中"}
-                {fact.record_only !== undefined &&
-                  ` · ${fact.record_only ? "仅记录" : "拒绝"}`}
-              </p>
+              <p>{fact.matched ? "已命中" : "未命中"}</p>
+              {fact.matched && fact.record_only !== undefined && (
+                <span
+                  className={`risk-condition-disposition ${fact.record_only ? "record-only" : "blocked"}`}
+                >
+                  {fact.record_only ? "仅记录" : "拦截"}
+                </span>
+              )}
             </article>
           ))}
         </div>
@@ -101,8 +105,7 @@ export function ScoreBreakdown({
     );
   }
   const reached = rows.filter((row) => row.matched),
-    below = rows.filter((row) => !row.matched && row.threshold !== undefined),
-    unconfigured = rows.filter((row) => row.threshold === undefined);
+    below = rows.filter((row) => !row.matched);
 
   function cards(items: typeof rows) {
     return (
@@ -122,9 +125,7 @@ export function ScoreBreakdown({
               <span>/ {row.max}</span>
               <small>
                 {row.matched && <Check size={12} />}
-                {row.threshold === undefined
-                  ? "未配置阈值"
-                  : `> ${row.threshold}`}
+                {`> ${row.threshold}`}
               </small>
             </div>
             <div
@@ -155,16 +156,13 @@ export function ScoreBreakdown({
                 style={{ left: `${(100 * row.value) / row.max}%` }}
               />
             </div>
-            {row.recordOnly !== undefined && (
-              <p className="risk-condition-disposition">
-                命中处置：{row.recordOnly ? "仅记录" : "拒绝"}
-              </p>
+            {row.matched && row.recordOnly !== undefined && (
+              <span
+                className={`risk-condition-disposition ${row.recordOnly ? "record-only" : "blocked"}`}
+              >
+                {row.recordOnly ? "仅记录" : "拦截"}
+              </span>
             )}
-            <div className="risk-score-scale">
-              {(row.max === 3 ? [0, 1, 2, 3] : [0, 1]).map((tick) => (
-                <span key={tick}>{tick}</span>
-              ))}
-            </div>
           </article>
         ))}
       </div>
@@ -176,7 +174,7 @@ export function ScoreBreakdown({
         达到阈值 <span>{reached.length}</span>
       </h3>
       {reached.length > 0 && cards(reached)}
-      {(below.length > 0 || unconfigured.length > 0) && (
+      {below.length > 0 && (
         <details
           open={expanded}
           onToggle={(event) => setExpanded(event.currentTarget.open)}
@@ -184,20 +182,12 @@ export function ScoreBreakdown({
         >
           <summary>
             <ChevronDown size={14} />
-            其余分数 <span>{below.length + unconfigured.length}</span>
+            其余分数 <span>{below.length}</span>
           </summary>
-          {below.length > 0 && (
-            <div>
-              <h4>未达到阈值</h4>
-              {cards(below)}
-            </div>
-          )}
-          {unconfigured.length > 0 && (
-            <div>
-              <h4>未配置阈值</h4>
-              {cards(unconfigured)}
-            </div>
-          )}
+          <div>
+            <h4>未达到阈值</h4>
+            {cards(below)}
+          </div>
         </details>
       )}
     </section>

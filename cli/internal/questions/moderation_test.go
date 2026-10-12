@@ -162,11 +162,17 @@ func TestInstructionsStandAlone(t *testing.T) {
 		assert.NotRegexp(t, wordBoundary(name), instruction,
 			"question %q names itself in its instruction, but the id is never sent "+
 				"to the model", name)
-		assert.NotRegexp(t, wordBoundary(strings.ReplaceAll(name, "_", " ")), instruction,
-			"question %q names itself in prose in its instruction", name)
 		assert.NotContains(t, instruction, "question id",
 			"question %q refers to an id the model never receives", name)
 	}
+}
+
+func TestCyberAbuseInstructionUsesHumanReadableCategoryName(t *testing.T) {
+	question := Moderation()["cyber_abuse"].(sdk.NoulQuestion)
+	instruction := strings.ToLower(entryText(question.Instructions))
+
+	assert.Contains(t, instruction, "cyber abuse")
+	assert.NotContains(t, instruction, "cyber_abuse")
 }
 
 // wordBoundary matches phrase only as a whole word, so that an id is caught when
