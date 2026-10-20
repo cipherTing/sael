@@ -6,6 +6,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import { lazy, Suspense, type ComponentType } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -53,6 +54,7 @@ const policy: PolicyResponse = {
 function mount(
   entry = "/settings",
   onSave = vi.fn().mockResolvedValue(undefined),
+  activePolicy = policy,
 ) {
   return render(
     <QueryClientProvider
@@ -62,7 +64,7 @@ function mount(
     >
       <MemoryRouter initialEntries={[entry]}>
         <SettingsConsole
-          policy={policy}
+          policy={activePolicy}
           onSave={onSave}
           jev={<div>分类器工作台</div>}
         />
@@ -84,11 +86,23 @@ it("groups gateway controls and relay addresses in one tab and keeps retention w
   expect(
     within(gateway).getByRole("switch", { name: "全局审查" }),
   ).toBeTruthy();
-  expect(
-    await within(gateway).findByText("http://localhost:8091"),
-  ).toBeTruthy();
+  await waitFor(() =>
+    expect(
+      gateway.querySelector(".gateway-ingress-address")?.textContent,
+    ).toContain("http://localhost:8091"),
+  );
   expect(
     within(gateway).getByRole("textbox", { name: "出站地址" }),
+  ).toBeTruthy();
+  const flow = within(gateway).getByRole("figure", { name: "请求流量拓扑" });
+  expect(within(flow).getByText("外部客户端")).toBeTruthy();
+  expect(within(flow).getByText("Sael 网关")).toBeTruthy();
+  expect(within(flow).getByText("下游 AI 服务")).toBeTruthy();
+  expect(within(flow).getByText("转发请求")).toBeTruthy();
+  expect(
+    within(flow).getByRole("img", {
+      name: "下游响应经 Sael 回路返回客户端",
+    }),
   ).toBeTruthy();
   expect(
     within(gateway).getByRole("textbox", { name: "拦截提示" }),
@@ -117,6 +131,31 @@ it("groups gateway controls and relay addresses in one tab and keeps retention w
   ).toBeTruthy();
 });
 
+it("keeps the traffic topology unchanged when global review is toggled", async () => {
+  async function readFlow(enabled: boolean) {
+    mount("/settings", vi.fn().mockResolvedValue(undefined), {
+      ...policy,
+      enabled,
+    });
+    const flow = within(
+      screen.getByRole("tabpanel", { name: "网关" }),
+    ).getByRole("figure", { name: "请求流量拓扑" });
+    const text = flow.textContent;
+    cleanup();
+    vi.clearAllMocks();
+    return text;
+  }
+
+  const disabledFlow = await readFlow(false);
+  const enabledFlow = await readFlow(true);
+  expect(enabledFlow).toBe(disabledFlow);
+  expect(disabledFlow).toContain("外部客户端");
+  expect(disabledFlow).toContain("Sael 网关");
+  expect(disabledFlow).toContain("下游 AI 服务");
+  expect(disabledFlow).not.toContain("拦截规则");
+  expect(disabledFlow).not.toContain("审查已开启");
+});
+
 it.each(["review", "access"])(
   "opens the gateway controls from the former %s URL",
   async (tab) => {
@@ -124,7 +163,11 @@ it.each(["review", "access"])(
     expect(
       screen.getByRole("tab", { name: "网关" }).getAttribute("aria-selected"),
     ).toBe("true");
-    expect(await screen.findByText("http://localhost:8091")).toBeTruthy();
+    expect(
+      await within(screen.getByRole("tabpanel", { name: "网关" })).findByText(
+        "http://localhost:8091",
+      ),
+    ).toBeTruthy();
   },
 );
 
@@ -182,6 +225,49 @@ it("keeps gateway drafts while visiting the other settings tabs", async () => {
     (screen.getByRole("textbox", { name: "拦截提示" }) as HTMLTextAreaElement)
       .value,
   ).toBe("Denied {model}");
+});
+
+it("keeps the settings tabs visible while a selected lazy panel loads", async () => {
+  let resolvePanel!: (module: { default: ComponentType }) => void;
+  const LazyPanel = lazy(
+    () =>
+      new Promise<{ default: ComponentType }>((resolve) => {
+        resolvePanel = resolve;
+      }),
+  );
+
+  render(
+    <QueryClientProvider
+      client={
+        new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      }
+    >
+      <MemoryRouter initialEntries={["/settings"]}>
+        <Suspense fallback={<div>整页加载中</div>}>
+          <SettingsConsole
+            policy={policy}
+            onSave={vi.fn()}
+            jev={<LazyPanel />}
+          />
+        </Suspense>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+
+  fireEvent.mouseDown(screen.getByRole("tab", { name: "Jev 分类器" }), {
+    button: 0,
+  });
+
+  expect(
+    screen
+      .getByRole("tab", { name: "Jev 分类器" })
+      .getAttribute("aria-selected"),
+  ).toBe("true");
+  expect(screen.queryByText("整页加载中")).toBeNull();
+  expect(screen.getByText("加载中")).toBeTruthy();
+
+  resolvePanel({ default: () => <div>Jev 面板已加载</div> });
+  expect(await screen.findByText("Jev 面板已加载")).toBeTruthy();
 });
 
 it("places idle expiry in the key list and preserves its draft when saving fails", async () => {

@@ -12,6 +12,10 @@ type Comparison = {
   matched: boolean;
 };
 
+function formatProbability(value: number) {
+  return `${new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 1 }).format(value * 100)}%`;
+}
+
 export function ScoreBreakdown({
   scores,
   hits = [],
@@ -110,61 +114,67 @@ export function ScoreBreakdown({
   function cards(items: typeof rows) {
     return (
       <div className="risk-score-grid">
-        {items.map((row) => (
-          <article
-            key={row.question}
-            aria-label={`${questionName(row.question)}评分`}
-            className={`risk-score-card ${row.max === 3 ? "graded" : "probability"} ${row.matched ? "reached" : ""}`}
-          >
-            <div className="risk-score-card-heading">
-              <strong>{questionName(row.question)}</strong>
-              <span>{row.max === 3 ? "程度分级" : "风险评分"}</span>
-            </div>
-            <div className="risk-score-values">
-              <b>{row.value}</b>
-              <span>/ {row.max}</span>
-              <small>
-                {row.matched && <Check size={12} />}
-                {`> ${row.threshold}`}
-              </small>
-            </div>
-            <div
-              className="risk-score-track"
-              role="img"
-              aria-label={`${questionName(row.question)} ${row.value}，原始刻度 0 至 ${row.max}`}
+        {items.map((row) => {
+          const probability = row.max === 1;
+          const name = questionName(row.question);
+          return (
+            <article
+              key={row.question}
+              aria-label={`${name}${probability ? (name.endsWith("风险") ? "概率" : "风险概率") : "评分"}`}
+              className={`risk-score-card ${probability ? "probability" : "graded"} ${row.matched ? "reached" : ""}`}
             >
-              {row.max === 3 && (
-                <div className="risk-score-segments">
-                  <span />
-                  <span />
-                  <span />
-                </div>
-              )}
-              <span
-                className="risk-score-fill"
-                style={{ width: `${(100 * row.value) / row.max}%` }}
-              />
-              {row.threshold !== undefined && (
+              <div className="risk-score-card-heading">
+                <strong>{questionName(row.question)}</strong>
+                <span>{probability ? "风险概率" : "程度分级"}</span>
+              </div>
+              <div className="risk-score-values">
+                <b>{probability ? formatProbability(row.value) : row.value}</b>
+                {!probability && <span>/ {row.max}</span>}
+                <small>
+                  {row.matched && <Check size={12} />}
+                  {`> ${probability ? formatProbability(row.threshold) : row.threshold}`}
+                </small>
+              </div>
+              <div
+                className="risk-score-track"
+                role="img"
+                aria-label={
+                  probability
+                    ? `${questionName(row.question)} ${formatProbability(row.value)}`
+                    : `${questionName(row.question)} ${row.value}，原始刻度 0 至 ${row.max}`
+                }
+              >
+                {row.max === 3 && (
+                  <div className="risk-score-segments">
+                    <span />
+                    <span />
+                    <span />
+                  </div>
+                )}
+                <span
+                  className="risk-score-fill"
+                  style={{ width: `${(100 * row.value) / row.max}%` }}
+                />
                 <span
                   className="risk-threshold-marker"
-                  aria-label={`${questionName(row.question)}阈值 ${row.threshold}`}
+                  aria-label={`${questionName(row.question)}阈值 ${probability ? formatProbability(row.threshold) : row.threshold}`}
                   style={{ left: `${(100 * row.threshold) / row.max}%` }}
                 />
+                <span
+                  className="risk-score-dot"
+                  style={{ left: `${(100 * row.value) / row.max}%` }}
+                />
+              </div>
+              {row.matched && row.recordOnly !== undefined && (
+                <span
+                  className={`risk-condition-disposition ${row.recordOnly ? "record-only" : "blocked"}`}
+                >
+                  {row.recordOnly ? "仅记录" : "拦截"}
+                </span>
               )}
-              <span
-                className="risk-score-dot"
-                style={{ left: `${(100 * row.value) / row.max}%` }}
-              />
-            </div>
-            {row.matched && row.recordOnly !== undefined && (
-              <span
-                className={`risk-condition-disposition ${row.recordOnly ? "record-only" : "blocked"}`}
-              >
-                {row.recordOnly ? "仅记录" : "拦截"}
-              </span>
-            )}
-          </article>
-        ))}
+            </article>
+          );
+        })}
       </div>
     );
   }

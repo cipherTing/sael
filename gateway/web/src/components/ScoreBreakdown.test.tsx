@@ -32,26 +32,28 @@ it("uses the original 0–3 scale and a threshold marker for graded sexual and g
   expect(within(gore).getByText("> 1.5")).toBeTruthy();
 });
 
-it("keeps 0–1 risk scores visually distinct and places untriggered scores below in a collapsed section", () => {
+it("shows 0–1 risk probabilities as percentages and places untriggered scores below in a collapsed section", () => {
   render(
     <ScoreBreakdown
       scores={[
-        { question: "self_harm", type: "noul", value: 0.9 },
+        { question: "self_harm", type: "noul", value: 0.94 },
         { question: "gore", type: "score", value: 1 },
       ]}
       comparisons={[
-        { question: "self_harm", value: 0.9, threshold: 0.8, matched: true },
+        { question: "self_harm", value: 0.94, threshold: 0.9, matched: true },
         { question: "gore", value: 1, threshold: 1.5, matched: false },
       ]}
     />,
   );
-  const risk = screen.getByRole("article", { name: "自伤风险评分" });
-  expect(within(risk).getByText("风险评分")).toBeTruthy();
-  expect(within(risk).getByText("/ 1")).toBeTruthy();
+  const risk = screen.getByRole("article", { name: "自伤风险概率" });
+  expect(within(risk).getByText("风险概率")).toBeTruthy();
+  expect(within(risk).getByText("94%")).toBeTruthy();
+  expect(within(risk).getByText("> 90%")).toBeTruthy();
+  expect(within(risk).queryByText("/ 1")).toBeNull();
   expect(within(risk).queryByText("程度分级")).toBeNull();
   expect(
-    within(risk).getByLabelText("自伤风险阈值 0.8").getAttribute("style"),
-  ).toContain("left: 80%");
+    within(risk).getByLabelText("自伤风险阈值 90%").getAttribute("style"),
+  ).toContain("left: 90%");
   const hidden = screen.getByText("未达到阈值").closest("details")!;
   expect(hidden.open).toBe(false);
   expect(hidden.textContent).toContain("血腥程度");
@@ -91,7 +93,7 @@ it("shows disposition only for matched conditions and styles the action as a pil
 
   const hidden = screen.getByText("未达到阈值").closest("details")!;
   fireEvent.click(within(hidden).getByText("未达到阈值"));
-  const below = within(hidden).getByRole("article", { name: "自伤风险评分" });
+  const below = within(hidden).getByRole("article", { name: "自伤风险概率" });
   expect(within(below).queryByText("仅记录")).toBeNull();
 });
 

@@ -1,6 +1,7 @@
 import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "cn";
+import { Loader2 } from "lucide-react";
 import { Tabs as TabsPrimitive } from "radix-ui";
 
 function Tabs({
@@ -74,6 +75,7 @@ function TabsTrigger({
 
 function TabsContent({
   className,
+  children,
   ...props
 }: React.ComponentProps<typeof TabsPrimitive.Content>) {
   return (
@@ -81,7 +83,18 @@ function TabsContent({
       data-slot="tabs-content"
       className={cn("flex-1 outline-none", className)}
       {...props}
-    />
+    >
+      <React.Suspense
+        fallback={
+          <div className="loading-state" role="status">
+            <Loader2 size={20} className="animate-spin" />
+            <span>加载中</span>
+          </div>
+        }
+      >
+        {children}
+      </React.Suspense>
+    </TabsPrimitive.Content>
   );
 }
 
