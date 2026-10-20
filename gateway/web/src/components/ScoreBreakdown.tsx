@@ -93,7 +93,12 @@ export function ScoreBreakdown({
               className={`risk-score-card ${fact.matched ? "reached" : ""}`}
             >
               <strong>{questionName(fact.question)}</strong>
-              <p>阈值 &gt; {fact.threshold}</p>
+              <p>
+                阈值 &gt;{" "}
+                {fact.question === "gore" || fact.question === "sexual"
+                  ? fact.threshold
+                  : formatProbability(fact.threshold)}
+              </p>
               <p>{fact.matched ? "已命中" : "未命中"}</p>
               {fact.matched && fact.record_only !== undefined && (
                 <span

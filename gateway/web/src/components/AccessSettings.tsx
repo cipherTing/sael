@@ -113,25 +113,24 @@ export default function AccessSettings() {
           role="img"
           aria-label="下游响应经 Sael 回路返回客户端"
         >
-          <span
-            className="gateway-flow-return-stem gateway-flow-return-client"
+          <svg
+            viewBox="0 0 100 24"
+            preserveAspectRatio="none"
             aria-hidden="true"
-          />
-          <span
-            className="gateway-flow-return-run gateway-flow-return-first"
-            aria-hidden="true"
-          />
+          >
+            <path
+              className="gateway-flow-return-path"
+              d="M90 0 V14 H10 V0"
+              fill="none"
+              stroke="#6882c4"
+              strokeWidth="2"
+              strokeLinejoin="round"
+              vectorEffect="non-scaling-stroke"
+            />
+          </svg>
           <span className="gateway-flow-return-label">
             下游响应经 Sael 返回客户端
           </span>
-          <span
-            className="gateway-flow-return-run gateway-flow-return-second"
-            aria-hidden="true"
-          />
-          <span
-            className="gateway-flow-return-stem gateway-flow-return-upstream"
-            aria-hidden="true"
-          />
         </div>
       </figure>
       <div className="gateway-address-row">
