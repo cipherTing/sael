@@ -16,8 +16,25 @@ const config = {
   updated_at: "",
 };
 afterEach(cleanup);
-it("defaults to 5000 characters and prevents disabling the guard with zero", () => {
+it("defaults to 5000 characters and prevents disabling the guard with zero", async () => {
   render(<JevSettingsPage config={config} onSave={vi.fn()} onTest={vi.fn()} />);
+  expect(screen.getByText("/systemone")).toBeTruthy();
+  expect((screen.getByLabelText("接口地址") as HTMLInputElement).value).toBe(
+    config.base_url,
+  );
+  const endpointRow = screen.getByLabelText("接口地址").parentElement;
+  expect(endpointRow?.classList.contains("jev-endpoint-row")).toBe(true);
+  expect(
+    screen
+      .getByLabelText("Jev System One 接口路径：/systemone")
+      .closest(".jev-endpoint-row"),
+  ).toBe(endpointRow);
+  fireEvent.focus(screen.getByLabelText("Jev System One 接口路径：/systemone"));
+  expect(
+    await screen.findByText(
+      "请求会在此 API 根地址后追加 /systemone，遵循 Jev 官方 System One 接口格式。",
+    ),
+  ).toBeTruthy();
   const limit = screen.getByRole("spinbutton", {
     name: "送审上限（字符）",
   }) as HTMLInputElement;

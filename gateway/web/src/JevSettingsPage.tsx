@@ -14,6 +14,12 @@ import "./newsettings-workbench.css";
 import { Input } from "./components/ui/input";
 import { Textarea } from "./components/ui/textarea";
 import { Button } from "./components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "./components/ui/tooltip";
 import { Help, Panel } from "./components/common";
 import { notifyError } from "./notifications";
 import { questionMeta, questionName } from "./questionMeta";
@@ -250,14 +256,33 @@ export default function JevSettingsPage({
           <div className="jev-fields">
             <label className="field jev-field-wide">
               <span>接口地址</span>
-              <Input
-                aria-label="接口地址"
-                placeholder="https://api.example.com/v1"
-                value={baseURL}
-                onChange={(event) => setBaseURL(event.target.value)}
-                aria-invalid={Boolean(baseURL) && !urlValid}
-                disabled={saving}
-              />
+              <div className="jev-endpoint-row">
+                <Input
+                  aria-label="接口地址"
+                  placeholder="https://api.example.com/v1"
+                  value={baseURL}
+                  onChange={(event) => setBaseURL(event.target.value)}
+                  aria-invalid={Boolean(baseURL) && !urlValid}
+                  disabled={saving}
+                />
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span
+                        className="jev-endpoint-suffix"
+                        tabIndex={0}
+                        aria-label="Jev System One 接口路径：/systemone"
+                      >
+                        /systemone
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      请求会在此 API 根地址后追加 /systemone，遵循 Jev 官方
+                      System One 接口格式。
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              </div>
             </label>
             <label className="field jev-field-wide">
               <span>模型 ID</span>
