@@ -99,11 +99,12 @@ it("groups gateway controls and relay addresses in one tab and keeps retention w
   expect(within(flow).getByText("Sael 网关")).toBeTruthy();
   expect(within(flow).getByText("下游 AI 服务")).toBeTruthy();
   expect(within(flow).getByText("转发请求")).toBeTruthy();
-  expect(
-    within(flow).getByRole("img", {
-      name: "下游响应经 Sael 回路返回客户端",
-    }),
-  ).toBeTruthy();
+  const responseLoop = within(flow).getByRole("img", {
+    name: "下游响应经 Sael 回路返回客户端",
+  });
+  const responsePath = responseLoop.querySelector("path");
+  expect(responsePath?.getAttribute("d")).toBe("M90 0 V14 H10 V0");
+  expect(responsePath?.getAttribute("stroke")).toBe("#6882c4");
   expect(
     within(gateway).getByRole("textbox", { name: "拦截提示" }),
   ).toBeTruthy();

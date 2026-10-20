@@ -131,10 +131,12 @@ it("shows cached disposition only on matched condition facts", () => {
   );
 
   const privateInfo = screen.getByText("隐私信息").closest("article")!;
+  expect(within(privateInfo).getByText("阈值 > 50%")).toBeTruthy();
   const recordTag = within(privateInfo).getByText("仅记录");
   expect(recordTag.className).toContain("risk-condition-disposition");
   expect(recordTag.className).toContain("record-only");
   const selfHarm = screen.getByText("自伤风险").closest("article")!;
+  expect(within(selfHarm).getByText("阈值 > 80%")).toBeTruthy();
   expect(within(selfHarm).queryByText("拦截")).toBeNull();
 });
 
