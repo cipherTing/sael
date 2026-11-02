@@ -36,6 +36,7 @@ import {
 } from "../TimeRangePicker";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import { Switch } from "../components/ui/switch";
 import {
   Sheet,
   SheetContent,
@@ -60,6 +61,14 @@ import {
 } from "../components/common";
 import { notifyRetry } from "../notifications";
 import "../record-detail.css";
+
+function isUnreviewed(kind: Event["kind"]) {
+  return kind === "exempt" || kind === "sampled";
+}
+
+function unreviewedLabel(kind: Event["kind"]) {
+  return kind === "sampled" ? "抽样未送审" : "免审";
+}
 
 export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
   const [params, setParams] = useSearchParams(),
@@ -290,7 +299,9 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
             id: "scene",
             header: kind === "hit" ? "生效场景" : "状态",
             cell: ({ row }) =>
-              row.original.kind !== "hit" ? (
+              isUnreviewed(row.original.kind) ? (
+                "—"
+              ) : row.original.kind !== "hit" ? (
                 <span style={{ color: "#bf9851" }}>
                   {errorNames[row.original.error_kind || ""] ||
                     (row.original.kind === "warning"
@@ -306,9 +317,11 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
             header: "触发条件",
             cell: ({ row }) => (
               <span>
-                {row.original.decision.hits
-                  ?.map((h) => questionName(h.question))
-                  .join("、") || "—"}
+                {isUnreviewed(row.original.kind)
+                  ? "—"
+                  : row.original.decision.hits
+                      ?.map((h) => questionName(h.question))
+                      .join("、") || "—"}
               </span>
             ),
           },
@@ -316,7 +329,11 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
             id: "action",
             header: "处理结果",
             cell: ({ row }) =>
-              row.original.kind !== "hit" ? (
+              isUnreviewed(row.original.kind) ? (
+                <span className="exempt-badge">
+                  {unreviewedLabel(row.original.kind)}
+                </span>
+              ) : row.original.kind !== "hit" ? (
                 <span className="subtle-badge">
                   {row.original.error_kind === "session_blocked"
                     ? "拦截"
@@ -334,12 +351,14 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
             header: "审查耗时",
             cell: ({ row }) => (
               <span className="tabular">
-                {row.original.review_source === "cache"
-                  ? "缓存命中"
-                  : row.original.kind === "warning" ||
-                      row.original.classifier_ms === undefined
-                    ? "—"
-                    : duration(row.original.classifier_ms)}
+                {isUnreviewed(row.original.kind)
+                  ? "—"
+                  : row.original.review_source === "cache"
+                    ? "缓存命中"
+                    : row.original.kind === "warning" ||
+                        row.original.classifier_ms === undefined
+                      ? "—"
+                      : duration(row.original.classifier_ms)}
               </span>
             ),
           },
@@ -391,6 +410,16 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
   return (
     <>
       <PageHeading title="记录">
+        <label className="records-exempt-toggle">
+          <span>显示未送审记录</span>
+          <Switch
+            aria-label="显示未送审记录"
+            checked={params.get("include_unreviewed") === "true"}
+            onCheckedChange={(checked) =>
+              filter("include_unreviewed", checked ? "true" : "")
+            }
+          />
+        </label>
         <TimeRangePicker
           value={rangeFromQuery(params)}
           onChange={(value) => {
@@ -763,7 +792,11 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
                       ? "HTTP 审查"
                       : "网关请求"}
                   </span>
-                  {current.kind === "hit" ? (
+                  {isUnreviewed(current.kind) ? (
+                    <span className="exempt-badge">
+                      {unreviewedLabel(current.kind)}
+                    </span>
+                  ) : current.kind === "hit" ? (
                     <ActionBadge
                       action={current.decision.action}
                       reason={current.decision.reason}
@@ -785,27 +818,30 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
                       </span>
                     </>
                   )}
-                  {current.execution_mode && (
+                  {!isUnreviewed(current.kind) && current.execution_mode && (
                     <span className="subtle-badge">
                       {current.execution_mode === "blocking"
                         ? "同步审核"
                         : "后台审核"}
                     </span>
                   )}
-                  {current.decision.review_mode && (
-                    <span className="subtle-badge">
-                      场景：
-                      {current.decision.review_mode === "blocking"
-                        ? "阻塞"
-                        : "非阻塞"}
-                    </span>
-                  )}
-                  {current.decision.scene_name && (
-                    <span className="record-effective-scene">
-                      {current.decision.scene_name}
-                    </span>
-                  )}
-                  {current.review_source === "cache" ? (
+                  {!isUnreviewed(current.kind) &&
+                    current.decision.review_mode && (
+                      <span className="subtle-badge">
+                        场景：
+                        {current.decision.review_mode === "blocking"
+                          ? "阻塞"
+                          : "非阻塞"}
+                      </span>
+                    )}
+                  {!isUnreviewed(current.kind) &&
+                    current.decision.scene_name && (
+                      <span className="record-effective-scene">
+                        {current.decision.scene_name}
+                      </span>
+                    )}
+                  {isUnreviewed(current.kind) ? null : current.review_source ===
+                    "cache" ? (
                     <span className="record-cache-source">
                       <Database size={12} />
                       缓存命中
@@ -981,18 +1017,20 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
                   </div>
                 )}
               </section>
-              {(!!current.scores?.length ||
-                !!current.decision.hits?.length) && (
-                <ScoreBreakdown
-                  key={current.id}
-                  scores={current.scores || []}
-                  hits={current.decision.hits}
-                  comparisons={
-                    current.trace?.find((trace) => trace.status === "effective")
-                      ?.conditions
-                  }
-                />
-              )}
+              {!isUnreviewed(current.kind) &&
+                (!!current.scores?.length ||
+                  !!current.decision.hits?.length) && (
+                  <ScoreBreakdown
+                    key={current.id}
+                    scores={current.scores || []}
+                    hits={current.decision.hits}
+                    comparisons={
+                      current.trace?.find(
+                        (trace) => trace.status === "effective",
+                      )?.conditions
+                    }
+                  />
+                )}
               {hasMoreInformation && (
                 <section className="record-more-info" aria-label="更多信息">
                   <h3>更多信息</h3>

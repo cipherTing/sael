@@ -52,7 +52,7 @@ func Open(ctx context.Context, dsn, spoolPath string) (*PG, error) {
 		pool.Close()
 		return nil, err
 	}
-	for _, name := range []string{"migrations/001_init.sql", "migrations/002_jev.sql", "migrations/003_metrics.sql", "migrations/004_connections.sql", "migrations/005_remove_upstream_errors.sql", "migrations/006_analytics.sql", "migrations/007_session_blocks.sql", "migrations/008_jev_input_limits.sql", "migrations/009_ingest_cursor.sql", "migrations/010_review_cache_credentials.sql", "migrations/011_remove_policy_version.sql", "migrations/012_risk_source_fields.sql", "migrations/013_review_api.sql", "migrations/014_jev_input_chars.sql"} {
+	for _, name := range []string{"migrations/001_init.sql", "migrations/002_jev.sql", "migrations/003_metrics.sql", "migrations/004_connections.sql", "migrations/005_remove_upstream_errors.sql", "migrations/006_analytics.sql", "migrations/007_session_blocks.sql", "migrations/008_jev_input_limits.sql", "migrations/009_ingest_cursor.sql", "migrations/010_review_cache_credentials.sql", "migrations/011_remove_policy_version.sql", "migrations/012_risk_source_fields.sql", "migrations/013_review_api.sql", "migrations/014_jev_input_chars.sql", "migrations/015_key_sampling.sql"} {
 		sql, err := migrations.ReadFile(name)
 		if err != nil {
 			pool.Close()
@@ -510,7 +510,8 @@ func (s *PG) Events(ctx context.Context, f gateway.EventFilter) ([]gateway.Event
 		'text_chars', char_length(coalesce(body->>'text','')),
 		'text_preview', left(coalesce(nullif(body->>'text',''),body->>'text_preview',''),500)
 	) FROM audit_events WHERE time >= $1
-		AND ($2='' OR kind=$2) AND ($3='' OR action=$3)
+		AND ($2='' OR kind=$2 OR ($16 AND $2='hit' AND kind IN ('exempt','sampled')))
+		AND ($16 OR kind NOT IN ('exempt','sampled')) AND ($3='' OR action=$3)
 		AND ($7::timestamptz IS NULL OR time < $7) AND ($8='' OR body->>'protocol'=$8 OR ($8='openai_images' AND body->>'protocol' IN ('openai_images_generations','openai_images_edits')))
         AND ($9='' OR body->>'model'=$9) AND ($10='' OR body->'decision'->>'scene_id'=$10)
         AND ($11='' OR body->>'error_kind'=$11)
@@ -520,7 +521,7 @@ func (s *PG) Events(ctx context.Context, f gateway.EventFilter) ([]gateway.Event
  OR body->>'client_ip' ILIKE '%'||$4||'%' OR body->>'session_id' ILIKE '%'||$4||'%'
  OR body->>'client_request_id' ILIKE '%'||$4||'%' OR body->'parameters'->>'conversation_id' ILIKE '%'||$4||'%'
  OR body->'parameters'->>'previous_response_id' ILIKE '%'||$4||'%')
-		ORDER BY time DESC LIMIT $5 OFFSET $6`, f.Since, f.Kind, f.Action, f.Search, f.Limit, f.Offset, optionalTime(f.Until), f.Endpoint, f.Model, f.Scene, f.ErrorKind, f.ClientIP, f.SessionID, f.CredentialID, f.RequestSource)
+		ORDER BY time DESC LIMIT $5 OFFSET $6`, f.Since, f.Kind, f.Action, f.Search, f.Limit, f.Offset, optionalTime(f.Until), f.Endpoint, f.Model, f.Scene, f.ErrorKind, f.ClientIP, f.SessionID, f.CredentialID, f.RequestSource, f.IncludeUnreviewed)
 	if err != nil {
 		return nil, err
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/cipherTing/sael/gateway/internal/policy"
 )
@@ -37,6 +38,35 @@ func (s *Server) policyInput(r *http.Request) (PolicyUpdate, error) {
 }
 func (s *Server) adminFeatures(w http.ResponseWriter, r *http.Request) bool {
 	switch {
+	case strings.HasPrefix(r.URL.Path, "/admin/key-sampling/") && r.Method == http.MethodPatch:
+		manager, ok := s.Store.(KeySamplingAdmin)
+		if !ok {
+			http.Error(w, "Key 取样率管理暂不可用", http.StatusServiceUnavailable)
+			return true
+		}
+		id := strings.TrimPrefix(r.URL.Path, "/admin/key-sampling/")
+		if id == "" || strings.Contains(id, "/") {
+			http.NotFound(w, r)
+			return true
+		}
+		var input struct {
+			SampleRate *int `json:"sample_rate"`
+		}
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		if dec.Decode(&input) != nil || input.SampleRate == nil || *input.SampleRate < 0 || *input.SampleRate > 100 {
+			http.Error(w, "取样率必须是 0 到 100 的整数", http.StatusBadRequest)
+			return true
+		}
+		if err := manager.SetKeySampleRate(r.Context(), id, *input.SampleRate); errors.Is(err, ErrNotFound) {
+			http.NotFound(w, r)
+			return true
+		} else if err != nil {
+			http.Error(w, "Key 取样率设置保存失败", http.StatusServiceUnavailable)
+			return true
+		}
+		writeJSON(w, map[string]int{"sample_rate": *input.SampleRate})
+		return true
 	case r.URL.Path == "/admin/trusted-keys" && r.Method == http.MethodGet:
 		lister, ok := s.Store.(CredentialLister)
 		if !ok {

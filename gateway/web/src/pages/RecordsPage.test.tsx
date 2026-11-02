@@ -230,6 +230,95 @@ it("defaults to hit records and preserves the separate Jev error view", async ()
   );
 });
 
+it("queries unreviewed records only after enabling the URL-backed display switch", async () => {
+  const exempt = {
+    ...event,
+    id: "exempt-event",
+    kind: "exempt" as const,
+    decision: { action: "allow" as const, reason: "key_exempt", hits: [] },
+  };
+  vi.mocked(request).mockImplementation(async (path) =>
+    path.includes("include_unreviewed=true") ? [exempt] : [event],
+  );
+  mount();
+
+  const toggle = await screen.findByRole("switch", { name: "显示未送审记录" });
+  expect((toggle as HTMLButtonElement).getAttribute("aria-checked")).toBe(
+    "false",
+  );
+  expect(
+    vi
+      .mocked(request)
+      .mock.calls.some(([path]) =>
+        String(path).includes("include_unreviewed=true"),
+      ),
+  ).toBe(false);
+
+  fireEvent.click(toggle);
+  const row = await screen.findByRole("row", { name: "查看请求 request-1" });
+  expect(within(row).getByText("免审")).toBeTruthy();
+  expect(within(row).queryByText("血腥程度")).toBeNull();
+  await waitFor(() =>
+    expect(
+      vi
+        .mocked(request)
+        .mock.calls.some(([path]) =>
+          String(path).includes("include_unreviewed=true"),
+        ),
+    ).toBe(true),
+  );
+});
+
+it("shows exempt status and retains the prompt in request details", async () => {
+  const exempt = {
+    ...event,
+    kind: "exempt" as const,
+    decision: { action: "allow" as const, reason: "key_exempt", hits: [] },
+  };
+  vi.mocked(request).mockImplementation(async (path) =>
+    path === "/admin/events/event-1" ? exempt : [exempt],
+  );
+  mount("/events?include_unreviewed=true");
+
+  const row = await screen.findByRole("row", { name: "查看请求 request-1" });
+  expect(within(row).getByText("免审")).toBeTruthy();
+  fireEvent.click(row);
+  const dialog = await screen.findByRole("dialog");
+  expect(
+    await within(dialog).findByText("免审", { selector: "span" }),
+  ).toBeTruthy();
+  expect(within(dialog).getByText("current user text")).toBeTruthy();
+  expect(within(dialog).queryByText("网关警告")).toBeNull();
+  expect(within(dialog).queryByText("放行")).toBeNull();
+});
+
+it("labels sampled-out requests separately and keeps their prompt available", async () => {
+  const sampled = {
+    ...event,
+    kind: "sampled" as const,
+    decision: {
+      action: "allow" as const,
+      reason: "sampling_skipped",
+      hits: [],
+    },
+  };
+  vi.mocked(request).mockImplementation(async (path) =>
+    path === "/admin/events/event-1" ? sampled : [sampled],
+  );
+  mount("/events?include_unreviewed=true");
+
+  const row = await screen.findByRole("row", { name: "查看请求 request-1" });
+  expect(within(row).getByText("抽样未送审")).toBeTruthy();
+  fireEvent.click(row);
+  const dialog = await screen.findByRole("dialog");
+  expect(
+    await within(dialog).findByText("抽样未送审", { selector: "span" }),
+  ).toBeTruthy();
+  expect(within(dialog).getByText("current user text")).toBeTruthy();
+  expect(within(dialog).queryByText("放行")).toBeNull();
+  expect(within(dialog).queryByText("血腥程度")).toBeNull();
+});
+
 it("keeps the original records filters in the link to scene testing", async () => {
   vi.mocked(request).mockImplementation(async (path) =>
     path === "/admin/events/event-1" ? event : [event],

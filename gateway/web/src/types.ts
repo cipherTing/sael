@@ -61,7 +61,7 @@ export type Event = {
   }[];
   id: string;
   time: string;
-  kind: "hit" | "failure" | "warning";
+  kind: "hit" | "failure" | "warning" | "exempt" | "sampled";
   request_id: string;
   protocol: string;
   endpoint: string;

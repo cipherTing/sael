@@ -219,7 +219,12 @@ func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "记录来源无效", 400)
 			return
 		}
-		items, err := s.Store.Events(r.Context(), EventFilter{Since: f.Since, Until: f.Until, Endpoint: f.Endpoint, Model: f.Model, Scene: q.Get("scene"), ErrorKind: q.Get("error_kind"), Kind: q.Get("kind"), Action: q.Get("action"), Search: q.Get("search"), CredentialID: q.Get("credential_id"), ClientIP: q.Get("client_ip"), SessionID: q.Get("session_id"), RequestSource: source, Limit: 50, Offset: offset})
+		includeUnreviewed, parseErr := strconv.ParseBool(q.Get("include_unreviewed"))
+		if q.Get("include_unreviewed") != "" && parseErr != nil {
+			http.Error(w, "未送审记录开关无效", http.StatusBadRequest)
+			return
+		}
+		items, err := s.Store.Events(r.Context(), EventFilter{Since: f.Since, Until: f.Until, Endpoint: f.Endpoint, Model: f.Model, Scene: q.Get("scene"), ErrorKind: q.Get("error_kind"), Kind: q.Get("kind"), Action: q.Get("action"), Search: q.Get("search"), CredentialID: q.Get("credential_id"), ClientIP: q.Get("client_ip"), SessionID: q.Get("session_id"), RequestSource: source, IncludeUnreviewed: includeUnreviewed, Limit: 50, Offset: offset})
 		if err != nil {
 			http.Error(w, "events unavailable", http.StatusServiceUnavailable)
 			return

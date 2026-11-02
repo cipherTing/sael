@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   ArrowUpRight,
@@ -8,6 +8,7 @@ import {
   KeyRound,
   Network,
   PlugZap,
+  Settings2,
   ShieldCheck,
 } from "lucide-react";
 import "../newsettings-workbench.css";
@@ -23,6 +24,12 @@ import {
 } from "../components/common";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import { Slider } from "../components/ui/slider";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "../components/ui/popover";
 import { Textarea } from "../components/ui/textarea";
 import { Switch } from "../components/ui/switch";
 import {
@@ -389,6 +396,7 @@ type Credential = {
   upstream: string;
   first_seen_at: string;
   last_seen_at: string;
+  sample_rate: number;
 };
 function TrustedKeys({
   policy,
@@ -429,13 +437,20 @@ function TrustedKeys({
         <>
           <div className="settings-table-wrap">
             <table className="settings-table">
+              <colgroup>
+                <col />
+                <col />
+                <col />
+                <col />
+                <col style={{ width: 230 }} />
+              </colgroup>
               <thead>
                 <tr>
                   <th>调用密钥</th>
                   <th>出站地址</th>
                   <th>首次验证</th>
                   <th>最近请求</th>
-                  <th />
+                  <th>取样率</th>
                 </tr>
               </thead>
               <tbody>
@@ -465,14 +480,17 @@ function TrustedKeys({
                     </td>
                     <td>{fullDate(item.last_seen_at)}</td>
                     <td>
-                      <Button asChild variant="ghost" size="sm">
-                        <Link
-                          to={`/events?credential_id=${encodeURIComponent(item.id)}`}
-                        >
-                          查看记录
-                          <ArrowUpRight size={13} />
-                        </Link>
-                      </Button>
+                      <div className="trusted-key-actions">
+                        <TrustedKeySamplingControl credential={item} />
+                        <Button asChild variant="ghost" size="sm">
+                          <Link
+                            to={`/events?credential_id=${encodeURIComponent(item.id)}`}
+                          >
+                            查看记录
+                            <ArrowUpRight size={13} />
+                          </Link>
+                        </Button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -503,6 +521,121 @@ function TrustedKeys({
         </>
       )}
     </Panel>
+  );
+}
+
+function TrustedKeySamplingControl({ credential }: { credential: Credential }) {
+  const client = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [sampleRate, setSampleRate] = useState(String(credential.sample_rate));
+  const [saving, setSaving] = useState(false);
+  const rate = Number(sampleRate);
+  const validRate =
+    sampleRate !== "" && Number.isInteger(rate) && rate >= 0 && rate <= 100;
+
+  async function save(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!validRate || saving) return;
+    setSaving(true);
+    try {
+      const result = await request<{ sample_rate: number }>(
+        `/admin/key-sampling/${encodeURIComponent(credential.id)}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ sample_rate: rate }),
+        },
+      );
+      client.setQueriesData<{ items: Credential[]; total: number }>(
+        { queryKey: ["trusted-keys"] },
+        (current) =>
+          current && {
+            ...current,
+            items: current.items.map((item) =>
+              item.id === credential.id
+                ? { ...item, sample_rate: result.sample_rate }
+                : item,
+            ),
+          },
+      );
+      setOpen(false);
+    } catch (error) {
+      notifyError(error);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="trusted-key-sampling">
+      {credential.sample_rate === 0 ? (
+        <span className="trusted-key-exempt">免审</span>
+      ) : credential.sample_rate === 100 ? (
+        <span className="trusted-key-review-all">逐一审核</span>
+      ) : credential.sample_rate < 100 ? (
+        <span className="trusted-key-rate">
+          取样率 {credential.sample_rate}%
+        </span>
+      ) : null}
+      <Popover
+        open={open}
+        onOpenChange={(next) => {
+          if (next) setSampleRate(String(credential.sample_rate));
+          if (!saving) setOpen(next);
+        }}
+      >
+        <PopoverTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="设置取样率"
+            title="设置取样率"
+          >
+            <Settings2 size={15} />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent
+          align="end"
+          side="bottom"
+          aria-label="设置取样率"
+          className="trusted-key-sampling-popover"
+        >
+          <form className="trusted-key-sampling-form" onSubmit={save}>
+            <div className="trusted-key-sampling-controls">
+              <Slider
+                min={0}
+                max={100}
+                step={1}
+                value={[validRate ? rate : 0]}
+                onValueChange={([value]) => setSampleRate(String(value))}
+                thumbLabel="取样率"
+                aria-label="取样率滑块"
+                className="trusted-key-sampling-slider"
+              />
+              <label className="trusted-key-sampling-field">
+                <span>取样率</span>
+                <span className="trusted-key-sampling-input">
+                  <Input
+                    aria-label="取样率百分比"
+                    type="number"
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={sampleRate}
+                    onChange={(event) => setSampleRate(event.target.value)}
+                    required
+                  />
+                  <span aria-hidden="true">%</span>
+                </span>
+              </label>
+            </div>
+            <Button type="submit" size="sm" disabled={!validRate || saving}>
+              {saving ? "保存中…" : "保存"}
+            </Button>
+          </form>
+        </PopoverContent>
+      </Popover>
+    </div>
   );
 }
 type CacheState = {
