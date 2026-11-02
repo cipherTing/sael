@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"os"
@@ -24,7 +25,7 @@ func TestKeySamplingDefaultsKnownKeysTo100(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer p.Close()
-	if err := p.InitCredentials(ctx, base64.StdEncoding.EncodeToString(make([]byte, 32))); err != nil {
+	if err := p.InitCredentials(ctx, base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32))); err != nil {
 		t.Fatal(err)
 	}
 	secret := "known-client-secret"
