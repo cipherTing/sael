@@ -147,6 +147,7 @@ type EventFilter struct {
 	Endpoint, Model, Scene, ErrorKind string
 	ClientIP, SessionID, CredentialID string
 	RequestSource                     string
+	IncludeUnreviewed                 bool
 	Limit, Offset                     int
 }
 
@@ -450,6 +451,29 @@ func (s *Server) proxyRequest(w http.ResponseWriter, r *http.Request) {
 		s.recordCount(count)
 		s.forward(w, r)
 		return
+	}
+	if provider, ok := s.Store.(KeySampleRateProvider); ok {
+		rate, err := provider.KeySampleRate(r.Context(), state.key)
+		switch {
+		case err != nil:
+			slog.Warn("key sampling lookup failed; review continues", "error", err)
+		case rate < 0 || rate > 100:
+			slog.Warn("key sampling rate is invalid; review continues", "rate", rate)
+		case !sampledForReview(state.key, requestID, rate):
+			if rate == 0 {
+				event.Kind = "exempt"
+				event.Decision = policy.Decision{Action: policy.Allow, Reason: "key_exempt"}
+				count.Outcome = "exempt"
+			} else {
+				event.Kind = "sampled"
+				event.Decision = policy.Decision{Action: policy.Allow, Reason: "sampling_skipped"}
+				count.Outcome = "sampled"
+			}
+			s.writeEvent(r.Context(), event)
+			s.recordCount(count)
+			s.forward(w, r)
+			return
+		}
 	}
 	if !slices.ContainsFunc(p.Scenes, func(scene policy.Scene) bool { return applies(scene) && scene.Mode() == policy.Blocking }) {
 		if !s.startReview(event, p, count, blockPlan) {

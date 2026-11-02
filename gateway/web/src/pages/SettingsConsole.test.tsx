@@ -330,6 +330,109 @@ it("copies a masked key from the trusted-key list", async () => {
   );
 });
 
+it("shows non-default sampling rate and edits it in the trusted-key row", async () => {
+  const trustedKeys = [
+    {
+      id: "key-default",
+      masked_key: "sk-default******1234",
+      upstream: "https://relay.example",
+      first_seen_at: "2026-10-28T00:00:00Z",
+      last_seen_at: "2026-10-29T00:00:00Z",
+      sample_rate: 100,
+    },
+    {
+      id: "key-sampled",
+      masked_key: "sk-sampled******5678",
+      upstream: "https://relay.example",
+      first_seen_at: "2026-10-28T00:00:00Z",
+      last_seen_at: "2026-10-29T00:00:00Z",
+      sample_rate: 45,
+    },
+  ];
+  let currentRate = 45;
+  vi.mocked(request).mockImplementation(async (path, init) => {
+    if (path.startsWith("/admin/trusted-keys"))
+      return {
+        items: trustedKeys.map((item) =>
+          item.id === "key-sampled"
+            ? { ...item, sample_rate: currentRate }
+            : item,
+        ),
+        total: trustedKeys.length,
+      };
+    if (
+      path === "/admin/key-sampling/key-sampled" &&
+      init?.method === "PATCH"
+    ) {
+      currentRate = JSON.parse(String(init.body)).sample_rate;
+      return { sample_rate: currentRate };
+    }
+    throw new Error(`unexpected request: ${path}`);
+  });
+  mount("/settings?tab=keys");
+
+  const defaultRow = await screen.findByRole("row", {
+    name: /sk-default/,
+  });
+  expect(screen.getByText("取样率", { selector: "th" })).toBeTruthy();
+  const actionsColumn = document.querySelector(
+    ".settings-table col:last-child",
+  ) as HTMLTableColElement;
+  expect(actionsColumn.style.width).toBe("230px");
+  expect(within(defaultRow).queryByText(/取样率/)).toBeNull();
+  const fullReview = within(defaultRow).getByText("逐一审核");
+  expect(fullReview.classList.contains("trusted-key-review-all")).toBe(true);
+  const sampledRow = screen.getByRole("row", { name: /sk-sampled/ });
+  expect(within(sampledRow).getByText("取样率 45%")).toBeTruthy();
+  fireEvent.click(
+    within(sampledRow).getByRole("button", { name: "设置取样率" }),
+  );
+  const popover = await screen.findByRole("dialog", { name: "设置取样率" });
+  const slider = within(popover).getByRole("slider", { name: "取样率" });
+  expect(
+    slider
+      .closest('[data-slot="slider"]')
+      ?.classList.contains("trusted-key-sampling-slider"),
+  ).toBe(true);
+  fireEvent.change(within(popover).getByLabelText("取样率百分比"), {
+    target: { value: "20" },
+  });
+  fireEvent.click(within(popover).getByRole("button", { name: "保存" }));
+  await waitFor(() =>
+    expect(request).toHaveBeenCalledWith(
+      "/admin/key-sampling/key-sampled",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ sample_rate: 20 }),
+      }),
+    ),
+  );
+  expect(await within(sampledRow).findByText("取样率 20%")).toBeTruthy();
+
+  fireEvent.click(
+    within(sampledRow).getByRole("button", { name: "设置取样率" }),
+  );
+  const secondPopover = await screen.findByRole("dialog", {
+    name: "设置取样率",
+  });
+  fireEvent.change(within(secondPopover).getByLabelText("取样率百分比"), {
+    target: { value: "0" },
+  });
+  fireEvent.click(within(secondPopover).getByRole("button", { name: "保存" }));
+  await waitFor(() =>
+    expect(request).toHaveBeenCalledWith(
+      "/admin/key-sampling/key-sampled",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ sample_rate: 0 }),
+      }),
+    ),
+  );
+  const exemptBadge = await within(sampledRow).findByText("免审");
+  expect(exemptBadge.classList.contains("trusted-key-exempt")).toBe(true);
+  expect(within(sampledRow).queryByText(/取样率/)).toBeNull();
+});
+
 it("previews the rendered block message and saves only that setting", async () => {
   const onSave = vi.fn().mockResolvedValue(undefined);
   render(

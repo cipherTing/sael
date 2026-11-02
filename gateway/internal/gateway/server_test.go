@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -64,6 +65,8 @@ type testStore struct {
 	blocked       map[string]time.Time
 	sessionErr    error
 	adminSessions map[string]time.Time
+	sampleRates   map[string]int
+	rateQueries   atomic.Int64
 }
 
 func (s *testStore) Jev(context.Context) (JevConfig, error)           { return s.jev, nil }
@@ -161,6 +164,13 @@ func (s *testStore) TrustedKey(_ context.Context, key string, _ time.Duration) (
 }
 func (s *testStore) RememberKey(context.Context, string, time.Duration) error { return nil }
 func (s *testStore) ForgetKey(context.Context, string) error                  { return nil }
+func (s *testStore) KeySampleRate(_ context.Context, id string) (int, error) {
+	s.rateQueries.Add(1)
+	if rate, ok := s.sampleRates[id]; ok {
+		return rate, nil
+	}
+	return 100, nil
+}
 func authorizedRequest(method, target string, body io.Reader) *http.Request {
 	r := httptest.NewRequest(method, target, body)
 	if strings.HasPrefix(target, "/v1/") {
@@ -236,6 +246,103 @@ func TestBlockedRequestDoesNotReachUpstream(t *testing.T) {
 	}
 	if len(store.counts) != 1 || store.counts[0].Outcome != "blocked" {
 		t.Fatalf("counts=%+v", store.counts)
+	}
+}
+
+func TestZeroSampleRateSkipsClassifierAndStoresPrompt(t *testing.T) {
+	classifier := &testClassifier{}
+	s, store, calls := makeServer(t, activePolicy(), classifier)
+	r := authorizedRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"test","messages":[{"role":"user","content":"safe prompt"}]}`))
+	store.sampleRates = map[string]int{credentialFingerprint(r, store.upstream.BaseURL): 0}
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, r)
+	if w.Code != http.StatusCreated || *calls != 1 || classifier.calls != 0 {
+		t.Fatalf("status=%d upstream=%d classifier=%d", w.Code, *calls, classifier.calls)
+	}
+	if len(store.events) != 1 {
+		t.Fatalf("zero-rate request produced %d events", len(store.events))
+	}
+	event := store.events[0]
+	if event.Kind != "exempt" || event.Decision.Action != policy.Allow || event.Decision.Reason != "key_exempt" || event.Text != "safe prompt" {
+		t.Fatalf("wrong exempt record: %+v", event)
+	}
+	if len(store.counts) != 1 || store.counts[0].Outcome != "exempt" {
+		t.Fatalf("wrong exempt count: %+v", store.counts)
+	}
+}
+
+func TestDefaultAndFullSampleRateStillReview(t *testing.T) {
+	for _, explicit := range []bool{false, true} {
+		t.Run(map[bool]string{false: "default", true: "explicit_100"}[explicit], func(t *testing.T) {
+			classifier := &testClassifier{answers: fullAnswers(map[string]float64{"cyber_abuse": 0.9})}
+			s, store, calls := makeServer(t, activePolicy(), classifier)
+			r := authorizedRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"test","messages":[{"role":"user","content":"prompt"}]}`))
+			if explicit {
+				store.sampleRates = map[string]int{credentialFingerprint(r, store.upstream.BaseURL): 100}
+			}
+			w := httptest.NewRecorder()
+			s.ServeHTTP(w, r)
+			if w.Code != http.StatusForbidden || classifier.calls != 1 || *calls != 0 || len(store.events) != 1 || store.events[0].Kind != "hit" {
+				t.Fatalf("rate did not review request: status=%d classifier=%d upstream=%d events=%+v", w.Code, classifier.calls, *calls, store.events)
+			}
+		})
+	}
+}
+
+func TestSampledOutRequestStoresPromptWithoutReview(t *testing.T) {
+	const requests = 64
+	classifier := &testClassifier{answers: fullAnswers(map[string]float64{"cyber_abuse": 0.9})}
+	s, store, calls := makeServer(t, activePolicy(), classifier)
+	store.sampleRates = map[string]int{}
+	for i := 0; i < requests; i++ {
+		r := authorizedRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"test","messages":[{"role":"user","content":"prompt"}]}`))
+		store.sampleRates[credentialFingerprint(r, store.upstream.BaseURL)] = 50
+		s.ServeHTTP(httptest.NewRecorder(), r)
+	}
+	if classifier.calls == 0 || classifier.calls == requests {
+		t.Fatalf("50%% sample did not exercise both paths: classifier=%d", classifier.calls)
+	}
+	if len(store.events) != requests {
+		t.Fatalf("stored %d events for %d requests", len(store.events), requests)
+	}
+	var sampled int
+	for _, event := range store.events {
+		if event.Kind == "sampled" {
+			sampled++
+			if event.Decision.Reason != "sampling_skipped" || event.Text != "prompt" {
+				t.Fatalf("sampled-out event missing reason/prompt: %+v", event)
+			}
+		} else if event.Kind != "hit" {
+			t.Fatalf("unexpected event kind: %q", event.Kind)
+		}
+	}
+	if sampled != requests-classifier.calls || *calls != sampled {
+		t.Fatalf("sampled=%d classifier=%d upstream=%d", sampled, classifier.calls, *calls)
+	}
+}
+
+func TestKeySamplingDoesNotCreateEventsWhenRequestWouldNotBeReviewed(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		edit func(*policy.Policy)
+		body string
+	}{
+		{name: "disabled", edit: func(p *policy.Policy) { p.Enabled = false }, body: `{"model":"test","messages":[{"role":"user","content":"prompt"}]}`},
+		{name: "no matching scene", edit: func(p *policy.Policy) { p.Scenes[0].Endpoints = []string{"anthropic"} }, body: `{"model":"test","messages":[{"role":"user","content":"prompt"}]}`},
+		{name: "no text", edit: func(*policy.Policy) {}, body: `{"model":"test","messages":[{"role":"user","content":""}]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := activePolicy()
+			tc.edit(&p)
+			classifier := &testClassifier{}
+			s, store, _ := makeServer(t, p, classifier)
+			r := authorizedRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(tc.body))
+			store.sampleRates = map[string]int{credentialFingerprint(r, store.upstream.BaseURL): 0}
+			s.ServeHTTP(httptest.NewRecorder(), r)
+			if len(store.events) != 0 || classifier.calls != 0 || store.rateQueries.Load() != 0 {
+				t.Fatalf("non-reviewed request made sampling/event/classifier work: events=%+v calls=%d lookups=%d", store.events, classifier.calls, store.rateQueries.Load())
+			}
+		})
 	}
 }
 

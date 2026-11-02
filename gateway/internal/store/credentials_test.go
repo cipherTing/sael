@@ -119,6 +119,49 @@ func TestTrustedCredentialsSurviveExpiryForHistoricalEvents(t *testing.T) {
 	}
 }
 
+func TestTrustedCredentialsIncludeConfiguredSamplingRate(t *testing.T) {
+	p, r := redisFixture(t)
+	ctx := context.Background()
+	if err := p.InitCredentials(ctx, base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32))); err != nil {
+		t.Fatal(err)
+	}
+	s := &RedisStore{PG: p, redis: r}
+	idle := 30 * 24 * time.Hour
+	upstream, secret := "https://relay.example", "sk-complete-secret-5678"
+	id := gateway.CredentialFingerprint(upstream, secret)
+	if err := s.RegisterCredential(ctx, id, upstream, secret, idle); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RememberKey(ctx, id, idle); err != nil {
+		t.Fatal(err)
+	}
+
+	list, err := s.TrustedCredentials(ctx, idle, 0, 50)
+	if err != nil || len(list.Items) != 1 || list.Items[0].SampleRate != 100 {
+		t.Fatalf("default sampling rate: %+v %v", list, err)
+	}
+	if err := p.SetKeySampleRate(ctx, id, 0); err != nil {
+		t.Fatal(err)
+	}
+	list, err = s.TrustedCredentials(ctx, idle, 0, 50)
+	if err != nil || len(list.Items) != 1 || list.Items[0].SampleRate != 0 {
+		t.Fatalf("configured sampling rate: %+v %v", list, err)
+	}
+}
+
+func TestTrustedCredentialsDefaultMissingMetadataToFullSampling(t *testing.T) {
+	p, r := redisFixture(t)
+	ctx := context.Background()
+	s := &RedisStore{PG: p, redis: r}
+	if err := s.RememberKey(ctx, "missing-credential-row", 30*24*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	list, err := s.TrustedCredentials(ctx, 30*24*time.Hour, 0, 50)
+	if err != nil || len(list.Items) != 1 || list.Items[0].SampleRate != 100 {
+		t.Fatalf("missing credential metadata default: %+v %v", list, err)
+	}
+}
+
 func TestSuccessfulRevalidationRestoresCredentialAfterCleanup(t *testing.T) {
 	p, r := redisFixture(t)
 	ctx := context.Background()

@@ -170,7 +170,9 @@ func (s *RedisStore) TrustedCredentials(ctx context.Context, idle time.Duration,
 	for _, e := range entries {
 		ids = append(ids, e.Member.(string))
 	}
-	rows, err := s.pool.Query(ctx, "SELECT id,upstream,nonce,ciphertext,first_seen_at FROM gateway_credentials WHERE id=ANY($1)", ids)
+	rows, err := s.pool.Query(ctx, `SELECT c.id,c.upstream,c.nonce,c.ciphertext,c.first_seen_at,coalesce(k.sample_rate,100)
+FROM gateway_credentials c LEFT JOIN gateway_key_sampling k ON k.fingerprint=c.id
+WHERE c.id=ANY($1)`, ids)
 	if err != nil {
 		return out, err
 	}
@@ -179,7 +181,7 @@ func (s *RedisStore) TrustedCredentials(ctx context.Context, idle time.Duration,
 	for rows.Next() {
 		var v gateway.TrustedCredential
 		var nonce, sealed []byte
-		if err := rows.Scan(&v.ID, &v.Upstream, &nonce, &sealed, &v.FirstSeenAt); err != nil {
+		if err := rows.Scan(&v.ID, &v.Upstream, &nonce, &sealed, &v.FirstSeenAt, &v.SampleRate); err != nil {
 			return out, err
 		}
 		raw, err := openCredential(s.credentialCipher, v.ID, nonce, sealed)
@@ -191,8 +193,10 @@ func (s *RedisStore) TrustedCredentials(ctx context.Context, idle time.Duration,
 	}
 	for _, e := range entries {
 		id := e.Member.(string)
-		v := values[id]
-		v.ID = id
+		v, ok := values[id]
+		if !ok {
+			v = gateway.TrustedCredential{ID: id, SampleRate: 100}
+		}
 		v.LastSeenAt = time.UnixMilli(int64(e.Score)).UTC()
 		out.Items = append(out.Items, v)
 	}

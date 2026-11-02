@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"log/slog"
@@ -38,6 +39,14 @@ type forwardState struct {
 func credentialFingerprint(r *http.Request, target string) string {
 	bearer := credentialValue(r)
 	if bearer == "" {
+		return ""
+	}
+	return CredentialFingerprint(target, bearer)
+}
+
+// CredentialFingerprint binds a credential to its forwarding destination.
+func CredentialFingerprint(target, bearer string) string {
+	if strings.TrimSpace(target) == "" || strings.TrimSpace(bearer) == "" {
 		return ""
 	}
 	raw, _ := json.Marshal([2]string{target, bearer})
@@ -128,6 +137,7 @@ type TrustedCredential struct {
 	Upstream    string    `json:"upstream"`
 	FirstSeenAt time.Time `json:"first_seen_at"`
 	LastSeenAt  time.Time `json:"last_seen_at"`
+	SampleRate  int       `json:"sample_rate"`
 }
 
 // TrustedCredentials contains one page of active credentials and the total count.
@@ -139,4 +149,26 @@ type TrustedCredentials struct {
 // CredentialLister provides paginated administrative access to trusted credentials.
 type CredentialLister interface {
 	TrustedCredentials(context.Context, time.Duration, int, int) (TrustedCredentials, error)
+}
+
+// KeySampleRateProvider returns the configured review sampling percentage.
+// Credentials without an override are sampled at 100 percent.
+type KeySampleRateProvider interface {
+	KeySampleRate(context.Context, string) (int, error)
+}
+
+// KeySamplingAdmin updates a trusted credential's review sampling percentage.
+type KeySamplingAdmin interface {
+	SetKeySampleRate(context.Context, string, int) error
+}
+
+func sampledForReview(fingerprint, requestID string, rate int) bool {
+	if rate <= 0 {
+		return false
+	}
+	if rate >= 100 {
+		return true
+	}
+	digest := sha256.Sum256([]byte(fingerprint + "\x00" + requestID))
+	return binary.BigEndian.Uint64(digest[:8])%100 < uint64(rate)
 }
