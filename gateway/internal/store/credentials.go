@@ -151,56 +151,107 @@ func (s *PG) hydrateCredentials(ctx context.Context, events []gateway.Event) err
 	return nil
 }
 
+// SetCredentialNote changes only the administrative note of an existing credential.
+func (s *PG) SetCredentialNote(ctx context.Context, id, note string) error {
+	result, err := s.pool.Exec(ctx, "UPDATE gateway_credentials SET note=$2 WHERE id=$1", id, postgresText(note))
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return gateway.ErrNotFound
+	}
+	return nil
+}
+
 // TrustedCredentials lists active trust with decrypted, masked credential metadata.
-func (s *RedisStore) TrustedCredentials(ctx context.Context, idle time.Duration, offset, limit int) (gateway.TrustedCredentials, error) {
+func (s *RedisStore) TrustedCredentials(ctx context.Context, idle time.Duration, filter gateway.TrustedCredentialFilter) (gateway.TrustedCredentials, error) {
 	out := gateway.TrustedCredentials{Items: []gateway.TrustedCredential{}}
+	filter.KeyPrefix = strings.TrimSpace(filter.KeyPrefix)
+	filter.Note = strings.ToLower(strings.TrimSpace(filter.Note))
+	filter.Offset = max(0, filter.Offset)
+	if filter.Limit < 1 || filter.Limit > 100 {
+		filter.Limit = 50
+	}
 	if err := s.PruneTrustedKeys(ctx, idle); err != nil {
 		return out, err
 	}
-	total, err := s.redis.ZCard(ctx, trustedKeys).Result()
-	if err != nil {
-		return out, err
-	}
-	out.Total = total
-	entries, err := s.redis.ZRevRangeWithScores(ctx, trustedKeys, int64(offset), int64(offset+limit-1)).Result()
-	if err != nil {
-		return out, err
-	}
-	ids := make([]string, 0, len(entries))
-	for _, e := range entries {
-		ids = append(ids, e.Member.(string))
-	}
-	rows, err := s.pool.Query(ctx, `SELECT c.id,c.upstream,c.nonce,c.ciphertext,c.first_seen_at,coalesce(k.sample_rate,100)
-FROM gateway_credentials c LEFT JOIN gateway_key_sampling k ON k.fingerprint=c.id
-WHERE c.id=ANY($1)`, ids)
-	if err != nil {
-		return out, err
-	}
-	defer rows.Close()
-	values := map[string]gateway.TrustedCredential{}
-	for rows.Next() {
-		var v gateway.TrustedCredential
-		var nonce, sealed []byte
-		if err := rows.Scan(&v.ID, &v.Upstream, &nonce, &sealed, &v.FirstSeenAt, &v.SampleRate); err != nil {
-			return out, err
-		}
-		raw, err := openCredential(s.credentialCipher, v.ID, nonce, sealed)
+	filtered := filter.KeyPrefix != "" || filter.Note != ""
+	start, stop := int64(filter.Offset), int64(filter.Offset+filter.Limit-1)
+	if filtered {
+		start, stop = 0, -1
+	} else {
+		total, err := s.redis.ZCard(ctx, trustedKeys).Result()
 		if err != nil {
 			return out, err
 		}
-		v.MaskedKey = maskCredential(raw)
-		values[v.ID] = v
+		out.Total = total
 	}
-	for _, e := range entries {
-		id := e.Member.(string)
-		v, ok := values[id]
-		if !ok {
-			v = gateway.TrustedCredential{ID: id, SampleRate: 100}
+	entries, err := s.redis.ZRevRangeWithScores(ctx, trustedKeys, start, stop).Result()
+	if err != nil {
+		return out, err
+	}
+	const batchSize = 128
+	for begin := 0; begin < len(entries); begin += batchSize {
+		batch := entries[begin:min(begin+batchSize, len(entries))]
+		values, err := s.trustedCredentialValues(ctx, batch, filter)
+		if err != nil {
+			return out, err
 		}
-		v.LastSeenAt = time.UnixMilli(int64(e.Score)).UTC()
-		out.Items = append(out.Items, v)
+		for _, entry := range batch {
+			id := entry.Member.(string)
+			value, ok := values[id]
+			if !ok {
+				if filtered {
+					continue
+				}
+				value = gateway.TrustedCredential{ID: id, SampleRate: 100}
+			}
+			value.LastSeenAt = time.UnixMilli(int64(entry.Score)).UTC()
+			if filtered {
+				out.Total++
+				if out.Total <= int64(filter.Offset) || len(out.Items) == filter.Limit {
+					continue
+				}
+			}
+			out.Items = append(out.Items, value)
+		}
 	}
-	return out, rows.Err()
+	return out, nil
+}
+
+func (s *RedisStore) trustedCredentialValues(ctx context.Context, entries []redis.Z, filter gateway.TrustedCredentialFilter) (map[string]gateway.TrustedCredential, error) {
+	ids := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		ids = append(ids, entry.Member.(string))
+	}
+	rows, err := s.pool.Query(ctx, `SELECT c.id,c.upstream,c.nonce,c.ciphertext,c.first_seen_at,coalesce(k.sample_rate,100),c.note
+FROM gateway_credentials c LEFT JOIN gateway_key_sampling k ON k.fingerprint=c.id
+WHERE c.id=ANY($1)`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	values := make(map[string]gateway.TrustedCredential, len(entries))
+	for rows.Next() {
+		var value gateway.TrustedCredential
+		var nonce, sealed []byte
+		if err := rows.Scan(&value.ID, &value.Upstream, &nonce, &sealed, &value.FirstSeenAt, &value.SampleRate, &value.Note); err != nil {
+			return nil, err
+		}
+		if !strings.Contains(strings.ToLower(value.Note), filter.Note) {
+			continue
+		}
+		raw, err := openCredential(s.credentialCipher, value.ID, nonce, sealed)
+		if err != nil {
+			return nil, err
+		}
+		if !strings.HasPrefix(raw, filter.KeyPrefix) {
+			continue
+		}
+		value.MaskedKey = maskCredential(raw)
+		values[value.ID] = value
+	}
+	return values, rows.Err()
 }
 
 // PruneCredentials removes untrusted credentials without retained audit references.

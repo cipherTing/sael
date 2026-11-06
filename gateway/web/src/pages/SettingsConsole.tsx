@@ -4,27 +4,29 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   ArrowUpRight,
+  Check,
   Database,
   KeyRound,
   Network,
   PlugZap,
   Settings2,
   ShieldCheck,
+  X,
 } from "lucide-react";
 import "../newsettings-workbench.css";
 import type { Policy, PolicyPatch, PolicyResponse } from "../policy";
 import { request } from "../api";
 import { notifyError, notifyRetry } from "../notifications";
-import {
-  PageHeading,
-  Panel,
-  Loading,
-  Empty,
-  CopyButton,
-} from "../components/common";
+import { Panel, Loading, Empty, CopyButton } from "../components/common";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Slider } from "../components/ui/slider";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "../components/ui/tooltip";
 import {
   Popover,
   PopoverContent,
@@ -86,7 +88,6 @@ export default function SettingsConsole({
   }, [tab]);
   return (
     <>
-      <PageHeading title="设置" />
       <Tabs
         value={tab}
         onValueChange={(value) => setParams({ tab: value })}
@@ -397,7 +398,9 @@ type Credential = {
   first_seen_at: string;
   last_seen_at: string;
   sample_rate: number;
+  note: string;
 };
+type CredentialPage = { items: Credential[]; total: number };
 function TrustedKeys({
   policy,
   onSave,
@@ -405,17 +408,50 @@ function TrustedKeys({
   policy: Policy;
   onSave: Props["onSave"];
 }) {
-  const [offset, setOffset] = useState(0);
+  const [keyPrefix, setKeyPrefix] = useState("");
+  const [noteFilter, setNoteFilter] = useState("");
+  const [filter, setFilter] = useState({ keyPrefix: "", note: "", offset: 0 });
+  const { offset } = filter;
   const result = useQuery({
-    queryKey: ["trusted-keys", offset],
-    queryFn: () =>
-      request<{ items: Credential[]; total: number }>(
-        `/admin/trusted-keys?offset=${offset}&limit=50`,
-      ),
+    queryKey: ["trusted-keys", filter],
+    queryFn: ({ signal }) => {
+      const params = new URLSearchParams({
+        offset: String(offset),
+        limit: "50",
+      });
+      if (filter.keyPrefix) params.set("key_prefix", filter.keyPrefix);
+      if (filter.note) params.set("note", filter.note);
+      return request<CredentialPage>(`/admin/trusted-keys?${params}`, {
+        signal,
+      });
+    },
   });
   useEffect(() => {
     if (result.error) notifyRetry(result.error, () => void result.refetch());
   }, [result.error, result.refetch]);
+  useEffect(() => {
+    const total = result.data?.total;
+    if (total !== undefined && offset > 0 && offset >= total)
+      setFilter((current) => ({
+        ...current,
+        offset: Math.max(0, Math.ceil(total / 50) - 1) * 50,
+      }));
+  }, [offset, result.data]);
+  function applyFilters(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const next = {
+      keyPrefix: keyPrefix.trim(),
+      note: noteFilter.trim(),
+      offset: 0,
+    };
+    if (
+      filter.keyPrefix === next.keyPrefix &&
+      filter.note === next.note &&
+      offset === 0
+    )
+      void result.refetch();
+    else setFilter(next);
+  }
   const data = result.data;
   return (
     <Panel
@@ -429,16 +465,60 @@ function TrustedKeys({
       }
     >
       <TrustedKeySettings policy={policy} onSave={onSave} />
+      <form
+        className="trusted-key-filters"
+        aria-label="筛选可信密钥"
+        onSubmit={applyFilters}
+      >
+        <Input
+          aria-label="密钥前缀"
+          placeholder="密钥前缀"
+          value={keyPrefix}
+          autoComplete="off"
+          spellCheck={false}
+          onChange={(event) => setKeyPrefix(event.target.value)}
+        />
+        <Input
+          aria-label="筛选备注"
+          placeholder="备注"
+          value={noteFilter}
+          onChange={(event) => setNoteFilter(event.target.value)}
+        />
+        <Button type="submit" size="sm">
+          筛选
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={() => {
+            setKeyPrefix("");
+            setNoteFilter("");
+            setFilter({ keyPrefix: "", note: "", offset: 0 });
+          }}
+        >
+          清空
+        </Button>
+      </form>
       {result.isPending ? (
         <Loading />
       ) : !data?.items.length ? (
-        <Empty />
+        <Empty
+          text={
+            result.isError
+              ? "可信密钥暂不可用，请刷新重试"
+              : filter.keyPrefix || filter.note
+                ? "没有匹配的可信密钥"
+                : "暂无数据"
+          }
+        />
       ) : (
         <>
           <div className="settings-table-wrap">
             <table className="settings-table">
               <colgroup>
                 <col />
+                <col style={{ width: 180 }} />
                 <col />
                 <col />
                 <col />
@@ -447,6 +527,7 @@ function TrustedKeys({
               <thead>
                 <tr>
                   <th>调用密钥</th>
+                  <th>备注</th>
                   <th>出站地址</th>
                   <th>首次验证</th>
                   <th>最近请求</th>
@@ -468,6 +549,9 @@ function TrustedKeys({
                           />
                         )}
                       </div>
+                    </td>
+                    <td className="trusted-key-note-cell">
+                      <TrustedKeyNoteEditor credential={item} />
                     </td>
                     <td className="credential-upstream" title={item.upstream}>
                       {item.upstream || "—"}
@@ -505,7 +589,12 @@ function TrustedKeys({
               variant="outline"
               size="sm"
               disabled={offset === 0 || result.isFetching}
-              onClick={() => setOffset(Math.max(0, offset - 50))}
+              onClick={() =>
+                setFilter((current) => ({
+                  ...current,
+                  offset: Math.max(0, offset - 50),
+                }))
+              }
             >
               上一页
             </Button>
@@ -513,7 +602,9 @@ function TrustedKeys({
               variant="outline"
               size="sm"
               disabled={offset + 50 >= data.total || result.isFetching}
-              onClick={() => setOffset(offset + 50)}
+              onClick={() =>
+                setFilter((current) => ({ ...current, offset: offset + 50 }))
+              }
             >
               下一页
             </Button>
@@ -521,6 +612,123 @@ function TrustedKeys({
         </>
       )}
     </Panel>
+  );
+}
+
+function TrustedKeyNoteEditor({ credential }: { credential: Credential }) {
+  const client = useQueryClient();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(credential.note || "");
+  const [saving, setSaving] = useState(false);
+  const note = draft.trim();
+  const invalid =
+    Array.from(note).length > 240 || /[\r\n\u0085\u2028\u2029]/.test(draft);
+  async function save() {
+    if (invalid || saving) return;
+    setSaving(true);
+    try {
+      const saved = await request<{ note: string }>(
+        `/admin/trusted-keys/${encodeURIComponent(credential.id)}`,
+        { method: "PATCH", body: JSON.stringify({ note }) },
+      );
+      client.setQueriesData<CredentialPage>(
+        { queryKey: ["trusted-keys"] },
+        (current) =>
+          current && {
+            ...current,
+            items: current.items.map((item) =>
+              item.id === credential.id ? { ...item, note: saved.note } : item,
+            ),
+          },
+      );
+      setEditing(false);
+      await client.invalidateQueries({ queryKey: ["trusted-keys"] });
+    } catch (error) {
+      notifyError(error);
+    } finally {
+      setSaving(false);
+    }
+  }
+  if (!editing) {
+    const noteButton = (
+      <button
+        type="button"
+        className={`trusted-key-note ${credential.note ? "" : "trusted-key-note-empty"}`}
+        aria-label={credential.note ? "编辑备注" : "添加备注"}
+        onClick={() => {
+          setDraft(credential.note || "");
+          setEditing(true);
+        }}
+      >
+        {credential.note || "添加备注"}
+      </button>
+    );
+    if (!credential.note) return noteButton;
+    return (
+      <TooltipProvider delayDuration={0}>
+        <Tooltip>
+          <TooltipTrigger asChild>{noteButton}</TooltipTrigger>
+          <TooltipContent
+            side="top"
+            sideOffset={6}
+            className="max-w-80 whitespace-normal break-words leading-relaxed"
+          >
+            {credential.note}
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    );
+  }
+  return (
+    <form
+      className="trusted-key-note-editor"
+      onSubmit={(event) => {
+        event.preventDefault();
+        void save();
+      }}
+    >
+      <Input
+        autoFocus
+        aria-label="备注内容"
+        aria-invalid={invalid || undefined}
+        title={invalid ? "备注须为单行，最多 240 个字符" : undefined}
+        value={draft}
+        disabled={saving}
+        onChange={(event) => setDraft(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.nativeEvent.isComposing) return;
+          if (event.key === "Enter") {
+            event.preventDefault();
+            void save();
+          }
+          if (event.key === "Escape" && !saving) {
+            event.preventDefault();
+            setEditing(false);
+          }
+        }}
+      />
+      <Button
+        type="submit"
+        variant="ghost"
+        size="icon-xs"
+        aria-label="保存备注"
+        title="保存"
+        disabled={invalid || saving}
+      >
+        <Check size={14} />
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-xs"
+        aria-label="取消编辑备注"
+        title="取消"
+        disabled={saving}
+        onClick={() => setEditing(false)}
+      >
+        <X size={14} />
+      </Button>
+    </form>
   );
 }
 

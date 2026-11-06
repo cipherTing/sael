@@ -57,7 +57,7 @@ import {
   Empty,
   EndpointLabel,
   Loading,
-  PageHeading,
+  PageActions,
 } from "../components/common";
 import { notifyRetry } from "../notifications";
 import "../record-detail.css";
@@ -409,7 +409,7 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
   );
   return (
     <>
-      <PageHeading title="记录">
+      <PageActions>
         <label className="records-exempt-toggle">
           <span>显示未送审记录</span>
           <Switch
@@ -434,7 +434,7 @@ export default function RecordsPage({ scenes }: { scenes: Scene[] }) {
           busy={result.isFetching}
           onRefresh={() => result.refetch()}
         />
-      </PageHeading>
+      </PageActions>
       <div className="section-tabs">
         <button
           className={`section-tab ${kind === "hit" ? "active" : ""}`}

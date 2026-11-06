@@ -433,6 +433,258 @@ it("shows non-default sampling rate and edits it in the trusted-key row", async 
   expect(within(sampledRow).queryByText(/取样率/)).toBeNull();
 });
 
+const notedKey = {
+  id: "key-note",
+  masked_key: "sk-noted******1234",
+  upstream: "https://relay.example",
+  first_seen_at: "2026-11-05T00:00:00Z",
+  last_seen_at: "2026-11-05T01:00:00Z",
+  sample_rate: 100,
+  note: "",
+};
+
+it("previews the full trusted-key note in a tooltip on hover", async () => {
+  const note = "生产环境的完整调用说明，用于区分主服务和后台批处理任务";
+  vi.mocked(request).mockResolvedValue({
+    items: [{ ...notedKey, note }],
+    total: 1,
+  });
+  mount("/settings?tab=keys");
+  const edit = await screen.findByRole("button", { name: "编辑备注" });
+
+  fireEvent.pointerMove(edit, { pointerType: "mouse" });
+
+  expect((await screen.findByRole("tooltip")).textContent).toContain(note);
+});
+
+it("edits and clears a trusted key note inline with explicit save", async () => {
+  let note = "";
+  vi.mocked(request).mockImplementation(async (path, init) => {
+    if (path === "/admin/trusted-keys/key-note" && init?.method === "PATCH") {
+      note = JSON.parse(String(init.body)).note;
+      return { note };
+    }
+    return { items: [{ ...notedKey, note }], total: 1 };
+  });
+  mount("/settings?tab=keys");
+  const row = await screen.findByRole("row", { name: /sk-noted/ });
+  fireEvent.click(within(row).getByRole("button", { name: "添加备注" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  const input = within(row).getByRole("textbox", { name: "备注内容" });
+  fireEvent.change(input, { target: { value: "  生产服务  " } });
+  fireEvent.blur(input);
+  expect(note).toBe("");
+  expect(within(row).getByRole("textbox", { name: "备注内容" })).toBeTruthy();
+  fireEvent.keyDown(input, { key: "Enter" });
+  const saved = await within(row).findByRole("button", { name: "编辑备注" });
+  expect(saved.textContent).toBe("生产服务");
+  fireEvent.pointerMove(saved, { pointerType: "mouse" });
+  expect((await screen.findByRole("tooltip")).textContent).toContain(
+    "生产服务",
+  );
+  fireEvent.click(saved);
+  fireEvent.change(within(row).getByRole("textbox", { name: "备注内容" }), {
+    target: { value: "" },
+  });
+  fireEvent.click(within(row).getByRole("button", { name: "保存备注" }));
+  expect(
+    await within(row).findByRole("button", { name: "添加备注" }),
+  ).toBeTruthy();
+  expect(note).toBe("");
+});
+
+it("cancels note edits without saving and retains the original value", async () => {
+  vi.mocked(request).mockResolvedValue({
+    items: [{ ...notedKey, note: "原备注" }],
+    total: 1,
+  });
+  mount("/settings?tab=keys");
+  const edit = await screen.findByRole("button", { name: "编辑备注" });
+  fireEvent.click(edit);
+  const input = screen.getByRole("textbox", { name: "备注内容" });
+  fireEvent.change(input, { target: { value: "未保存备注" } });
+  fireEvent.keyDown(input, { key: "Escape" });
+  expect(screen.getByRole("button", { name: "编辑备注" }).textContent).toBe(
+    "原备注",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "编辑备注" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "备注内容" }), {
+    target: { value: "第二次草稿" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "取消编辑备注" }));
+  expect(screen.getByRole("button", { name: "编辑备注" }).textContent).toBe(
+    "原备注",
+  );
+  expect(
+    vi.mocked(request).mock.calls.some(([, init]) => init?.method === "PATCH"),
+  ).toBe(false);
+});
+
+it("keeps a failed note draft and validates the limit by Unicode characters", async () => {
+  const errorToast = vi.spyOn(toast, "error").mockReturnValue("toast");
+  let savedNote = "";
+  vi.mocked(request).mockImplementation(async (_path, init) => {
+    if (init?.method === "PATCH") {
+      if (!savedNote) {
+        savedNote = "failed";
+        throw new Error("备注保存失败");
+      }
+      savedNote = JSON.parse(String(init.body)).note;
+      return { note: savedNote };
+    }
+    return {
+      items: [{ ...notedKey, note: savedNote === "failed" ? "" : savedNote }],
+      total: 1,
+    };
+  });
+  mount("/settings?tab=keys");
+  fireEvent.click(await screen.findByRole("button", { name: "添加备注" }));
+  const input = screen.getByRole("textbox", { name: "备注内容" });
+  fireEvent.change(input, { target: { value: "保留草稿" } });
+  fireEvent.click(screen.getByRole("button", { name: "保存备注" }));
+  await waitFor(() =>
+    expect(errorToast).toHaveBeenCalledWith("备注保存失败", undefined),
+  );
+  expect((input as HTMLInputElement).value).toBe("保留草稿");
+  fireEvent.change(input, { target: { value: "\u2028单行备注" } });
+  expect(
+    screen.getByRole("button", { name: "保存备注" }).hasAttribute("disabled"),
+  ).toBe(true);
+  fireEvent.change(input, { target: { value: "🙂".repeat(241) } });
+  expect(
+    screen.getByRole("button", { name: "保存备注" }).hasAttribute("disabled"),
+  ).toBe(true);
+  fireEvent.change(input, { target: { value: "🙂".repeat(240) } });
+  expect(
+    screen.getByRole("button", { name: "保存备注" }).hasAttribute("disabled"),
+  ).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "保存备注" }));
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "编辑备注" }).textContent).toBe(
+      "🙂".repeat(240),
+    ),
+  );
+  errorToast.mockRestore();
+});
+
+it("applies both trusted-key filters, resets pagination, and clears the filters", async () => {
+  vi.mocked(request).mockImplementation(async (path) => {
+    const url = new URL(path, "https://sael.test");
+    if (url.searchParams.get("key_prefix") === "sk-prod%_")
+      return { items: [{ ...notedKey, note: "生产 A%_" }], total: 1 };
+    if (url.searchParams.get("offset") === "50")
+      return {
+        items: [{ ...notedKey, id: "page-two", masked_key: "sk-page-two" }],
+        total: 51,
+      };
+    return { items: [notedKey], total: 51 };
+  });
+  mount("/settings?tab=keys");
+  await screen.findByRole("row", { name: /sk-noted/ });
+  fireEvent.click(screen.getByRole("button", { name: "下一页" }));
+  await screen.findByRole("row", { name: /sk-page-two/ });
+  fireEvent.change(screen.getByRole("textbox", { name: "密钥前缀" }), {
+    target: { value: "  sk-prod%_  " },
+  });
+  fireEvent.change(screen.getByRole("textbox", { name: "筛选备注" }), {
+    target: { value: "  A%_  " },
+  });
+  fireEvent.submit(screen.getByRole("form", { name: "筛选可信密钥" }));
+  await screen.findByRole("button", { name: "编辑备注" });
+  expect(screen.getByText("1–1 / 1")).toBeTruthy();
+  const filteredPath = vi
+    .mocked(request)
+    .mock.calls.find(([path]) => path.includes("key_prefix="))?.[0];
+  const filteredURL = new URL(filteredPath!, "https://sael.test");
+  expect(filteredURL.searchParams.get("offset")).toBe("0");
+  expect(filteredURL.searchParams.get("key_prefix")).toBe("sk-prod%_");
+  expect(filteredURL.searchParams.get("note")).toBe("A%_");
+  expect(
+    screen.getByRole("tab", { name: "可信密钥" }).getAttribute("aria-selected"),
+  ).toBe("true");
+  fireEvent.click(screen.getByRole("button", { name: "清空" }));
+  await screen.findByRole("button", { name: "添加备注" });
+  expect(
+    (screen.getByRole("textbox", { name: "密钥前缀" }) as HTMLInputElement)
+      .value,
+  ).toBe("");
+  expect(
+    (screen.getByRole("textbox", { name: "筛选备注" }) as HTMLInputElement)
+      .value,
+  ).toBe("");
+  expect(screen.getByText("1–1 / 51")).toBeTruthy();
+});
+
+it.each([0, 50])(
+  "refetches a filtered list after editing a note and returns from an empty last page with %i remaining",
+  async (remainingTotal) => {
+    let changed = false;
+    vi.mocked(request).mockImplementation(async (path, init) => {
+      if (init?.method === "PATCH") {
+        changed = true;
+        return { note: "不再匹配" };
+      }
+      const url = new URL(path, "https://sael.test");
+      const secondPage = url.searchParams.get("offset") === "50";
+      return {
+        items:
+          changed && (secondPage || remainingTotal === 0)
+            ? []
+            : [
+                {
+                  ...notedKey,
+                  id: secondPage ? "last-key" : "first-key",
+                  masked_key: secondPage ? "sk-last-key" : "sk-first-key",
+                  note: "目标备注",
+                },
+              ],
+        total: changed ? remainingTotal : 51,
+      };
+    });
+    mount("/settings?tab=keys");
+    await screen.findByRole("row", { name: /sk-first-key/ });
+    fireEvent.change(screen.getByRole("textbox", { name: "筛选备注" }), {
+      target: { value: "目标" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^筛选$/ }));
+    await waitFor(() =>
+      expect(
+        vi.mocked(request).mock.calls.some(([path]) => path.includes("note=")),
+      ).toBe(true),
+    );
+    const nextPage = await screen.findByRole("button", { name: "下一页" });
+    await waitFor(() => expect(nextPage.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(nextPage);
+    const lastRow = await screen.findByRole("row", { name: /sk-last-key/ });
+    fireEvent.click(within(lastRow).getByRole("button", { name: "编辑备注" }));
+    fireEvent.change(
+      within(lastRow).getByRole("textbox", { name: "备注内容" }),
+      {
+        target: { value: "不再匹配" },
+      },
+    );
+    fireEvent.click(within(lastRow).getByRole("button", { name: "保存备注" }));
+    if (remainingTotal === 0) {
+      await screen.findByText("没有匹配的可信密钥", {}, { timeout: 5000 });
+      await waitFor(() => {
+        const lastListRequest = vi
+          .mocked(request)
+          .mock.calls.filter(([, init]) => !init?.method)
+          .at(-1)?.[0];
+        expect(
+          new URL(lastListRequest!, "https://sael.test").searchParams.get(
+            "offset",
+          ),
+        ).toBe("0");
+      });
+    } else {
+      await screen.findByText("1–1 / 50", {}, { timeout: 5000 });
+      expect(screen.getByRole("row", { name: /sk-first-key/ })).toBeTruthy();
+    }
+    expect(screen.queryByRole("row", { name: /sk-last-key/ })).toBeNull();
+  },
+);
+
 it("previews the rendered block message and saves only that setting", async () => {
   const onSave = vi.fn().mockResolvedValue(undefined);
   render(

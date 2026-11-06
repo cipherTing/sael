@@ -3,9 +3,6 @@
   --instrument-muted: #758297;
   --instrument-line: #e7ebf2;
 }
-.dashboard-console .page-heading {
-  margin-bottom: 18px;
-}
 .dashboard-console .dashboard-filterbar {
   margin-bottom: 20px;
   gap: 9px;

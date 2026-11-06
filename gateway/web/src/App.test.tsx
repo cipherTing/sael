@@ -75,7 +75,7 @@ it("keeps key sampling settings inside the trusted-key settings page", async () 
     target: { value: "secret" },
   });
   fireEvent.click(screen.getByRole("button", { name: "登录" }));
-  await screen.findByRole("heading", { name: "总览" }, { timeout: 10000 });
+  await screen.findByRole("button", { name: "刷新统计" }, { timeout: 10000 });
   for (const label of ["总览", "场景", "记录", "设置"])
     expect(screen.getByRole("link", { name: label })).toBeTruthy();
   expect(screen.queryByRole("link", { name: "Key 取样率" })).toBeNull();
