@@ -253,18 +253,11 @@ table {
 .mobile-sheet .nav-section {
   padding-top: 0;
 }
-.page-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 21px;
+.page-actions {
+  justify-content: flex-end;
+  margin-bottom: 16px;
 }
-.page-heading h1 {
-  font-size: 21px;
-  font-weight: 650;
-  letter-spacing: -0.5px;
-}
+.page-actions,
 .heading-actions {
   display: flex;
   align-items: center;
@@ -1362,15 +1355,10 @@ table {
   .content {
     padding: 18px 14px 24px;
   }
-  .page-heading {
-    align-items: flex-start;
-    gap: 10px;
-    margin-bottom: 17px;
-    flex-wrap: wrap;
+  .page-actions {
+    margin-bottom: 14px;
   }
-  .page-heading h1 {
-    font-size: 20px;
-  }
+  .page-actions,
   .heading-actions {
     gap: 6px;
   }

@@ -40,7 +40,7 @@ import {
 import { Checkbox } from "./components/ui/checkbox";
 import {
   Choice,
-  PageHeading,
+  PageActions,
   Panel,
   Empty,
   Help,
@@ -488,12 +488,12 @@ export default function SettingsPage({
   const scoped = (id: string) => scene?.endpoints?.includes(id) || false;
   return (
     <div className="scene-console">
-      <PageHeading title="场景">
+      <PageActions>
         <Button size="sm" onClick={add}>
           <Plus size={14} />
           新建场景
         </Button>
-      </PageHeading>
+      </PageActions>
       <Tabs value={tab} onValueChange={setTab} className="scene-page-tabs-root">
         <TabsList variant="line" className="scene-page-tabs">
           <TabsTrigger value="config">场景配置</TabsTrigger>

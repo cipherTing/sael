@@ -34,19 +34,8 @@ export function Help({ children }: { children: ReactNode }) {
     </TooltipProvider>
   );
 }
-export function PageHeading({
-  title,
-  children,
-}: {
-  title: string;
-  children?: ReactNode;
-}) {
-  return (
-    <div className="page-heading">
-      <h1>{title}</h1>
-      <div className="heading-actions">{children}</div>
-    </div>
-  );
+export function PageActions({ children }: { children: ReactNode }) {
+  return <div className="page-actions">{children}</div>;
 }
 export function Panel({
   title,

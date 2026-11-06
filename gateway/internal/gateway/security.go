@@ -138,6 +138,7 @@ type TrustedCredential struct {
 	FirstSeenAt time.Time `json:"first_seen_at"`
 	LastSeenAt  time.Time `json:"last_seen_at"`
 	SampleRate  int       `json:"sample_rate"`
+	Note        string    `json:"note"`
 }
 
 // TrustedCredentials contains one page of active credentials and the total count.
@@ -148,7 +149,18 @@ type TrustedCredentials struct {
 
 // CredentialLister provides paginated administrative access to trusted credentials.
 type CredentialLister interface {
-	TrustedCredentials(context.Context, time.Duration, int, int) (TrustedCredentials, error)
+	TrustedCredentials(context.Context, time.Duration, TrustedCredentialFilter) (TrustedCredentials, error)
+}
+
+// TrustedCredentialFilter selects a page of active credentials by key prefix and note.
+type TrustedCredentialFilter struct {
+	KeyPrefix, Note string
+	Offset, Limit   int
+}
+
+// CredentialNoteAdmin edits a verified credential's administrative note.
+type CredentialNoteAdmin interface {
+	SetCredentialNote(context.Context, string, string) error
 }
 
 // KeySampleRateProvider returns the configured review sampling percentage.

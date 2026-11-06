@@ -787,6 +787,56 @@
 .settings-console .settings-table td {
   color: #506179;
 }
+.trusted-key-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 18px;
+  border-bottom: 1px solid #edf1f6;
+}
+.trusted-key-filters input {
+  width: 200px;
+  max-width: 100%;
+  height: 32px;
+  font-size: 12px;
+}
+.trusted-key-note-cell {
+  width: 180px;
+  max-width: 180px;
+}
+.trusted-key-note {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  border-radius: 4px;
+  padding: 4px 0;
+  color: #506179;
+  cursor: text;
+}
+.trusted-key-note:hover,
+.trusted-key-note:focus-visible {
+  color: #4269c6;
+}
+.trusted-key-note-empty {
+  color: #8a98ad;
+}
+.trusted-key-note-editor {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.trusted-key-note-editor input {
+  flex: 1;
+  width: 0;
+  min-width: 72px;
+  height: 30px;
+  padding: 4px 6px;
+  font-size: 12px;
+}
 .settings-console .settings-table th:last-child,
 .settings-console .settings-table td:last-child {
   width: 230px;

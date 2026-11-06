@@ -38,10 +38,6 @@
   --content-padding-top: 22px;
   padding: var(--content-padding-top) 24px 32px;
 }
-.page-heading h1 {
-  color: #273449;
-  letter-spacing: -0.4px;
-}
 .data-table th {
   color: #637188;
 }
@@ -73,7 +69,7 @@
 }
 .filterbar,
 .records-select-toolbar,
-.page-heading .heading-actions {
+.page-actions {
   align-items: flex-end;
 }
 .refresh-control {

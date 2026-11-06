@@ -85,7 +85,7 @@ func TestTrustedCredentialsSurviveExpiryForHistoricalEvents(t *testing.T) {
 	if err := s.RememberKey(ctx, "credential-id", idle); err != nil {
 		t.Fatal(err)
 	}
-	list, err := s.TrustedCredentials(ctx, idle, 0, 50)
+	list, err := s.TrustedCredentials(ctx, idle, gateway.TrustedCredentialFilter{Limit: 50})
 	if err != nil || list.Total != 1 || len(list.Items) != 1 || list.Items[0].MaskedKey != "sk-co******t-5678" {
 		t.Fatalf("list %+v %v", list, err)
 	}
@@ -102,7 +102,7 @@ func TestTrustedCredentialsSurviveExpiryForHistoricalEvents(t *testing.T) {
 		t.Fatal("list/detail disagree", err)
 	}
 	_ = r.ZAdd(ctx, trustedKeys, redis.Z{Score: float64(time.Now().Add(-31 * 24 * time.Hour).UnixMilli()), Member: "credential-id"}).Err()
-	list, err = s.TrustedCredentials(ctx, idle, 0, 50)
+	list, err = s.TrustedCredentials(ctx, idle, gateway.TrustedCredentialFilter{Limit: 50})
 	if err != nil || list.Total != 0 {
 		t.Fatal("idle key still trusted", err)
 	}
@@ -136,14 +136,14 @@ func TestTrustedCredentialsIncludeConfiguredSamplingRate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	list, err := s.TrustedCredentials(ctx, idle, 0, 50)
+	list, err := s.TrustedCredentials(ctx, idle, gateway.TrustedCredentialFilter{Limit: 50})
 	if err != nil || len(list.Items) != 1 || list.Items[0].SampleRate != 100 {
 		t.Fatalf("default sampling rate: %+v %v", list, err)
 	}
 	if err := p.SetKeySampleRate(ctx, id, 0); err != nil {
 		t.Fatal(err)
 	}
-	list, err = s.TrustedCredentials(ctx, idle, 0, 50)
+	list, err = s.TrustedCredentials(ctx, idle, gateway.TrustedCredentialFilter{Limit: 50})
 	if err != nil || len(list.Items) != 1 || list.Items[0].SampleRate != 0 {
 		t.Fatalf("configured sampling rate: %+v %v", list, err)
 	}
@@ -156,7 +156,7 @@ func TestTrustedCredentialsDefaultMissingMetadataToFullSampling(t *testing.T) {
 	if err := s.RememberKey(ctx, "missing-credential-row", 30*24*time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	list, err := s.TrustedCredentials(ctx, 30*24*time.Hour, 0, 50)
+	list, err := s.TrustedCredentials(ctx, 30*24*time.Hour, gateway.TrustedCredentialFilter{Limit: 50})
 	if err != nil || len(list.Items) != 1 || list.Items[0].SampleRate != 100 {
 		t.Fatalf("missing credential metadata default: %+v %v", list, err)
 	}
@@ -181,7 +181,7 @@ func TestSuccessfulRevalidationRestoresCredentialAfterCleanup(t *testing.T) {
 	if err := s.RememberKey(ctx, "relearn", idle); err != nil {
 		t.Fatal(err)
 	}
-	list, err := s.TrustedCredentials(ctx, idle, 0, 50)
+	list, err := s.TrustedCredentials(ctx, idle, gateway.TrustedCredentialFilter{Limit: 50})
 	if err != nil || len(list.Items) != 1 || list.Items[0].MaskedKey != "secre******y-9876" {
 		t.Fatal("stale marker suppressed ciphertext recovery", list, err)
 	}

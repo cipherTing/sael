@@ -53,7 +53,7 @@ import {
   Empty,
   Help,
   Loading,
-  PageHeading,
+  PageActions,
   Panel,
 } from "../components/common";
 import { notifyRetry } from "../notifications";
@@ -160,12 +160,12 @@ export default function DashboardPage({
   }
   return (
     <div className="dashboard-console">
-      <PageHeading title="总览">
+      <PageActions>
         <span className="review-state">
           <i className={`state-dot ${enabled ? "on" : ""}`} />
           {enabled ? "审查已开启" : "审查已关闭"}
         </span>
-      </PageHeading>
+      </PageActions>
       <GatewayVersion />
       <div className="filterbar dashboard-filterbar">
         <Choice
